@@ -362,7 +362,41 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
 }
 
 /// Tooltip with the fully qualified path of a hovered name.
+/// Linked hover in signature diffs: hovering one part of a change, or its
+/// note, highlights every part of that change.
+fn highlight_diff_group(el: &Element) {
+    for hot in dom::query_all(".g-hot") {
+        dom::toggle_class(&hot, "g-hot", false);
+    }
+    let Some(block) = dom::closest(el, ".sig-block") else {
+        return;
+    };
+    let groups: Vec<String> = if let Some(note) = dom::closest(el, "li[data-gs]") {
+        dom::data(&note, "gs")
+            .unwrap_or_default()
+            .split_whitespace()
+            .map(str::to_string)
+            .collect()
+    } else if let Some(part) = dom::closest(el, "[data-g]") {
+        dom::data(&part, "g").into_iter().collect()
+    } else {
+        return;
+    };
+    for g in &groups {
+        for part in dom::query_all_in(&block.clone().into(), &format!(r#"[data-g="{g}"]"#)) {
+            dom::toggle_class(&part, "g-hot", true);
+        }
+    }
+    for note in dom::query_all_in(&block.into(), "li[data-gs]") {
+        let gs = dom::data(&note, "gs").unwrap_or_default();
+        if gs.split_whitespace().any(|g| groups.iter().any(|h| h == g)) {
+            dom::toggle_class(&note, "g-hot", true);
+        }
+    }
+}
+
 fn on_mouse_over(app: &mut App, el: &Element) {
+    highlight_diff_group(el);
     for c in dom::query_all(".card.hover-target") {
         if app.s.canvas.drag.is_none() {
             dom::toggle_class(&c, "hover-target", false);

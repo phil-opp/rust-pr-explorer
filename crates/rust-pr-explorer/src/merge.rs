@@ -27,6 +27,8 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
                 changes: Changes::default(),
                 old_sig: None,
                 old_sig_public: None,
+                sig_diff: None,
+                sig_diff_public: None,
                 old_docs: None,
             },
         };
@@ -42,6 +44,8 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
                 changes: Changes::default(),
                 old_sig: None,
                 old_sig_public: None,
+                sig_diff: None,
+                sig_diff_public: None,
                 old_docs: None,
             },
         );
@@ -93,7 +97,25 @@ fn compare(b: ItemData, h: ItemData, moved_from: Option<String>) -> Item {
             })
             .collect()
     };
+    // Structured diffs of the full and the public (private fields hidden)
+    // signatures.
+    let sig_changed = b.info.sig != h.info.sig;
+    let sig_diff = sig_changed
+        .then(|| crate::sigdiff::diff(h.info.kind, &b.info.sig, &h.info.sig))
+        .flatten();
+    let has_public = b.info.sig_public.is_some() || h.info.sig_public.is_some();
+    let sig_diff_public = (sig_changed && has_public)
+        .then(|| {
+            let old = b.info.sig_public.as_deref().unwrap_or(&b.info.sig);
+            let new = h.info.sig_public.as_deref().unwrap_or(&h.info.sig);
+            (old != new)
+                .then(|| crate::sigdiff::diff(h.info.kind, old, new))
+                .flatten()
+        })
+        .flatten();
     Item {
+        sig_diff,
+        sig_diff_public,
         old_sig_public: (b.info.sig != h.info.sig)
             .then(|| b.info.sig_public.clone())
             .flatten(),

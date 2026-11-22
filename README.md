@@ -48,7 +48,13 @@ Lists only the public items that were added, changed or removed, nested by modul
 
 Every item shows what rustdoc would show: its definition or signature (private fields hidden when looking from outside the module), its docs, and its place in the module tree.
 
-- **Change markers**: added, removed, or changed. A changed item also says whether its *signature*, *body* or *docs* changed. A changed signature is shown as a token-level diff against the base version: removed parts struck through in red, added parts highlighted in green. Seen from outside the defining module, the diff uses the public form of the definition, and a change to private fields only is noted as such. Items moved to another module are marked as *moved*. If only formatting, comments or import style changed, the item is marked *formatting only* and counts as unchanged.
+- **Change markers**: added, removed, or changed. A changed item also says whether its *signature*, *body* or *docs* changed. Items moved to another module are marked as *moved*. If only formatting, comments or import style changed, the item is marked *formatting only* and counts as unchanged.
+- **Signature diffs**: a changed signature is diffed by structure, not text.
+  - Parameters, generic parameters, where-clauses, fields and variants are matched by name, so reordering or renaming one doesn't scramble the rest.
+  - Types are compared as trees: `f64` → `Result<f64, Error>` shows one green box around the new wrapper, with the kept `f64` inside; unwrapping gets a dashed red box.
+  - Multi-line definitions (structs, enums) get a `+`/`-`/`~` marker per line.
+  - Under the signature, one note per change says what changed, e.g. "parameter `env: &Env` added" or "return type wrapped in `Result<_, Error>`". Hovering a part of a change, or its note, highlights everything that belongs to it.
+  - Seen from outside the defining module, the public form of the definition is diffed, and a change to private fields only is noted as such. Signatures the analysis can't parse this way (traits, type aliases, …) fall back to a token-level diff.
 - **Normalized names**: paths are shortened to what a reader needs (`crate::ast::Expr` → `Expr`). Every name links to its item, and hovering a name shows its fully qualified path.
 - **Canvas awareness**: a name whose item is already on the canvas is highlighted, and hovering it outlines that card.
 - **Source on demand**: each card has a collapsible source view, shown as a diff against the base version when the item changed.

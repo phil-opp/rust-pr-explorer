@@ -4,6 +4,7 @@ mod analyze;
 mod merge;
 #[cfg(feature = "semantic")]
 mod semantic;
+mod sigdiff;
 mod source;
 #[cfg(test)]
 mod tests;

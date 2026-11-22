@@ -1,7 +1,7 @@
 //! Rust syntax highlighting with cross links, and doc comment rendering.
 
 use crate::data::Data;
-use model::Ref;
+use model::{DiffSpan, Ref, SigDiff};
 use pulldown_cmark::{BrokenLink, CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
 use std::collections::BTreeMap;
 
@@ -291,45 +291,222 @@ fn diff_tokens(s: &str) -> Vec<&str> {
 pub fn sig_diff_html(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Ref>) -> String {
     use similar::{Algorithm, DiffOp, capture_diff_slices};
     let (a, b) = (diff_tokens(old), diff_tokens(new));
-    let none = BTreeMap::new();
     let mut out = String::new();
-    let del = |out: &mut String, from: usize, len: usize| {
-        let text = a[from..from + len].concat();
-        out.push_str(&format!(
-            r#"<del class="sd">{}</del>"#,
-            code_html(d, &text, &none)
-        ));
-    };
-    let ins = |out: &mut String, from: usize, len: usize| {
-        let text = b[from..from + len].concat();
-        out.push_str(&format!(
-            r#"<ins class="sd">{}</ins>"#,
-            code_html(d, &text, refs)
-        ));
-    };
+    let mut g = 0;
     for op in capture_diff_slices(Algorithm::Myers, &a, &b) {
+        g += 1;
         match op {
             DiffOp::Equal { new_index, len, .. } => {
                 out.push_str(&code_html(d, &b[new_index..new_index + len].concat(), refs))
             }
             DiffOp::Delete {
                 old_index, old_len, ..
-            } => del(&mut out, old_index, old_len),
+            } => out.push_str(&removed_html(
+                d,
+                &a[old_index..old_index + old_len].concat(),
+                g,
+            )),
             DiffOp::Insert {
                 new_index, new_len, ..
-            } => ins(&mut out, new_index, new_len),
+            } => out.push_str(&added_html(
+                d,
+                &b[new_index..new_index + new_len].concat(),
+                refs,
+                g,
+            )),
             DiffOp::Replace {
                 old_index,
                 old_len,
                 new_index,
                 new_len,
             } => {
-                del(&mut out, old_index, old_len);
-                ins(&mut out, new_index, new_len);
+                // One group: hovering either half highlights both.
+                out.push_str(&removed_html(
+                    d,
+                    &a[old_index..old_index + old_len].concat(),
+                    g,
+                ));
+                out.push_str(&added_html(
+                    d,
+                    &b[new_index..new_index + new_len].concat(),
+                    refs,
+                    g,
+                ));
             }
         }
     }
     out
+}
+
+fn added_html(d: &Data, text: &str, refs: &BTreeMap<String, Ref>, g: u32) -> String {
+    format!(
+        r#"<ins class="sd" data-g="{g}">{}</ins>"#,
+        code_html(d, text, refs)
+    )
+}
+
+fn removed_html(d: &Data, text: &str, g: u32) -> String {
+    format!(
+        r#"<del class="sd" data-g="{g}">{}</del>"#,
+        code_html(d, text, &BTreeMap::new())
+    )
+}
+
+fn spans_html(d: &Data, spans: &[DiffSpan], refs: &BTreeMap<String, Ref>) -> String {
+    let mut out = String::new();
+    for span in spans {
+        match span {
+            DiffSpan::Same { text } => out.push_str(&code_html(d, text, refs)),
+            DiffSpan::Added { text, g } => out.push_str(&added_html(d, text, refs, *g)),
+            DiffSpan::Removed { text, g } => out.push_str(&removed_html(d, text, *g)),
+            DiffSpan::Wrap {
+                before,
+                inner,
+                after,
+                unwrap,
+                g,
+            } => {
+                // One box around the whole wrapper, the unchanged inner type
+                // inside it uncoloured.
+                let (class, edge) = if *unwrap {
+                    ("wrap unwrap", "del")
+                } else {
+                    ("wrap", "ins")
+                };
+                let edge_refs = if *unwrap { &BTreeMap::new() } else { refs };
+                out.push_str(&format!(
+                    r#"<span class="{class}" data-g="{g}" title="{}"><{edge} class="edge">{}</{edge}>{}<{edge} class="edge">{}</{edge}></span>"#,
+                    if *unwrap { "wrapper removed" } else { "wrapper added" },
+                    code_html(d, before, edge_refs),
+                    spans_html(d, inner, refs),
+                    code_html(d, after, edge_refs),
+                ));
+            }
+        }
+    }
+    out
+}
+
+/// Per-line change markers (`+`, `-`, `~`, or space) of a diff, for the
+/// gutter of multi-line definitions.
+fn line_markers(spans: &[DiffSpan]) -> Vec<char> {
+    #[derive(Default, Clone, Copy)]
+    struct Line {
+        same: bool,
+        added: bool,
+        removed: bool,
+    }
+    fn push(lines: &mut Vec<Line>, text: &str, set: &dyn Fn(&mut Line)) {
+        for (i, part) in text.split('\n').enumerate() {
+            if i > 0 {
+                lines.push(Line::default());
+            }
+            if !part.trim().is_empty() {
+                set(lines.last_mut().unwrap());
+            }
+        }
+    }
+    fn walk(spans: &[DiffSpan], lines: &mut Vec<Line>, in_wrap: bool) {
+        for span in spans {
+            match span {
+                DiffSpan::Same { text } => push(lines, text, &|l| {
+                    if in_wrap {
+                        l.added = true;
+                        l.removed = true
+                    } else {
+                        l.same = true
+                    }
+                }),
+                DiffSpan::Added { text, .. } => push(lines, text, &|l| l.added = true),
+                DiffSpan::Removed { text, .. } => push(lines, text, &|l| l.removed = true),
+                DiffSpan::Wrap {
+                    before,
+                    inner,
+                    after,
+                    ..
+                } => {
+                    push(lines, before, &|l| {
+                        l.added = true;
+                        l.removed = true;
+                    });
+                    walk(inner, lines, true);
+                    push(lines, after, &|l| {
+                        l.added = true;
+                        l.removed = true;
+                    });
+                }
+            }
+        }
+    }
+    let mut lines = vec![Line::default()];
+    walk(spans, &mut lines, false);
+    lines
+        .iter()
+        .map(|l| match (l.same, l.added, l.removed) {
+            (_, false, false) => ' ',
+            (false, true, false) => '+',
+            (false, false, true) => '-',
+            _ => '~',
+        })
+        .collect()
+}
+
+/// Text of a diff note: backticks become code.
+fn note_html(text: &str) -> String {
+    let mut out = String::new();
+    for (i, part) in text.split('`').enumerate() {
+        if i % 2 == 1 {
+            out.push_str(&format!("<code>{}</code>", esc(part)));
+        } else {
+            out.push_str(&esc(part));
+        }
+    }
+    out
+}
+
+/// A structured signature diff: the signature (with a change gutter for
+/// multi-line definitions) and one note per change. Hovering a change
+/// or a note highlights everything that belongs to it.
+pub fn structured_diff_html(d: &Data, diff: &SigDiff, refs: &BTreeMap<String, Ref>) -> String {
+    let code = spans_html(d, &diff.spans, refs);
+    let markers = line_markers(&diff.spans);
+    let sig = if markers.len() > 1 {
+        let gutter: String = markers
+            .iter()
+            .map(|m| {
+                format!(
+                    r#"<span class="m m{}">{}</span>"#,
+                    match m {
+                        '+' => "a",
+                        '-' => "r",
+                        '~' => "c",
+                        _ => "n",
+                    },
+                    m
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        format!(
+            r#"<div class="sig-lines"><pre class="sig-gutter">{gutter}</pre><pre class="sig sig-diff">{code}</pre></div>"#
+        )
+    } else {
+        format!(r#"<pre class="sig sig-diff">{code}</pre>"#)
+    };
+    let notes: String = diff
+        .notes
+        .iter()
+        .map(|n| {
+            let groups = n
+                .groups
+                .iter()
+                .map(u32::to_string)
+                .collect::<Vec<_>>()
+                .join(" ");
+            format!(r#"<li data-gs="{groups}">{}</li>"#, note_html(&n.text))
+        })
+        .collect();
+    format!(r#"<div class="sig-block">{sig}<ul class="sig-notes">{notes}</ul></div>"#)
 }
 
 /// Renders doc comment markdown. Intra-doc links become cross links; raw
@@ -531,17 +708,69 @@ mod tests {
             &BTreeMap::new(),
         );
         assert!(
-            html.contains(r#"<ins class="sd">, env: &amp;Env</ins>"#),
+            html.contains(r#"<ins class="sd" data-g="2">, env: &amp;Env</ins>"#),
             "{html}"
         );
-        let replaced = sig_diff_html(&d, "fn f(x: u8)", "fn f(x: u16)", &BTreeMap::new());
-        assert!(
-            replaced.contains(r#"<del class="sd">u8</del><ins class="sd">u16</ins>"#),
-            "{replaced}"
-        );
-        assert!(html.contains("Result"), "{html}");
         // Unchanged text is not marked.
         assert!(html.starts_with(r#"<span class="kw">pub</span>"#), "{html}");
+        // Both halves of a replacement share a group, for linked hover.
+        let replaced = sig_diff_html(&d, "fn f(x: u8)", "fn f(x: u16)", &BTreeMap::new());
+        assert!(
+            replaced.contains(
+                r#"<del class="sd" data-g="2">u8</del><ins class="sd" data-g="2">u16</ins>"#
+            ),
+            "{replaced}"
+        );
+    }
+
+    #[test]
+    fn structured_signature_diff() {
+        let d = empty();
+        let diff = SigDiff {
+            spans: vec![
+                DiffSpan::Same {
+                    text: "pub enum E {\n    A,\n".into(),
+                },
+                DiffSpan::Removed {
+                    text: "    B,\n".into(),
+                    g: 1,
+                },
+                DiffSpan::Same {
+                    text: "    C(".into(),
+                },
+                DiffSpan::Wrap {
+                    before: "Option<".into(),
+                    inner: vec![DiffSpan::Same { text: "u8".into() }],
+                    after: ">".into(),
+                    unwrap: false,
+                    g: 2,
+                },
+                DiffSpan::Same {
+                    text: "),\n".into(),
+                },
+                DiffSpan::Added {
+                    text: "    D,\n".into(),
+                    g: 3,
+                },
+                DiffSpan::Same { text: "}".into() },
+            ],
+            notes: vec![model::DiffNote {
+                text: "variant `B` removed".into(),
+                groups: vec![1],
+            }],
+        };
+        assert_eq!(line_markers(&diff.spans), [' ', ' ', '-', '~', '+', ' ']);
+        let html = structured_diff_html(&d, &diff, &BTreeMap::new());
+        assert!(html.contains(r#"<span class="wrap" data-g="2""#), "{html}");
+        assert!(
+            html.contains(r#"<ins class="edge">Option&lt;</ins>u8<ins class="edge">&gt;</ins>"#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<li data-gs="1">variant <code>B</code> removed</li>"#),
+            "{html}"
+        );
+        assert!(html.contains("sig-gutter"), "{html}");
     }
 
     #[test]

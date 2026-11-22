@@ -416,10 +416,19 @@ impl Data {
                 code_html(self, new, refs)
             );
         }
-        format!(
-            r#"<pre class="sig sig-diff">{}</pre>"#,
-            sig_diff_html(self, old, new, refs)
-        )
+        let structured = if public_view && it.info.sig_public.is_some() {
+            it.sig_diff_public.as_ref().or(it.sig_diff.as_ref())
+        } else {
+            it.sig_diff.as_ref()
+        };
+        match structured {
+            Some(diff) => crate::code::structured_diff_html(self, diff, refs),
+            // The analysis could not parse the signatures: token diff.
+            None => format!(
+                r#"<div class="sig-block"><pre class="sig sig-diff">{}</pre></div>"#,
+                sig_diff_html(self, old, new, refs)
+            ),
+        }
     }
 }
 

@@ -311,7 +311,24 @@ a.ref:hover { text-decoration: underline; }
 #toast.show { opacity: .92; }
 
 /* Signature diffs */
-.sig-diff del.sd { background: color-mix(in srgb, var(--removed) 18%, transparent); color: var(--removed); text-decoration: line-through; text-decoration-color: var(--removed); border-radius: 2px; }
-.sig-diff del.sd * { color: inherit; }
-.sig-diff ins.sd { background: color-mix(in srgb, var(--added) 22%, transparent); text-decoration: none; border-radius: 2px; box-shadow: inset 0 -1.5px 0 var(--added); }
+.sig-diff del.sd, .sig-diff .wrap del.edge { background: color-mix(in srgb, var(--removed) 18%, transparent); color: var(--removed); text-decoration: line-through; text-decoration-color: var(--removed); border-radius: 2px; }
+.sig-diff del.sd *, .sig-diff .wrap del.edge * { color: inherit; }
+.sig-diff ins.sd, .sig-diff .wrap ins.edge { background: color-mix(in srgb, var(--added) 22%, transparent); text-decoration: none; border-radius: 2px; }
+.sig-diff ins.sd { box-shadow: inset 0 -1.5px 0 var(--added); }
+/* A wrapper added around (or removed from) a type: one box, the kept type inside. */
+.sig-diff .wrap { border: 1.5px solid var(--added); border-radius: 4px; padding: 0 1px; }
+.sig-diff .wrap.unwrap { border: 1.5px dashed var(--removed); }
+.sig-diff .g-hot, .sig-notes li.g-hot { outline: 2px solid var(--highlight); outline-offset: 1px; }
+.sig-diff .wrap.g-hot { outline-offset: 2px; }
+.sig-block { display: flex; flex-direction: column; gap: 4px; }
+.sig-lines { display: flex; align-items: stretch; background: var(--bg-code); border-radius: 4px; overflow-x: auto; }
+.sig-lines .sig { white-space: pre; overflow: visible; background: none; padding-left: 4px; }
+.sig-gutter { margin: 0; padding: 8px 0 8px 6px; color: var(--muted); user-select: none; font-size: 13.5px; }
+.sig-gutter .ma { color: var(--added); font-weight: 600; }
+.sig-gutter .mr { color: var(--removed); font-weight: 600; }
+.sig-gutter .mc { color: var(--changed); font-weight: 600; }
+.sig-notes { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); }
+.sig-notes:empty { display: none; }
+.sig-notes li { margin: 1px 0; border-radius: 3px; cursor: default; }
+.sig-notes code { font-size: 12px; color: var(--text); background: var(--bg-code); padding: 0 3px; border-radius: 3px; }
 .sig-note { font-size: 12px; color: var(--muted); }

@@ -199,6 +199,55 @@ pub struct Changes {
     pub moved_from: Option<String>,
 }
 
+/// A piece of a signature diff. Rendering the spans in order gives the new
+/// signature, with removed parts shown where they used to be.
+///
+/// `g` groups the spans of one change (e.g. a replaced type's removed and
+/// added text), so that the viewer can highlight them together.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum DiffSpan {
+    Same {
+        text: String,
+    },
+    Added {
+        text: String,
+        g: u32,
+    },
+    Removed {
+        text: String,
+        g: u32,
+    },
+    /// A type was wrapped in another one (`T` → `Result<T, E>`), or with
+    /// `unwrap` the wrapper was removed. `before` and `after` are the
+    /// wrapper's text around the inner type.
+    Wrap {
+        before: String,
+        inner: Vec<DiffSpan>,
+        after: String,
+        unwrap: bool,
+        g: u32,
+    },
+}
+
+/// One line of a signature diff's summary, e.g. "parameter `env` added".
+/// The text uses backticks for code.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct DiffNote {
+    pub text: String,
+    /// Groups of the spans this note describes.
+    pub groups: Vec<u32>,
+}
+
+/// A signature diff aligned on syntax: parameters, generic parameters,
+/// where-clauses, fields and variants are matched by name, and types are
+/// compared as trees.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct SigDiff {
+    pub spans: Vec<DiffSpan>,
+    pub notes: Vec<DiffNote>,
+}
+
 /// One line of an item's source: ` `, `+` or `-` and the text.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SourceLine(pub char, pub String);
@@ -216,6 +265,13 @@ pub struct Item {
     /// Base version of `sig_public`, when `old_sig` is set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_sig_public: Option<String>,
+    /// Structured diff of `old_sig` and `sig`, if both could be parsed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig_diff: Option<SigDiff>,
+    /// Like `sig_diff`, for the public forms (private fields hidden), when
+    /// they differ from the full ones.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig_diff_public: Option<SigDiff>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_docs: Option<String>,
     pub source: Vec<SourceLine>,
