@@ -220,8 +220,9 @@ impl Data {
         &self.out.crates
     }
 
+    /// The first crate, or `""` when the PR has no Rust crate.
     pub fn main_root(&self) -> &str {
-        &self.out.crates[0]
+        self.out.crates.first().map_or("", String::as_str)
     }
 
     pub fn children_of_mod(&self, m: &str) -> &[String] {
@@ -343,7 +344,10 @@ impl Data {
     }
 
     pub fn short_path<'a>(&self, id: &'a str) -> &'a str {
-        if self.out.crates.len() != 1 {
+        // Binaries, tests, … don't count: they are not libraries a path
+        // could be confused with.
+        let libraries = self.out.crates.iter().filter(|c| !c.contains(':')).count();
+        if libraries != 1 || self.main_root().contains(':') {
             return id;
         }
         let root = self.main_root();
@@ -355,6 +359,9 @@ impl Data {
 
     pub fn display_name(&self, it: &Item) -> String {
         let i = &it.info;
+        if i.kind == Kind::Mod && self.is_root(it) {
+            return root_name(&i.id);
+        }
         if matches!(i.kind, Kind::Mod | Kind::Impl) {
             return i.name.clone();
         }
@@ -388,7 +395,7 @@ impl Data {
 
     pub fn mod_label(&self, m: &str) -> String {
         match self.item(m) {
-            Some(it) if self.is_root(it) => format!("crate {}", it.info.name),
+            Some(it) if self.is_root(it) => target_label(&it.info.id),
             Some(_) => format!("mod {}", self.short_path(m)),
             None => m.to_string(),
         }
@@ -998,6 +1005,30 @@ pub fn impl_parts(header: &str) -> (Option<String>, Option<String>) {
         None if rest.is_empty() => (None, None),
         None => (None, Some(rest.to_string())),
     }
+}
+
+/// How a crate root is called: `crate tinycalc`, `binary tool`, `test it`,
+/// `build script`, …
+pub fn target_label(id: &str) -> String {
+    match id.split_once(':') {
+        None => format!("crate {id}"),
+        Some(("build", _)) => "build script".to_string(),
+        Some((kind, name)) => {
+            let kind = match kind {
+                "bin" => "binary",
+                other => other,
+            };
+            format!("{kind} {name}")
+        }
+    }
+}
+
+/// The name a crate root is listed under (the label without "crate").
+pub fn root_name(id: &str) -> String {
+    let label = target_label(id);
+    label
+        .strip_prefix("crate ")
+        .map_or(label.clone(), str::to_string)
 }
 
 /// Sort order of items in listings: by kind (as rustdoc does), then name.

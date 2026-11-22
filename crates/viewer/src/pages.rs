@@ -39,7 +39,11 @@ pub fn render_sidebar(app: &App) {
             esc(m),
             esc(&it.info.vis_label),
             esc(m),
-            esc(&it.info.name),
+            esc(&if d.is_root(it) {
+                crate::data::root_name(&it.info.id)
+            } else {
+                it.info.name.clone()
+            }),
             if private {
                 r#"<span class="vis">priv</span>"#
             } else {
@@ -319,15 +323,48 @@ pub fn render_overview(app: &App) {
             )
         })
         .collect();
+    // Without any Rust change, say so instead of showing empty sections.
+    let rust_changed = d.items().any(|it| it.info.kind != Kind::Mod && changed(it));
+    let rust_html = if !rust_changed {
+        let analyzed = d.out.crates.len();
+        format!(
+            r#"<h2>Rust code</h2><div class="empty-state">No Rust item was added, changed or removed{}. The changed files are listed below.</div>"#,
+            if analyzed == 0 {
+                " (no Rust crate was found)".to_string()
+            } else {
+                format!(
+                    " in the {analyzed} analyzed crate{}",
+                    if analyzed == 1 { "" } else { "s and targets" }
+                )
+            }
+        )
+    } else {
+        format!(
+            r#"<h2>Public API changes</h2>
+        <p class="sub">Items reachable from outside the crate that were added, changed or removed, in rustdoc form. Types appear as context when only their members changed.</p>
+        {}
+        <h2>Internal changes</h2>
+        <p class="sub">Items not reachable from outside the crate (private, pub(crate), pub(super), …), and the code of binaries, tests, examples and build scripts. Open a module to see them and its internal call graph.</p>
+        {}"#,
+            if public_html.is_empty() {
+                r#"<div class="empty-state">This pull request does not change the public API.</div>"#
+                    .to_string()
+            } else {
+                public_html
+            },
+            if internal_html.is_empty() {
+                r#"<div class="empty-state">No internal changes.</div>"#.to_string()
+            } else {
+                internal_html
+            },
+        )
+    };
     let meta = &d.out.meta;
     let html = format!(
         r#"<h1>{}</h1>
         <div class="sub">{}</div>
-        <h2>Public API changes</h2>
-        <p class="sub">Items reachable from outside the crate that were added, changed or removed, in rustdoc form. Types appear as context when only their members changed.</p>
         {}
-        <h2>Internal changes</h2>
-        <p class="sub">Items not reachable from outside the crate (private, pub(crate), pub(super), …) are kept out of the overview. Open a module to see them and its internal call graph.</p>
+        {}
         {}"#,
         esc(meta
             .pr
@@ -335,17 +372,9 @@ pub fn render_overview(app: &App) {
             .and_then(|p| p.title.as_deref())
             .unwrap_or(&meta.title)),
         d.compared_html(),
-        if public_html.is_empty() {
-            r#"<div class="empty-state">This pull request does not change the public API.</div>"#
-                .to_string()
-        } else {
-            public_html
-        },
-        if internal_html.is_empty() {
-            r#"<div class="empty-state">No internal changes.</div>"#.to_string()
-        } else {
-            internal_html
-        },
+        crate::files::manifests_html(d),
+        rust_html,
+        crate::files::other_files_html(d),
     );
     dom::set_html("view-overview", &html);
 }
@@ -454,7 +483,7 @@ pub fn render_module_page(app: &App) {
             format!(
                 r#"<a data-mod="{}">{}</a>"#,
                 esc(c),
-                esc(d.item(c).map_or("", |i| &i.info.name))
+                esc(&d.item(c).map_or(String::new(), |i| d.display_name(i)))
             )
         })
         .collect::<Vec<_>>()
@@ -487,9 +516,18 @@ pub fn render_module_page(app: &App) {
         <h2>Exposed by this module</h2><div>{}</div>
         <h2>Private to this module</h2><div class="private-zone">{}</div>
         {subs_html}"#,
-        if d.is_root(module) { "crate" } else { "module" },
+        match (d.is_root(module), module.info.id.contains(':')) {
+            // `binary repl`, `test calc`: the title says what it is.
+            (true, true) => "",
+            (true, false) => "crate",
+            _ => "module",
+        },
         d.title_html(module, false),
-        d.vis_html(module),
+        if d.is_root(module) {
+            String::new()
+        } else {
+            d.vis_html(module)
+        },
         d.status_html(module),
         esc(&module.info.file),
         if show_unchanged { "checked" } else { "" },

@@ -358,6 +358,10 @@ pub struct Output {
     /// Crate root ids, the main crate first.
     pub crates: Vec<String>,
     pub items: BTreeMap<String, Item>,
+    /// Every file the PR changes, including those the Rust analysis
+    /// doesn't cover.
+    #[serde(default)]
+    pub files: Vec<ChangedFile>,
     /// Items outside the analyzed crates (the standard library and
     /// dependencies) that the analyzed code names, by the path it uses.
     #[serde(default)]
@@ -379,4 +383,83 @@ pub struct External {
     /// Its documentation on docs.rs or doc.rust-lang.org.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+}
+
+/// A file the PR adds, removes or changes.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ChangedFile {
+    /// Path relative to the repository root.
+    pub path: String,
+    pub status: Status,
+    /// `rust`, `python`, `markdown`, `toml`, `binary` or `text`.
+    pub lang: String,
+    /// Part of the Rust analysis (shown as items, not as a file).
+    #[serde(default)]
+    pub analyzed: bool,
+    /// Why the file counts as generated or vendored, if it does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated: Option<String>,
+    pub added: u32,
+    pub removed: u32,
+    /// The changed lines with 3 lines of context. `@` lines start a hunk
+    /// and hold "old_line new_line". Empty for binary or very large files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hunks: Vec<SourceLine>,
+    /// The file was too large to diff line by line.
+    #[serde(default)]
+    pub too_large: bool,
+    /// Structured changes of a `Cargo.toml`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub manifest: Vec<ManifestChange>,
+    /// Changed definitions of a Python file.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub python: Vec<PyChange>,
+    /// Both versions of a Markdown file, compared section by section in
+    /// the viewer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_text: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_text: Option<String>,
+}
+
+/// One entry of a `Cargo.toml` that changed.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ManifestChange {
+    /// e.g. `dependencies`, `dev-dependencies`,
+    /// `target.'cfg(windows)'.dependencies`, `features`, `package`.
+    pub section: String,
+    pub name: String,
+    /// The entry as written before and after, `None` if absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new: Option<String>,
+}
+
+/// A Python function or class that changed.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PyChange {
+    /// Qualified name, as Python's `__qualname__` (`Class.method`,
+    /// `outer.<locals>.inner`), or `<module>` for top-level code.
+    pub name: String,
+    /// `def`, `async def`, `class` or `module`.
+    pub kind: String,
+    pub status: Status,
+    /// The header (`def f(a, b) -> int`), decorators included.
+    pub sig: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_sig: Option<String>,
+    #[serde(default)]
+    pub doc_changed: bool,
+    #[serde(default)]
+    pub body_changed: bool,
+    /// Only whitespace or comments differ.
+    #[serde(default)]
+    pub cosmetic: bool,
+    /// First line in the head version (base for removed ones).
+    pub line: usize,
+    /// Diff of the definition's own lines (nested definitions are
+    /// entries of their own).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lines: Vec<SourceLine>,
 }

@@ -1081,6 +1081,7 @@ mod tests {
             crates: vec!["c".into()],
             items: BTreeMap::new(),
             externals: BTreeMap::new(),
+            files: Vec::new(),
             warnings: Vec::new(),
         })
     }

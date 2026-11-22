@@ -2,6 +2,7 @@
 //! crates inside them.
 
 use anyhow::{Context, Result, bail};
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -455,13 +456,7 @@ pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
             .and_then(|l| l.get("name"))
             .and_then(|n| n.as_str())
             .unwrap_or(name);
-        let root_file = if lib_path.is_file() {
-            lib_path
-        } else if dir.join("src/main.rs").is_file() {
-            dir.join("src/main.rs")
-        } else {
-            continue;
-        };
+        let has_lib = lib_path.is_file();
         let mut deps = Vec::new();
         for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
             if let Some(table) = value.get(section).and_then(|d| d.as_table()) {
@@ -485,15 +480,116 @@ pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
             None => Some(2015),
             Some(_) => None,
         };
-        crates.push(CrateSrc {
-            name: lib_name.replace('-', "_"),
-            root_file,
-            manifest_dir: dir.to_path_buf(),
-            deps,
-            edition,
-        });
+        let lib_name = lib_name.replace('-', "_");
+        if has_lib {
+            crates.push(CrateSrc {
+                name: lib_name.clone(),
+                root_file: lib_path,
+                manifest_dir: dir.to_path_buf(),
+                deps: deps.clone(),
+                edition,
+            });
+            // The other targets use the library by its name.
+            deps.push(lib_name.clone());
+        }
+        // Binaries, the build script, examples, tests and benches: each is
+        // a crate of its own, named `kind:name` (a name no path can use).
+        let mut seen: BTreeSet<PathBuf> = crates.iter().map(|c| c.root_file.clone()).collect();
+        for (kind, name, file) in targets(&value, dir, package, name) {
+            if !file.is_file() || !seen.insert(file.clone()) {
+                continue;
+            }
+            let mut id = format!("{kind}:{}", name.replace('-', "_"));
+            if crates.iter().any(|c| c.name == id) {
+                id = format!("{kind}:{}:{}", lib_name, name.replace('-', "_"));
+            }
+            crates.push(CrateSrc {
+                name: id,
+                root_file: file,
+                manifest_dir: dir.to_path_buf(),
+                deps: deps.clone(),
+                edition,
+            });
+        }
     }
     crates
+}
+
+/// A package's targets other than the library: those declared in the
+/// manifest (`[[bin]]`, `[[test]]`, …, `package.build`) and those Cargo
+/// finds by convention (`src/main.rs`, `src/bin/`, `build.rs`,
+/// `examples/`, `tests/`, `benches/`).
+fn targets(
+    manifest: &toml::Table,
+    dir: &Path,
+    package: &toml::Table,
+    package_name: &str,
+) -> Vec<(&'static str, String, PathBuf)> {
+    let mut out = Vec::new();
+    for (key, kind) in [
+        ("bin", "bin"),
+        ("example", "example"),
+        ("test", "test"),
+        ("bench", "bench"),
+    ] {
+        for t in manifest
+            .get(key)
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|t| t.as_table())
+        {
+            let Some(name) = t.get("name").and_then(|n| n.as_str()) else {
+                continue;
+            };
+            let path = match t.get("path").and_then(|p| p.as_str()) {
+                Some(p) => dir.join(p),
+                None => match kind {
+                    "bin" => dir.join(format!("src/bin/{name}.rs")),
+                    "example" => dir.join(format!("examples/{name}.rs")),
+                    "test" => dir.join(format!("tests/{name}.rs")),
+                    _ => dir.join(format!("benches/{name}.rs")),
+                },
+            };
+            out.push((kind, name.to_string(), path));
+        }
+    }
+    match package.get("build") {
+        Some(toml::Value::String(p)) => out.push(("build", package_name.to_string(), dir.join(p))),
+        Some(toml::Value::Boolean(false)) => {}
+        _ => out.push(("build", package_name.to_string(), dir.join("build.rs"))),
+    }
+    out.push(("bin", package_name.to_string(), dir.join("src/main.rs")));
+    for (sub, kind) in [
+        ("src/bin", "bin"),
+        ("examples", "example"),
+        ("tests", "test"),
+        ("benches", "bench"),
+    ] {
+        let Ok(entries) = std::fs::read_dir(dir.join(sub)) else {
+            continue;
+        };
+        let mut found: Vec<(String, PathBuf)> = entries
+            .flatten()
+            .filter_map(|e| {
+                let path = e.path();
+                let stem = path.file_stem()?.to_string_lossy().to_string();
+                if path.is_file() && path.extension().is_some_and(|x| x == "rs") {
+                    Some((stem, path))
+                } else if path.join("main.rs").is_file() {
+                    Some((
+                        e.file_name().to_string_lossy().to_string(),
+                        path.join("main.rs"),
+                    ))
+                } else {
+                    None
+                }
+            })
+            .collect();
+        found.sort();
+        out.extend(found.into_iter().map(|(n, p)| (kind, n, p)));
+    }
+    out
 }
 
 fn walk_manifests(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {

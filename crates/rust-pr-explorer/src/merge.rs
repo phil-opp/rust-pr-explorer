@@ -62,6 +62,7 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
         crates,
         items,
         externals,
+        files: Vec::new(),
         warnings,
     }
 }

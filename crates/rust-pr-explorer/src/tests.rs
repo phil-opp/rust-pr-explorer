@@ -488,3 +488,46 @@ fn long_trait_methods_wrap_like_rustfmt() {
         "pub trait Visitor {\n    fn visit_pair(\n        &mut self,\n        key: Key,\n        value: Value,\n    ) -> Result<(), Error>;\n    fn short(&self);\n}"
     );
 }
+
+#[test]
+fn binaries_tests_and_build_scripts_are_analyzed() {
+    let dir = write_crate(&[
+        ("src/lib.rs", "pub fn api() {}\n"),
+        ("src/main.rs", "fn main() { t::api(); }\n"),
+        (
+            "src/bin/tool.rs",
+            "pub fn helper() {}\nfn main() { helper(); }\n",
+        ),
+        ("build.rs", "fn main() {}\n"),
+        (
+            "tests/it.rs",
+            "use t::api;\nfn setup() {}\n#[test]\nfn works() { setup(); api(); }\n",
+        ),
+        ("examples/demo/main.rs", "fn main() {}\n"),
+    ]);
+    let out = analyze_dirs(dir.path(), dir.path());
+    let mut crates = out.crates.clone();
+    crates.sort();
+    assert_eq!(
+        crates,
+        [
+            "bin:t",
+            "bin:tool",
+            "build:t",
+            "example:demo",
+            "t",
+            "test:it"
+        ]
+    );
+    // A binary's `pub` items are not public API.
+    assert!(!out.items["bin:tool::helper"].info.public);
+    assert!(out.items["t::api"].info.public);
+    // The other targets use the library by its name.
+    let main = &out.items["bin:t::main"].info;
+    let main_calls: Vec<&str> = main.calls.iter().map(|c| c.to.as_str()).collect();
+    assert_eq!(main_calls, ["t::api"]);
+    // In tests, `#[test]` functions are what the target is about.
+    let works = &out.items["test:it::works"].info;
+    let calls: Vec<&str> = works.calls.iter().map(|c| c.to.as_str()).collect();
+    assert_eq!(calls, ["t::api", "test:it::setup"]);
+}

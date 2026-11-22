@@ -8,6 +8,7 @@ mod canvas;
 mod code;
 mod data;
 mod dom;
+mod files;
 mod map;
 mod pages;
 mod route;

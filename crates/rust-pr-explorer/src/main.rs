@@ -1,7 +1,9 @@
 //! Rust PR Explorer: shows a pull request as changed Rust items.
 
 mod analyze;
+mod files;
 mod merge;
+mod python;
 #[cfg(feature = "semantic")]
 mod semantic;
 mod sigdiff;
@@ -106,6 +108,9 @@ fn analyze_checkout(
     semantic: bool,
     trust: source::Trust,
 ) -> model::Output {
+    // Before the analysis, which may write files (`Cargo.lock`) into the
+    // copies.
+    let mut files = files::changed_files(&checkout.base_dir, &checkout.head_dir);
     let (base, base_note) = analyze_side(&checkout.base_dir, semantic, trust, "base");
     let (head, head_note) = analyze_side(&checkout.head_dir, semantic, trust, "head");
     let resolution = if base_note == head_note {
@@ -113,7 +118,7 @@ fn analyze_checkout(
     } else {
         format!("base: {base_note}; head: {head_note}")
     };
-    merge::merge(
+    let mut output = merge::merge(
         base,
         head,
         model::Meta {
@@ -124,7 +129,19 @@ fn analyze_checkout(
             resolution,
             pr: checkout.pr.clone(),
         },
-    )
+    );
+    // Files the Rust analysis covers: one per module.
+    let analyzed: std::collections::BTreeSet<&str> = output
+        .items
+        .values()
+        .filter(|i| i.info.kind == model::Kind::Mod)
+        .map(|i| i.info.file.as_str())
+        .collect();
+    for f in &mut files {
+        f.analyzed = analyzed.contains(f.path.as_str());
+    }
+    output.files = files;
+    output
 }
 
 /// Analyzes one source tree. Returns the analysis and a note on how calls

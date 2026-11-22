@@ -312,7 +312,14 @@ impl Analyzer {
             }
         }
         an.collect_impls();
-        let items = an.build_items();
+        let mut items = an.build_items();
+        // Binaries, tests, examples, … have no public API.
+        for item in items.values_mut() {
+            if is_extra_target(&item.info.id) {
+                item.info.public = false;
+                item.info.public_paths.clear();
+            }
+        }
         Analysis {
             externals: BTreeMap::new(),
             items,
@@ -383,7 +390,7 @@ impl Analyzer {
     /// Pass 1: module tree, definitions and imports.
     fn collect_items(&mut self, module: &str, items: &[Item], src: &Rc<SrcFile>, dir: &Path) {
         for item in items {
-            if is_test_only(item_attrs(item)) {
+            if skipped(module, item_attrs(item)) {
                 continue;
             }
             let push = |an: &mut Analyzer, name: String, kind: Kind| {
@@ -601,7 +608,7 @@ impl Analyzer {
         let impls = std::mem::take(&mut self.impls);
         for raw in impls {
             let item = &raw.item;
-            if is_test_only(&item.attrs) {
+            if skipped(&raw.module, &item.attrs) {
                 continue;
             }
             let self_id = match &*item.self_ty {
@@ -705,7 +712,7 @@ impl Analyzer {
             for member in &item.items {
                 let (name, kind, node) = match member {
                     syn::ImplItem::Fn(f) => {
-                        if is_test_only(&f.attrs) {
+                        if skipped(&raw.module, &f.attrs) {
                             continue;
                         }
                         (
@@ -1127,7 +1134,12 @@ impl Analyzer {
         // with a public path, and every `pub use` in such a module, until
         // nothing changes (a module can become public through a re-export).
         let mut paths: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
-        let roots: Vec<String> = self.crate_info.keys().cloned().collect();
+        let roots: Vec<String> = self
+            .crate_info
+            .keys()
+            .filter(|k| !is_extra_target(k))
+            .cloned()
+            .collect();
         for root in &roots {
             paths.entry(root.clone()).or_default().insert(root.clone());
         }
@@ -2227,6 +2239,19 @@ fn item_attrs(item: &Item) -> &[Attribute] {
         Item::Use(i) => &i.attrs,
         _ => &[],
     }
+}
+
+/// Whether an item is left out: test-only code, except in test and bench
+/// targets, where it is the subject.
+fn skipped(module: &str, attrs: &[Attribute]) -> bool {
+    let target = module.split("::").next().unwrap_or("");
+    !(target.starts_with("test:") || target.starts_with("bench:")) && is_test_only(attrs)
+}
+
+/// Whether a crate id is a target other than a library (`bin:…`,
+/// `test:…`, …). Those are not part of any public API.
+pub fn is_extra_target(id: &str) -> bool {
+    id.split("::").next().unwrap_or("").contains(':')
 }
 
 fn is_test_only(attrs: &[Attribute]) -> bool {

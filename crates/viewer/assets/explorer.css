@@ -501,3 +501,26 @@ details.private-def .sigbox { margin-top: 4px; }
 .mm-more { font-size: 12px; color: var(--link); cursor: pointer; padding: 1px 4px; }
 .mm-wrap.busy .mm-flow:not(.hot) { opacity: .25; }
 .mm-wrap.busy .mm-flow:not(.hot) text { display: none; }
+
+/* Other changed files. */
+.ientry.file .irow { padding-top: 0; }
+.ientry.file > details.src, .ientry.file > .mark, .ientry.file > .irow.member, .ientry.file > .manifest { margin-top: 8px; }
+.hunks { margin: 4px 0 0; background: var(--bg-code); border-radius: 4px; max-height: 480px; overflow: auto; padding: 4px 0; font-size: var(--code-size); }
+.hunks .ln { display: block; padding: 0 8px 0 4px; white-space: pre; }
+.hunks .ln::before { content: attr(data-t); display: inline-block; width: 14px; color: var(--muted); }
+.hunks .ln.add { background: var(--added-bg); }
+.hunks .ln.del { background: var(--removed-bg); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--removed) 60%, transparent); }
+.hunks .ln.skip { color: var(--muted); font-style: italic; background: var(--panel); }
+.note { font-size: 13px; color: var(--muted); }
+details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px 0; }
+.manifest { border-collapse: collapse; font-size: 13px; }
+.manifest td, .manifest th { padding: 3px 8px; text-align: left; vertical-align: top; }
+.manifest .mf-sec { font: 600 12px var(--code-font); color: var(--muted); padding-top: 10px; }
+.manifest tr.m-add td:first-child, .manifest tr.m-del td:first-child, .manifest tr.m-chg td:first-child { border-left-width: 3px; }
+.manifest tr.m-del .mf-name code { text-decoration: line-through; text-decoration-color: var(--removed); }
+.manifest .mf-old del { color: var(--muted); text-decoration-color: var(--removed); }
+.manifest .mf-old, .manifest .mf-new { padding-left: 24px; }
+.md-h { font-weight: 600; font-size: 15px; margin: 4px 0; }
+.md-removed .md-h { text-decoration: line-through; text-decoration-color: var(--removed); color: var(--muted); }
+.irow.member.py { margin-top: 8px; }
+.ientry > .ihead { display: flex; align-items: center; gap: 8px; }
