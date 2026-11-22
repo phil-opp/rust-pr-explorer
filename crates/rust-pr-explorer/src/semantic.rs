@@ -132,7 +132,7 @@ pub fn refine(
             // Check every syntactic call site; ask "go to definition" for
             // those the call hierarchy doesn't list (e.g. inside macros).
             let sites = item.call_sites.clone();
-            let mut site_refs = BTreeMap::new();
+            let mut site_refs: BTreeMap<String, Ref> = BTreeMap::new();
             let mut unresolved = 0;
             for site in &sites {
                 let listed = ranges
@@ -185,7 +185,7 @@ pub fn refine(
             let item = analysis.items.get_mut(&id).unwrap();
             item.info.calls = targets.into_iter().map(|to| Call { to }).collect();
             item.info.unresolved_calls = unresolved;
-            item.info.site_refs = site_refs;
+            item.info.source_refs.extend(site_refs);
             // A function called is no longer only "used".
             let calls = item.info.calls.clone();
             item.info

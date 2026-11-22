@@ -164,10 +164,20 @@ pub struct ItemInfo {
     /// method calls without rust-analyzer). They are not in `calls`.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub unresolved_calls: u32,
-    /// Targets of method calls by position (`line:column` of the method
-    /// name, both as in the source file, column 0-based in chars).
+    /// What names in the item's source refer to, by position: `line:column`
+    /// (line as in the source file, column 0-based in chars) of a path's
+    /// first segment or of a called method's name. Links in the source view
+    /// are placed only at these positions.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub site_refs: BTreeMap<String, Ref>,
+    pub source_refs: BTreeMap<String, Ref>,
+    /// Char offsets in `sig` where a resolved path starts: the only places
+    /// where the signature links names (so a field or variant that happens
+    /// to share a name with an item is never linked).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sig_links: Vec<u32>,
+    /// Like `sig_links`, for `sig_public`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sig_public_links: Vec<u32>,
 }
 
 fn is_zero(n: &u32) -> bool {

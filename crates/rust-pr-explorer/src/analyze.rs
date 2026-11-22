@@ -1621,6 +1621,13 @@ impl Analyzer {
             });
         }
 
+        let sig_links = sig_link_offsets(kind, &sig, &sig_col.refs);
+        let sig_public_links = sig_public
+            .as_deref()
+            .map(|s| sig_link_offsets(kind, s, &sig_col.refs))
+            .unwrap_or_default();
+        let mut source_refs = sig_col.pos_refs.clone();
+        source_refs.extend(body_col.pos_refs.clone());
         let sig_norm = format!("{sig}|{:?}", sig_col.refs);
         let body_norm = format!("{body_norm}|{:?}", body_col.refs);
         let mut children = self.children.get(&p.id).cloned().unwrap_or_default();
@@ -1657,7 +1664,9 @@ impl Analyzer {
             calls,
             uses,
             unresolved_calls,
-            site_refs: BTreeMap::new(),
+            source_refs,
+            sig_links,
+            sig_public_links,
         };
         Some(ItemData {
             info,
@@ -1714,6 +1723,8 @@ struct Collector<'a> {
     shadowed: std::collections::HashSet<String>,
     sites: Vec<CallSite>,
     in_macro: bool,
+    /// Resolved paths by the source position of their first segment.
+    pos_refs: BTreeMap<String, Ref>,
 }
 
 impl<'a> Collector<'a> {
@@ -1729,6 +1740,7 @@ impl<'a> Collector<'a> {
             shadowed: Default::default(),
             sites: Vec::new(),
             in_macro: false,
+            pos_refs: BTreeMap::new(),
         }
     }
 
@@ -1757,6 +1769,13 @@ impl<'a> Collector<'a> {
             id: res.id.clone(),
             path: res.path.clone(),
         };
+        if let Some(first) = path.segments.first() {
+            let pos = first.ident.span().start();
+            if pos.line > 0 {
+                self.pos_refs
+                    .insert(format!("{}:{}", pos.line, pos.column), r.clone());
+            }
+        }
         if self.normalize && start > 0 {
             path.leading_colon = None;
             path.segments = path.segments.iter().skip(start).cloned().collect();
@@ -1940,6 +1959,80 @@ impl<'ast> syn::visit::Visit<'ast> for Bindings {
             }
         }
     }
+}
+
+/// Char offsets where resolved paths start in a rendered signature. The
+/// signature is parsed again so that only real paths count, not names
+/// being defined (fields, variants, parameters, the item itself).
+fn sig_link_offsets(kind: Kind, sig: &str, refs: &BTreeMap<String, Ref>) -> Vec<u32> {
+    use syn::visit::Visit;
+    struct Paths<'s> {
+        text: &'s str,
+        refs: &'s BTreeMap<String, Ref>,
+        out: Vec<u32>,
+    }
+    impl Paths<'_> {
+        fn path(&mut self, path: &syn::Path) {
+            let Some(first) = path.segments.first() else {
+                return;
+            };
+            let start = first.ident.span().byte_range().start;
+            // The display key: segments without generic arguments.
+            let key = path
+                .segments
+                .iter()
+                .map(|s| s.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("::");
+            let known = self.refs.contains_key(&key)
+                || (1..path.segments.len()).any(|n| {
+                    let prefix: Vec<String> = path
+                        .segments
+                        .iter()
+                        .take(n)
+                        .map(|s| s.ident.to_string())
+                        .collect();
+                    self.refs.contains_key(&prefix.join("::"))
+                });
+            if known && start <= self.text.len() {
+                self.out.push(self.text[..start].chars().count() as u32);
+            }
+        }
+    }
+    impl<'ast> Visit<'ast> for Paths<'_> {
+        fn visit_attribute(&mut self, _: &'ast Attribute) {}
+        fn visit_visibility(&mut self, _: &'ast Visibility) {}
+        fn visit_path(&mut self, path: &'ast syn::Path) {
+            self.path(path);
+            syn::visit::visit_path(self, path);
+        }
+    }
+    let mut paths = Paths {
+        text: sig,
+        refs,
+        out: Vec::new(),
+    };
+    // Bodies are replaced by text of the same length, so offsets stay valid.
+    let parsed: Option<syn::File> = match kind {
+        Kind::Fn | Kind::Method | Kind::TraitMethod | Kind::Impl => {
+            let text = sig.trim_end();
+            let text = text
+                .strip_suffix("{ ... }")
+                .map(|t| format!("{t}{{     }}"))
+                .or_else(|| text.strip_suffix(';').map(|t| format!("{t} {{}}")))
+                .unwrap_or_else(|| format!("{text} {{}}"));
+            syn::parse_str(&text).ok()
+        }
+        Kind::Trait => syn::parse_str(&sig.replace("{ ... }", "{     }")).ok(),
+        Kind::Mod | Kind::Macro => None,
+        _ => syn::parse_str(sig).ok(),
+    };
+    if let Some(file) = parsed {
+        paths.visit_file(&file);
+    }
+    paths.out.sort_unstable();
+    paths.out.dedup();
+    paths.out
 }
 
 /// Generic parameter names an item declares itself.

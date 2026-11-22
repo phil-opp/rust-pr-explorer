@@ -647,15 +647,13 @@ impl Cx<'_> {
             if changed.is_empty() {
                 return (vec![same(ntext)], TypeChange::Same);
             }
-            // Look for the name inside the type arguments, unless the outer
+            // Look for the name inside the sub-types, unless the outer
             // type's own name changed meaning.
-            let head_changed = match path_args(nt) {
-                Some((_, args)) if !args.is_empty() => {
-                    let head = &new[nr.start..range_of(args[0].span()).start];
-                    !self.retargeted(head, head).is_empty()
-                }
-                _ => true,
-            };
+            let subs = sub_types(nt);
+            let head_changed = subs.is_empty()
+                || gaps(new, nt, &subs)
+                    .iter()
+                    .any(|g| !self.retargeted(g, g).is_empty());
             if head_changed {
                 self.retargets.extend(changed);
                 let g = self.g();
@@ -708,32 +706,10 @@ impl Cx<'_> {
                 TypeChange::Unwrapped(wrapper),
             );
         }
-        // Same outer type: compare the arguments.
-        if let (Some((oh, oargs)), Some((nh, nargs))) = (path_args(ot), path_args(nt))
-            && oh == nh
-            && oargs.len() == nargs.len()
-            && !oargs.is_empty()
-        {
-            let mut spans = Vec::new();
-            let mut cursor = nr.start;
-            for (oa, na) in oargs.iter().zip(&nargs) {
-                let ar = range_of(na.span());
-                spans.push(same(&new[cursor..ar.start]));
-                let (inner, _) = self.ty(old, oa, new, na);
-                spans.extend(inner);
-                cursor = ar.end;
-            }
-            spans.push(same(&new[cursor..nr.end]));
+        // Same shape (e.g. `Result<_, E>`, `&_`, `[_]`, `(_, _)`): compare
+        // the sub-types.
+        if let Some(spans) = self.same_shape(old, ot, new, nt) {
             return (spans, TypeChange::Changed);
-        }
-        if let (syn::Type::Reference(o), syn::Type::Reference(n)) = (ot, nt) {
-            let (oe, ne) = (range_of(o.elem.span()), range_of(n.elem.span()));
-            if old[or.start..oe.start] == new[nr.start..ne.start] {
-                let mut spans = vec![same(&new[nr.start..ne.start])];
-                let (inner, _) = self.ty(old, &o.elem, new, &n.elem);
-                spans.extend(inner);
-                return (spans, TypeChange::Changed);
-            }
         }
         let g = self.g();
         (
@@ -749,6 +725,33 @@ impl Cx<'_> {
             ],
             TypeChange::Changed,
         )
+    }
+
+    /// Compares two types with the same shape sub-type by sub-type: same
+    /// number of sub-types and the same text around them.
+    fn same_shape(
+        &mut self,
+        old: &str,
+        ot: &syn::Type,
+        new: &str,
+        nt: &syn::Type,
+    ) -> Option<Vec<DiffSpan>> {
+        let (osubs, nsubs) = (sub_types(ot), sub_types(nt));
+        if osubs.is_empty() || osubs.len() != nsubs.len() {
+            return None;
+        }
+        let (ogaps, ngaps) = (gaps(old, ot, &osubs), gaps(new, nt, &nsubs));
+        if ogaps != ngaps || ngaps.iter().any(|g| !self.retargeted(g, g).is_empty()) {
+            return None;
+        }
+        let mut spans = Vec::new();
+        for (k, (o, n)) in osubs.iter().zip(&nsubs).enumerate() {
+            spans.push(same(ngaps[k]));
+            let (inner, _) = self.ty(old, o, new, n);
+            spans.extend(inner);
+        }
+        spans.push(same(ngaps[nsubs.len()]));
+        Some(spans)
     }
 
     /// Token-level diff, for pieces without type structure.
@@ -803,6 +806,36 @@ impl Cx<'_> {
 
 fn prefix_of<'t>(text: &'t str, p: &Piece, ty: &syn::Type) -> &'t str {
     &text[p.range.start..range_of(ty.span()).start]
+}
+
+/// The types directly inside a type: type arguments of a path, the element
+/// of a reference, slice, array or pointer, the elements of a tuple.
+fn sub_types(ty: &syn::Type) -> Vec<&syn::Type> {
+    match ty {
+        syn::Type::Path(_) => path_args(ty).map(|(_, a)| a).unwrap_or_default(),
+        syn::Type::Reference(r) => vec![&*r.elem],
+        syn::Type::Slice(s) => vec![&*s.elem],
+        syn::Type::Array(a) => vec![&*a.elem],
+        syn::Type::Ptr(p) => vec![&*p.elem],
+        syn::Type::Paren(p) => vec![&*p.elem],
+        syn::Type::Group(g) => vec![&*g.elem],
+        syn::Type::Tuple(t) => t.elems.iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The text of a type around its sub-types: one more piece than sub-types.
+fn gaps<'t>(text: &'t str, ty: &syn::Type, subs: &[&syn::Type]) -> Vec<&'t str> {
+    let r = range_of(ty.span());
+    let mut out = Vec::new();
+    let mut cursor = r.start;
+    for sub in subs {
+        let sr = range_of(sub.span());
+        out.push(&text[cursor..sr.start]);
+        cursor = sr.end;
+    }
+    out.push(&text[cursor..r.end]);
+    out
 }
 
 /// The last path segment's name and type arguments, e.g. `Result` and
@@ -1038,6 +1071,20 @@ mod tests {
                 "parameter `env: &Env` added",
                 "return type wrapped in `Result<_, Error>`"
             ]
+        );
+    }
+
+    #[test]
+    fn changes_deep_inside_types() {
+        let d = diff(
+            Kind::Fn,
+            "fn f(kvs: Option<&[(&str, &Value)]>)",
+            "fn f(kvs: Option<&[(&str, Value)]>)",
+        )
+        .unwrap();
+        assert_eq!(
+            show(&d.spans),
+            "fn f(kvs: Option<&[(&str, [-&Value-][+Value+])]>)"
         );
     }
 

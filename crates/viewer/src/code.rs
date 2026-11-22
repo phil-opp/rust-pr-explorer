@@ -81,19 +81,41 @@ pub fn ref_html(d: &Data, text: &str, r: &Ref, extra: &str) -> String {
     }
 }
 
-/// Syntax-highlights Rust code and links every name found in `refs`.
-pub fn code_html(d: &Data, text: &str, refs: &BTreeMap<String, Ref>) -> String {
-    code_html_at(d, text, refs, None)
+/// Where names in rendered code may be linked. Links are only ever placed
+/// where the analysis recorded a resolved path, never by matching text.
+#[derive(Clone, Copy)]
+pub enum Links<'a> {
+    None,
+    /// (Part of) a signature: `text` starts at char offset `base` of the
+    /// signature, and `at` are the offsets where resolved paths start.
+    Sig {
+        refs: &'a BTreeMap<String, Ref>,
+        at: &'a [u32],
+        base: usize,
+    },
+    /// A line of source: names are linked by `line:column`.
+    Source {
+        line: usize,
+        refs: &'a BTreeMap<String, Ref>,
+    },
 }
 
-/// Like [`code_html`] for one source line: `sites` are method call targets
-/// by `line:column`, and `line` is this line's number in its file.
-pub fn code_html_at(
-    d: &Data,
-    text: &str,
-    refs: &BTreeMap<String, Ref>,
-    sites: Option<(usize, &BTreeMap<String, Ref>)>,
-) -> String {
+/// A path shown without a link (keywords still highlighted).
+fn plain_path(path: &str) -> String {
+    path.split("::")
+        .map(|seg| {
+            if KEYWORDS.contains(&seg) {
+                format!(r#"<span class="kw">{seg}</span>"#)
+            } else {
+                esc(seg)
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("::")
+}
+
+/// Syntax-highlights Rust code, linking names as `links` allows.
+pub fn code_html(d: &Data, text: &str, links: Links) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::new();
     let mut i = 0;
@@ -161,17 +183,31 @@ pub fn code_html_at(
                 end = ident_end(&chars, end + 2);
             }
             let path: String = chars[start..end].iter().collect();
-            match (path.strip_prefix('.'), sites) {
-                // A method call: linked only by its exact position.
-                (Some(name), Some((line, sites))) => {
-                    out.push('.');
-                    match sites.get(&format!("{line}:{}", start + 1)) {
-                        Some(r) => out.push_str(&ref_html(d, name, r, "")),
-                        None => out.push_str(&esc(name)),
+            if let Some(name) = path.strip_prefix('.') {
+                // A method call or field access.
+                out.push('.');
+                match links {
+                    Links::Source { line, refs } => {
+                        match refs.get(&format!("{line}:{}", start + 1)) {
+                            Some(r) => out.push_str(&ref_html(d, name, r, "")),
+                            None => out.push_str(&esc(name)),
+                        }
                     }
+                    _ => out.push_str(&esc(name)),
                 }
-                (Some(_), None) => out.push_str(&esc(&path)),
-                (None, _) => out.push_str(&path_html(d, &path, refs)),
+            } else {
+                match links {
+                    Links::Sig { refs, at, base }
+                        if at.binary_search(&((base + start) as u32)).is_ok() =>
+                    {
+                        out.push_str(&path_html(d, &path, refs))
+                    }
+                    Links::Source { line, refs } => match refs.get(&format!("{line}:{start}")) {
+                        Some(r) => out.push_str(&ref_html(d, &path, r, "")),
+                        None => out.push_str(&plain_path(&path)),
+                    },
+                    _ => out.push_str(&plain_path(&path)),
+                }
             }
             i = end;
         } else {
@@ -309,17 +345,35 @@ fn diff_tokens(s: &str) -> Vec<&str> {
 /// A signature as a token-level diff against its previous version: removed
 /// parts struck through, added parts highlighted. Names in the new version
 /// stay cross links.
-pub fn sig_diff_html(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Ref>) -> String {
+pub fn sig_diff_html(
+    d: &Data,
+    old: &str,
+    new: &str,
+    refs: &BTreeMap<String, Ref>,
+    at: &[u32],
+) -> String {
     use similar::{Algorithm, DiffOp, capture_diff_slices};
     let (a, b) = (diff_tokens(old), diff_tokens(new));
+    // Char offset in `new` of each token.
+    let mut offsets = vec![0];
+    for t in &b {
+        offsets.push(offsets.last().unwrap() + t.chars().count());
+    }
+    let links = |index: usize| Links::Sig {
+        refs,
+        at,
+        base: offsets[index],
+    };
     let mut out = String::new();
     let mut g = 0;
     for op in capture_diff_slices(Algorithm::Myers, &a, &b) {
         g += 1;
         match op {
-            DiffOp::Equal { new_index, len, .. } => {
-                out.push_str(&code_html(d, &b[new_index..new_index + len].concat(), refs))
-            }
+            DiffOp::Equal { new_index, len, .. } => out.push_str(&code_html(
+                d,
+                &b[new_index..new_index + len].concat(),
+                links(new_index),
+            )),
             DiffOp::Delete {
                 old_index, old_len, ..
             } => out.push_str(&removed_html(
@@ -332,7 +386,7 @@ pub fn sig_diff_html(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Ref
             } => out.push_str(&added_html(
                 d,
                 &b[new_index..new_index + new_len].concat(),
-                refs,
+                links(new_index),
                 g,
             )),
             DiffOp::Replace {
@@ -350,7 +404,7 @@ pub fn sig_diff_html(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Ref
                 out.push_str(&added_html(
                     d,
                     &b[new_index..new_index + new_len].concat(),
-                    refs,
+                    links(new_index),
                     g,
                 ));
             }
@@ -359,26 +413,50 @@ pub fn sig_diff_html(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Ref
     out
 }
 
-fn added_html(d: &Data, text: &str, refs: &BTreeMap<String, Ref>, g: u32) -> String {
+fn added_html(d: &Data, text: &str, links: Links, g: u32) -> String {
     format!(
         r#"<ins class="sd" data-g="{g}">{}</ins>"#,
-        code_html(d, text, refs)
+        code_html(d, text, links)
     )
 }
 
+/// Removed text is base code: what its names referred to is not known
+/// here, so it gets no links.
 fn removed_html(d: &Data, text: &str, g: u32) -> String {
     format!(
         r#"<del class="sd" data-g="{g}">{}</del>"#,
-        code_html(d, text, &BTreeMap::new())
+        code_html(d, text, Links::None)
     )
 }
 
-fn spans_html(d: &Data, spans: &[DiffSpan], refs: &BTreeMap<String, Ref>) -> String {
+/// Renders diff spans; `cursor` is the char offset in the new signature.
+fn spans_html(
+    d: &Data,
+    spans: &[DiffSpan],
+    refs: &BTreeMap<String, Ref>,
+    at: &[u32],
+    cursor: &mut usize,
+) -> String {
     let mut out = String::new();
+    let new_text = |text: &str, cursor: &mut usize| {
+        let links = Links::Sig {
+            refs,
+            at,
+            base: *cursor,
+        };
+        *cursor += text.chars().count();
+        links
+    };
     for span in spans {
         match span {
-            DiffSpan::Same { text } => out.push_str(&code_html(d, text, refs)),
-            DiffSpan::Added { text, g } => out.push_str(&added_html(d, text, refs, *g)),
+            DiffSpan::Same { text } => {
+                let links = new_text(text, cursor);
+                out.push_str(&code_html(d, text, links))
+            }
+            DiffSpan::Added { text, g } => {
+                let links = new_text(text, cursor);
+                out.push_str(&added_html(d, text, links, *g))
+            }
             DiffSpan::Removed { text, g } => out.push_str(&removed_html(d, text, *g)),
             DiffSpan::Wrap {
                 before,
@@ -388,19 +466,28 @@ fn spans_html(d: &Data, spans: &[DiffSpan], refs: &BTreeMap<String, Ref>) -> Str
                 g,
             } => {
                 // One box around the whole wrapper, the unchanged inner type
-                // inside it uncoloured.
+                // inside it uncoloured. A removed wrapper is base text.
                 let (class, edge) = if *unwrap {
                     ("wrap unwrap", "del")
                 } else {
                     ("wrap", "ins")
                 };
-                let edge_refs = if *unwrap { &BTreeMap::new() } else { refs };
+                let before_html = if *unwrap {
+                    code_html(d, before, Links::None)
+                } else {
+                    let links = new_text(before, cursor);
+                    code_html(d, before, links)
+                };
+                let inner_html = spans_html(d, inner, refs, at, cursor);
+                let after_html = if *unwrap {
+                    code_html(d, after, Links::None)
+                } else {
+                    let links = new_text(after, cursor);
+                    code_html(d, after, links)
+                };
                 out.push_str(&format!(
-                    r#"<span class="{class}" data-g="{g}" title="{}"><{edge} class="edge">{}</{edge}>{}<{edge} class="edge">{}</{edge}></span>"#,
+                    r#"<span class="{class}" data-g="{g}" title="{}"><{edge} class="edge">{before_html}</{edge}>{inner_html}<{edge} class="edge">{after_html}</{edge}></span>"#,
                     if *unwrap { "wrapper removed" } else { "wrapper added" },
-                    code_html(d, before, edge_refs),
-                    spans_html(d, inner, refs),
-                    code_html(d, after, edge_refs),
                 ));
             }
         }
@@ -488,8 +575,13 @@ fn note_html(text: &str) -> String {
 /// A structured signature diff: the signature (with a change gutter for
 /// multi-line definitions) and one note per change. Hovering a change
 /// or a note highlights everything that belongs to it.
-pub fn structured_diff_html(d: &Data, diff: &SigDiff, refs: &BTreeMap<String, Ref>) -> String {
-    let code = spans_html(d, &diff.spans, refs);
+pub fn structured_diff_html(
+    d: &Data,
+    diff: &SigDiff,
+    refs: &BTreeMap<String, Ref>,
+    at: &[u32],
+) -> String {
+    let code = spans_html(d, &diff.spans, refs, at, &mut 0);
     let markers = line_markers(&diff.spans);
     let sig = if markers.len() > 1 {
         let gutter: String = markers
@@ -558,7 +650,7 @@ pub fn docs_html(d: &Data, md: &str, refs: &BTreeMap<String, Ref>) -> String {
                         .collect::<Vec<_>>()
                         .join("\n");
                     let html = if *rust {
-                        code_html(d, &text, &BTreeMap::new())
+                        code_html(d, &text, Links::None)
                     } else {
                         esc(&text)
                     };
@@ -707,7 +799,7 @@ mod tests {
         let html = code_html(
             &d,
             "fn f<'a>(c: char) -> &'a str { '\\n'; \"<b>\" } // x",
-            &BTreeMap::new(),
+            Links::None,
         );
         assert!(html.contains(r#"<span class="kw">'a</span>"#), "{html}");
         assert!(html.contains(r#"<span class="str">'\n'</span>"#), "{html}");
@@ -726,6 +818,7 @@ mod tests {
             "pub fn calc(input: &str) -> f64",
             "pub fn calc(input: &str, env: &Env) -> Result<f64>",
             &BTreeMap::new(),
+            &[],
         );
         assert!(
             html.contains(r#"<ins class="sd" data-g="2">, env: &amp;Env</ins>"#),
@@ -734,7 +827,7 @@ mod tests {
         // Unchanged text is not marked.
         assert!(html.starts_with(r#"<span class="kw">pub</span>"#), "{html}");
         // Both halves of a replacement share a group, for linked hover.
-        let replaced = sig_diff_html(&d, "fn f(x: u8)", "fn f(x: u16)", &BTreeMap::new());
+        let replaced = sig_diff_html(&d, "fn f(x: u8)", "fn f(x: u16)", &BTreeMap::new(), &[]);
         assert!(
             replaced.contains(
                 r#"<del class="sd" data-g="2">u8</del><ins class="sd" data-g="2">u16</ins>"#
@@ -780,7 +873,7 @@ mod tests {
             }],
         };
         assert_eq!(line_markers(&diff.spans), [' ', ' ', '-', '~', '+', ' ']);
-        let html = structured_diff_html(&d, &diff, &BTreeMap::new());
+        let html = structured_diff_html(&d, &diff, &BTreeMap::new(), &[]);
         assert!(html.contains(r#"<span class="wrap" data-g="2""#), "{html}");
         assert!(
             html.contains(r#"<ins class="edge">Option&lt;</ins>u8<ins class="edge">&gt;</ins>"#),
@@ -805,16 +898,45 @@ mod tests {
             },
         );
         // Line 7: `a.get()` (name at column 10) is linked; `b.get()` is not.
-        let html = code_html_at(
+        let html = code_html(
             &d,
             "    let a.get() + b.get();",
-            &BTreeMap::new(),
-            Some((7, &sites)),
+            Links::Source {
+                line: 7,
+                refs: &sites,
+            },
         );
         assert_eq!(html.matches("c::A::get").count(), 1, "{html}");
         assert!(
             html.contains(r#".<span class="ref ext " data-path="c::A::get">get</span>"#),
             "{html}"
+        );
+    }
+
+    #[test]
+    fn signature_links_only_at_recorded_offsets() {
+        let d = empty();
+        let mut refs = BTreeMap::new();
+        refs.insert(
+            "Op".to_string(),
+            Ref {
+                id: None,
+                path: "c::Op".into(),
+            },
+        );
+        // `Op(Op)`: only the type (offset 3) is a path.
+        let html = code_html(
+            &d,
+            "Op(Op)",
+            Links::Sig {
+                refs: &refs,
+                at: &[3],
+                base: 0,
+            },
+        );
+        assert_eq!(
+            html,
+            r#"Op(<span class="ref ext " data-path="c::Op">Op</span>)"#
         );
     }
 

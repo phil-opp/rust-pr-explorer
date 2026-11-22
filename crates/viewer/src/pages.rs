@@ -240,7 +240,7 @@ pub fn render_overview(app: &App) {
         .map(|(m, list)| {
             format!(
                 r#"<div class="irow"><div class="ihead"><a data-mod="{}" class="title-name"><span class="k-mod">{}</span></a>
-                <span class="dim">{} private item{}: {}</span></div>
+                <span class="dim">{} changed item{} not in the public API: {}</span></div>
                 <div class="iacts"><button data-graph="{}">Internal call graph ▸</button></div></div>"#,
                 esc(m),
                 esc(&d.mod_label(m)),
@@ -266,7 +266,7 @@ pub fn render_overview(app: &App) {
         <p class="sub">Items reachable from outside the crate that were added, changed or removed, in rustdoc form. Types appear as context when only their members changed.</p>
         {}
         <h2>Internal changes</h2>
-        <p class="sub">Private and crate-internal items are kept out of the overview. Open a module to see its private items and internal call graph.</p>
+        <p class="sub">Items not reachable from outside the crate (private, pub(crate), pub(super), …) are kept out of the overview. Open a module to see them and its internal call graph.</p>
         {}"#,
         esc(&meta.title),
         esc(&meta.base),

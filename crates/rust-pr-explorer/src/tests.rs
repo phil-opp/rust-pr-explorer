@@ -186,6 +186,38 @@ fn visibility_and_public_api() {
 }
 
 #[test]
+fn only_real_paths_are_linked() {
+    let out = demo();
+    // `Op(Op)`: the variant name is not a path; only the type is linked.
+    let token = &out.items["tinycalc::parser::lexer::Token"].info;
+    let sig: Vec<char> = token.sig.chars().collect();
+    let linked: Vec<String> = token
+        .sig_links
+        .iter()
+        .map(|&o| {
+            sig[o as usize..]
+                .iter()
+                .take_while(|c| c.is_alphanumeric())
+                .collect()
+        })
+        .collect();
+    assert_eq!(linked, ["String", "Op"]);
+    let variant = token.sig[..token.sig.find("Op(Op)").unwrap()]
+        .chars()
+        .count() as u32;
+    assert!(!token.sig_links.contains(&variant));
+    assert!(token.sig_links.contains(&(variant + 3)));
+    // In the source, links are placed by position: `Parser` in `Parser {`
+    // of `Parser::new`, but not the field name `pos`.
+    let new = &out.items["tinycalc::parser::Parser::new"].info;
+    assert!(
+        new.source_refs
+            .values()
+            .any(|r| r.path == "tinycalc::parser::Parser")
+    );
+}
+
+#[test]
 fn signatures_use_short_names_with_full_paths_on_hover() {
     let out = demo();
     let evaluate = &out.items["tinycalc::eval::evaluate"].info;
@@ -318,13 +350,11 @@ fn semantic_calls() {
     );
     // Method calls are linked by position in the source.
     let parse = &analysis.items["tinycalc::parser::parse"].info;
-    assert_eq!(
+    assert!(
         parse
-            .site_refs
+            .source_refs
             .values()
-            .next()
-            .and_then(|r| r.id.as_deref()),
-        Some("tinycalc::parser::Parser::parse_expr")
+            .any(|r| r.id.as_deref() == Some("tinycalc::parser::Parser::parse_expr"))
     );
 }
 

@@ -389,9 +389,15 @@ impl Data {
     /// The signature block of an item seen from `scope`. A changed
     /// signature is shown as a diff against the base version.
     pub fn sig_html(&self, it: &Item, scope: &str) -> String {
-        use crate::code::{code_html, sig_diff_html};
+        use crate::code::{Links, code_html, sig_diff_html};
         let new = self.sig_for(it, scope);
         let refs = &it.info.sig_refs;
+        // Where the shown signature links names.
+        let at: &[u32] = if it.info.sig_public.as_deref() == Some(new) {
+            &it.info.sig_public_links
+        } else {
+            &it.info.sig_links
+        };
         let plain = |note: &str| {
             let note = if note.is_empty() {
                 String::new()
@@ -400,7 +406,7 @@ impl Data {
             };
             format!(
                 r#"<pre class="sig">{}</pre>{note}"#,
-                code_html(self, new, refs)
+                code_html(self, new, Links::Sig { refs, at, base: 0 })
             )
         };
         if !it.changes.signature {
@@ -420,7 +426,7 @@ impl Data {
                     .iter()
                     .any(|s| !matches!(s, model::DiffSpan::Same { .. })) =>
             {
-                crate::code::structured_diff_html(self, diff, refs)
+                crate::code::structured_diff_html(self, diff, refs, at)
             }
             Some(_) if public_view && has_public => {
                 plain("Only private parts of the definition changed.")
@@ -439,7 +445,7 @@ impl Data {
                     } else {
                         format!(
                             r#"<div class="sig-block"><pre class="sig sig-diff">{}</pre></div>"#,
-                            sig_diff_html(self, old, new, refs)
+                            sig_diff_html(self, old, new, refs, at)
                         )
                     }
                 }

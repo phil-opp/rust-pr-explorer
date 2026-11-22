@@ -16,6 +16,9 @@ pub struct Camera {
     pitch: f64,
     dist: f64,
     zoom: f64,
+    /// The point the camera looks at.
+    cx: f64,
+    cy: f64,
 }
 
 struct Node {
@@ -63,6 +66,8 @@ pub struct Space {
     show_uses: bool,
     /// Screen positions and radii of the nodes from the last frame.
     projected: Vec<(usize, f64, f64, f64)>,
+    /// Zoom that fits the whole model.
+    fit_zoom: f64,
     drag: Option<(f64, f64, f64, f64, bool)>,
 }
 
@@ -70,6 +75,8 @@ impl Space {
     pub fn new() -> Space {
         Space {
             cam: Camera {
+                cx: 0.0,
+                cy: 0.0,
                 yaw: -0.45,
                 pitch: 0.42,
                 dist: 1800.0,
@@ -81,6 +88,7 @@ impl Space {
             show_unchanged: false,
             show_uses: false,
             projected: Vec::new(),
+            fit_zoom: 1.0,
             drag: None,
         }
     }
@@ -154,9 +162,17 @@ fn build(d: &Data, sp: &Space) -> Model {
         node_index.insert(id.clone(), ni);
     }
     // Lay out nodes inside planes: exposed in front, private behind.
-    const COL: f64 = 170.0;
     const ROW: f64 = 85.0;
     for p in &mut model.planes {
+        // Wide enough for the longest label (about 7.5 units per char).
+        let longest = p
+            .nodes
+            .iter()
+            .filter_map(|&n| d.item(&model.nodes[n].id))
+            .map(|it| d.display_name(it).chars().count())
+            .max()
+            .unwrap_or(0);
+        let col = (longest as f64 * 7.5 + 40.0).max(170.0);
         let mut exposed: Vec<usize> = p
             .nodes
             .iter()
@@ -173,7 +189,7 @@ fn build(d: &Data, sp: &Space) -> Model {
         exposed.sort_by(by_name);
         private.sort_by(by_name);
         let cols = ((p.nodes.len() as f64 + 1.0).sqrt().ceil() as usize).max(2);
-        p.w = (cols as f64 * COL + 60.0).max(260.0);
+        p.w = (cols as f64 * col + 60.0).max(260.0);
         let rows_exposed = exposed.len().div_ceil(cols);
         let rows_private = private.len().div_ceil(cols);
         p.d = ((rows_exposed + rows_private) as f64 * ROW + 90.0).max(160.0);
@@ -187,8 +203,7 @@ fn build(d: &Data, sp: &Space) -> Model {
         ] {
             for (i, &n) in list.iter().enumerate() {
                 let node = &mut model.nodes[n];
-                node.x =
-                    -p.w / 2.0 + 50.0 + (i % cols) as f64 * COL + ((i / cols) % 2) as f64 * 40.0;
+                node.x = -p.w / 2.0 + 50.0 + (i % cols) as f64 * col;
                 node.lz = z0 - (i / cols) as f64 * ROW;
             }
         }
@@ -252,6 +267,7 @@ type Screen = (f64, f64, f64, f64);
 
 /// Projects a point of the scene onto the screen.
 fn project(cam: &Camera, w: f64, h: f64, x: f64, y: f64, z: f64) -> Screen {
+    let (x, y) = (x - cam.cx, y - cam.cy);
     let (cy, sy) = (cam.yaw.cos(), cam.yaw.sin());
     let (cp, sp) = (cam.pitch.cos(), cam.pitch.sin());
     let xx = x * cy - z * sy;
@@ -429,13 +445,8 @@ pub fn draw(app: &mut App) {
         });
         dash(
             &ctx,
-            if !e.call {
-                &[2.0, 4.0]
-            } else if cross {
-                &[1.0, 3.0]
-            } else {
-                &[]
-            },
+            // Calls are solid, uses dotted, whether or not they cross planes.
+            if !e.call { &[2.0, 4.0] } else { &[] },
         );
         ctx.begin_path();
         ctx.move_to(a.0, a.1);
@@ -583,44 +594,91 @@ pub fn show(app: &mut App) {
         - xs.iter().copied().fold(f64::MAX, f64::min))
     .max(600.0)
     .max(sp.model.planes.len() as f64 * 120.0);
-    sp.cam.zoom = (width * 0.85 / span).min(1.4);
+    sp.fit_zoom = (width * 0.85 / span).min(1.4);
+    let target = camera_for(sp, sp.cam.yaw, sp.cam.pitch);
+    sp.cam = target;
     draw(app);
 }
 
-fn animate_to(yaw: f64, pitch: f64) {
-    let start = crate::with_app(|app| app.s.space.cam);
-    let Some(start) = start else { return };
+/// Turns the camera to `yaw`/`pitch`. Takes the start from the caller,
+/// which holds the app state already.
+/// Moves the camera smoothly to `target`. Takes the start from the caller,
+/// which holds the app state already.
+fn animate_to(start: Camera, target: Camera) {
     let t0 = dom::window().performance().map_or(0.0, |p| p.now());
-    fn step(start: Camera, yaw: f64, pitch: f64, t0: f64) {
+    fn step(start: Camera, target: Camera, t0: f64) {
         dom::raf(move || {
             let now = dom::window().performance().map_or(t0 + 1000.0, |p| p.now());
             let k = ((now - t0) / 450.0).min(1.0);
             let e = k * (2.0 - k);
+            let mix = |a: f64, b: f64| a + (b - a) * e;
             crate::with_app(|app| {
-                let cam = &mut app.s.space.cam;
-                cam.yaw = start.yaw + (yaw - start.yaw) * e;
-                cam.pitch = start.pitch + (pitch - start.pitch) * e;
+                app.s.space.cam = Camera {
+                    yaw: mix(start.yaw, target.yaw),
+                    pitch: mix(start.pitch, target.pitch),
+                    dist: start.dist,
+                    zoom: mix(start.zoom, target.zoom),
+                    cx: mix(start.cx, target.cx),
+                    cy: mix(start.cy, target.cy),
+                };
                 draw(app);
             });
             if k < 1.0 {
-                step(start, yaw, pitch, t0);
+                step(start, target, t0);
             }
         });
     }
-    step(start, yaw, pitch, t0);
+    step(start, target, t0);
+}
+
+/// A camera looking at the whole model (`yaw`, `pitch`) or, with focus, at
+/// one plane from above, zoomed to fit it.
+fn camera_for(sp: &Space, yaw: f64, pitch: f64) -> Camera {
+    let width = dom::by_id("space").map_or(1000.0, |c| c.get_bounding_client_rect().width());
+    let focused = sp
+        .focus
+        .as_ref()
+        .and_then(|f| sp.model.planes.iter().find(|p| &p.module == f));
+    match focused {
+        Some(p) => Camera {
+            yaw: 0.0,
+            pitch: 1.5,
+            dist: sp.cam.dist,
+            zoom: (width * 0.8 / (p.w + 300.0)).clamp(0.3, 2.5),
+            cx: p.x,
+            cy: p.y,
+        },
+        None => Camera {
+            yaw,
+            pitch,
+            dist: sp.cam.dist,
+            zoom: sp.fit_zoom,
+            cx: 0.0,
+            cy: 0.0,
+        },
+    }
 }
 
 pub fn on_click(app: &mut App, el: &Element) -> bool {
     let Some(b) = dom::closest(el, "[data-preset]") else {
         return false;
     };
-    let _ = app;
-    match dom::data(&b, "preset").as_deref() {
-        Some("side") => animate_to(-0.25, 0.08),
-        Some("tilt") => animate_to(-0.6, 0.55),
-        Some("top") => animate_to(0.0, 1.5),
+    let sp = &mut app.s.space;
+    let (yaw, pitch) = match dom::data(&b, "preset").as_deref() {
+        Some("side") => (-0.25, 0.08),
+        Some("tilt") => (-0.6, 0.55),
+        Some("top") => (0.0, 1.5),
         _ => return false,
+    };
+    // A preset looks at the whole model again.
+    sp.focus = None;
+    if let Some(select) =
+        dom::by_id("space-focus").and_then(|e| e.dyn_into::<web_sys::HtmlSelectElement>().ok())
+    {
+        select.set_value("");
     }
+    let target = camera_for(sp, yaw, pitch);
+    animate_to(sp.cam, target);
     true
 }
 
@@ -631,12 +689,10 @@ pub fn on_change(app: &mut App, el: &Element) -> bool {
                 .dyn_ref::<web_sys::HtmlSelectElement>()
                 .map(|s| s.value())
                 .unwrap_or_default();
-            app.s.space.focus = (!value.is_empty()).then_some(value);
-            if app.s.space.focus.is_some() {
-                animate_to(0.0, 1.5);
-            } else {
-                draw(app);
-            }
+            let sp = &mut app.s.space;
+            sp.focus = (!value.is_empty()).then_some(value);
+            let target = camera_for(sp, -0.45, 0.42);
+            animate_to(sp.cam, target);
         }
         "space-uses" | "space-unchanged" => {
             let on = el

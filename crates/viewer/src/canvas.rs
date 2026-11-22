@@ -1,7 +1,7 @@
 //! The canvas: item cards arranged freely, with connectors, tabs and a
 //! module scope that follows Rust's privacy rules.
 
-use crate::code::{code_html, docs_html, esc};
+use crate::code::{Links, code_html, docs_html, esc};
 use crate::data::{Data, changed, kind_order, within};
 use crate::{App, View, dom, toast};
 use model::{Item, Kind, Status, UseCtx};
@@ -167,9 +167,10 @@ pub fn open(app: &mut App, id: &str, from: Option<&str>, switch_view: bool) {
     let Some(it) = d.item(id) else { return };
     let c = &mut app.s.canvas;
     if !d.visible_from(id, &c.scope) {
+        let before = d.mod_label(&c.scope);
         c.scope = d.mod_of(it).to_string();
         toast(&format!(
-            "Drilled into {} — {} is private there",
+            "Now viewing from {}: {} is not visible from {before}",
             d.mod_label(&c.scope),
             d.display_name(it)
         ));
@@ -613,9 +614,6 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     } else {
         let added = it.source.iter().filter(|l| l.0 == '+').count();
         let removed = it.source.iter().filter(|l| l.0 == '-').count();
-        let mut refs = it.info.sig_refs.clone();
-        refs.extend(it.info.body_refs.clone());
-        let none = BTreeMap::new();
         // Line numbers in the file the item's (head) source comes from.
         let mut line = it.info.line;
         let lines: String = it
@@ -630,12 +628,14 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
                 // Removed lines are base code: what their names referred
                 // to is not known here, so they get no links.
                 let code = if l.0 == '-' || it.status == Status::Removed {
-                    code_html(d, &l.1, &none)
+                    code_html(d, &l.1, Links::None)
                 } else {
-                    let html =
-                        crate::code::code_html_at(d, &l.1, &refs, Some((line, &it.info.site_refs)));
+                    let links = Links::Source {
+                        line,
+                        refs: &it.info.source_refs,
+                    };
                     line += 1;
-                    html
+                    code_html(d, &l.1, links)
                 };
                 format!(
                     r#"<span class="ln {class}" data-t="{}">{}</span>"#,
@@ -675,7 +675,7 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         .map(|h| {
             format!(
                 r#"<div class="card-impl">{}</div>"#,
-                code_html(d, h, &BTreeMap::new())
+                code_html(d, h, Links::None)
             )
         })
         .unwrap_or_default();
@@ -709,9 +709,9 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
                 "method calls and calls inside macros need rust-analyzer"
             };
             format!(
-                r#"<div class="hidden-note">{n} call site{} not resolved ({why}); {} not shown as calls.</div>"#,
+                r#"<div class="hidden-note">{n} call site{} not resolved ({why}), so not shown as {}.</div>"#,
                 if n > 1 { "s" } else { "" },
-                if n > 1 { "they are" } else { "it is" }
+                if n > 1 { "calls" } else { "a call" }
             )
         } else {
             String::new()
