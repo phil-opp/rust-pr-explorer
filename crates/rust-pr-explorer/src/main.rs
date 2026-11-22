@@ -150,8 +150,8 @@ fn analyze_side(
         match semantic::refine(root, &dirs, trust, &mut analysis) {
             Ok(stats) => {
                 eprintln!(
-                    "{label}: {} functions, {} guessed calls checked, {} calls added",
-                    stats.functions, stats.resolved_guesses, stats.new_calls
+                    "{label}: {} functions, {} call sites resolved, {} unresolved",
+                    stats.functions, stats.resolved_sites, stats.unresolved_sites
                 );
                 let note = match trust {
                     source::Trust::Untrusted => "rust-analyzer",

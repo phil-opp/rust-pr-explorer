@@ -418,11 +418,7 @@ fn on_mouse_over(app: &mut App, el: &Element) {
                 "<div>{} · {}{}</div>",
                 it.info.kind.label(),
                 d.status_html(it),
-                if r.class_list().contains("inferred") {
-                    " · <i>guessed from the method name</i>"
-                } else {
-                    ""
-                }
+                ""
             ));
             if it.info.kind != model::Kind::Mod {
                 html.push_str(&format!(

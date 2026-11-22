@@ -66,8 +66,7 @@ const KEYWORDS: &[&str] = &[
 pub fn ref_html(d: &Data, text: &str, r: &Ref, extra: &str) -> String {
     if let Some(item) = r.id.as_deref().and_then(|id| d.item(id)) {
         format!(
-            r#"<a class="ref {} {extra}" data-id="{}" data-kind="{}" data-path="{}">{}</a>"#,
-            if r.inferred { "inferred" } else { "" },
+            r#"<a class="ref {extra}" data-id="{}" data-kind="{}" data-path="{}">{}</a>"#,
             esc(&item.info.id),
             item.info.kind.css(),
             esc(&r.path),
@@ -84,6 +83,17 @@ pub fn ref_html(d: &Data, text: &str, r: &Ref, extra: &str) -> String {
 
 /// Syntax-highlights Rust code and links every name found in `refs`.
 pub fn code_html(d: &Data, text: &str, refs: &BTreeMap<String, Ref>) -> String {
+    code_html_at(d, text, refs, None)
+}
+
+/// Like [`code_html`] for one source line: `sites` are method call targets
+/// by `line:column`, and `line` is this line's number in its file.
+pub fn code_html_at(
+    d: &Data,
+    text: &str,
+    refs: &BTreeMap<String, Ref>,
+    sites: Option<(usize, &BTreeMap<String, Ref>)>,
+) -> String {
     let chars: Vec<char> = text.chars().collect();
     let mut out = String::new();
     let mut i = 0;
@@ -151,7 +161,18 @@ pub fn code_html(d: &Data, text: &str, refs: &BTreeMap<String, Ref>) -> String {
                 end = ident_end(&chars, end + 2);
             }
             let path: String = chars[start..end].iter().collect();
-            out.push_str(&path_html(d, &path, refs));
+            match (path.strip_prefix('.'), sites) {
+                // A method call: linked only by its exact position.
+                (Some(name), Some((line, sites))) => {
+                    out.push('.');
+                    match sites.get(&format!("{line}:{}", start + 1)) {
+                        Some(r) => out.push_str(&ref_html(d, name, r, "")),
+                        None => out.push_str(&esc(name)),
+                    }
+                }
+                (Some(_), None) => out.push_str(&esc(&path)),
+                (None, _) => out.push_str(&path_html(d, &path, refs)),
+            }
             i = end;
         } else {
             out.push_str(&esc(&c.to_string()));
@@ -666,7 +687,6 @@ mod tests {
             Ref {
                 id: None,
                 path: "alloc::vec::Vec".into(),
-                inferred: false,
             },
         );
         let html = docs_html(
@@ -771,6 +791,31 @@ mod tests {
             "{html}"
         );
         assert!(html.contains("sig-gutter"), "{html}");
+    }
+
+    #[test]
+    fn method_links_by_position_only() {
+        let d = empty();
+        let mut sites = BTreeMap::new();
+        sites.insert(
+            "7:10".to_string(),
+            Ref {
+                id: None,
+                path: "c::A::get".into(),
+            },
+        );
+        // Line 7: `a.get()` (name at column 10) is linked; `b.get()` is not.
+        let html = code_html_at(
+            &d,
+            "    let a.get() + b.get();",
+            &BTreeMap::new(),
+            Some((7, &sites)),
+        );
+        assert_eq!(html.matches("c::A::get").count(), 1, "{html}");
+        assert!(
+            html.contains(r#".<span class="ref ext " data-path="c::A::get">get</span>"#),
+            "{html}"
+        );
     }
 
     #[test]

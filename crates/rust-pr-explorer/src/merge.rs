@@ -99,18 +99,18 @@ fn compare(b: ItemData, h: ItemData, moved_from: Option<String>) -> Item {
     };
     // Structured diffs of the full and the public (private fields hidden)
     // signatures.
-    let sig_changed = b.info.sig != h.info.sig;
-    let sig_diff = sig_changed
-        .then(|| crate::sigdiff::diff(h.info.kind, &b.info.sig, &h.info.sig))
+    // Computed whenever the signature's meaning changed, which includes
+    // names that now refer to other items with the same text.
+    let refs = (&b.info.sig_refs, &h.info.sig_refs);
+    let sig_diff = signature
+        .then(|| crate::sigdiff::diff(h.info.kind, &b.info.sig, &h.info.sig, refs))
         .flatten();
     let has_public = b.info.sig_public.is_some() || h.info.sig_public.is_some();
-    let sig_diff_public = (sig_changed && has_public)
+    let sig_diff_public = (signature && has_public)
         .then(|| {
             let old = b.info.sig_public.as_deref().unwrap_or(&b.info.sig);
             let new = h.info.sig_public.as_deref().unwrap_or(&h.info.sig);
-            (old != new)
-                .then(|| crate::sigdiff::diff(h.info.kind, old, new))
-                .flatten()
+            crate::sigdiff::diff(h.info.kind, old, new, refs)
         })
         .flatten();
     Item {
@@ -170,10 +170,26 @@ fn find_moves(
             added.entry(key(item)).or_default().push(id);
         }
     }
+    // Only identical code counts as moved: the body for items that have
+    // one (a function whose visibility changed while moving still counts),
+    // the whole definition otherwise.
+    let same_code = |old: &ItemData, new: &ItemData| {
+        let has_body = old.info.kind.is_callable()
+            || matches!(
+                old.info.kind,
+                Kind::Const | Kind::Static | Kind::AssocConst | Kind::Macro
+            );
+        if has_body {
+            old.body_norm == new.body_norm
+        } else {
+            old.sig_norm == new.sig_norm
+        }
+    };
     let mut moves = HashMap::new();
     for (k, new_ids) in added {
         if let [new_id] = new_ids.as_slice()
             && let Some([old_id]) = removed.get(&k).map(Vec::as_slice)
+            && same_code(&base[*old_id], &head[*new_id])
         {
             moves.insert((*new_id).clone(), (*old_id).clone());
         }

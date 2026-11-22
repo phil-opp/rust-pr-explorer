@@ -35,11 +35,18 @@ The CLI's build script runs a nested `cargo build` of the viewer for `wasm32-unk
 
 From that it renders rustdoc-style signatures with `prettyplease`, and records calls, uses and intra-doc links. Changes are detected on normalized text plus the fully qualified target of every name, so formatting and import style don't count.
 
-This layer needs nothing but the source text. It works on any checkout, broken or not, and takes milliseconds. Its gap is types: in `parser.parse()?.next()` it cannot know which `next` is meant. Method calls are therefore resolved only when the receiver is `self` or a typed parameter. Otherwise the target is guessed from a unique method name and marked as *inferred*.
+This layer needs nothing but the source text. It works on any checkout, broken or not, and takes milliseconds. Its gap is types: in `parser.parse()?.next()` it cannot know which `next` is meant, and it cannot know what a macro does with its arguments. It records those call sites, with their positions, and leaves them unresolved.
+
+Since this is a review tool, it never guesses. Name resolution follows Rust's rules where it can be sure, and stays silent otherwise:
+- **Name spaces.** `helper()` names the function, even if a module `helper` exists too.
+- **Shadowing.** Names bound by a pattern, generic parameters, and items or imports declared inside a body are never resolved to module-level items of the same name.
+- **Glob imports** bring in only what they make visible. A glob import from another crate (or an unresolvable path) could provide any name, so in that module prelude names are not claimed.
+- **External paths** are claimed only for declared dependencies and `std`/`core`/`alloc`, using the prelude of the crate's edition.
+- **Ambiguity.** A name that resolves to different items in two places of one item is not linked at all.
 
 ### 2. rust-analyzer as a library (on by default)
 
-The `semantic` feature links rust-analyzer's crates (`ra_ap_ide`, `ra_ap_load-cargo`, …). For every function found by the syntactic pass, the tool asks rust-analyzer for the function's *outgoing calls*. rust-analyzer resolves each call site with full type inference. Its answers replace the guessed calls of that function, matched by the position of each call site. Results are mapped back to item ids through the position of the target's name.
+The `semantic` feature links rust-analyzer's crates (`ra_ap_ide`, `ra_ap_load-cargo`, …). For every function found by the syntactic pass, the tool asks rust-analyzer for the function's *outgoing calls*, which it resolves with full type inference. Then every call site the syntactic pass recorded is checked against those answers by position. Sites the call hierarchy doesn't list, notably calls inside macro arguments, are checked with *go to definition* at the site. What still can't be resolved is counted per function and shown on its card. Results are mapped back to item ids through the position of the target's name. Method calls also keep their target by position, so the source view links each call site exactly.
 
 Configuration:
 
@@ -52,7 +59,7 @@ Configuration:
 | sysroot | discovered | type information for `core`/`alloc`/`std` (needs the `rust-src` component) |
 
 Measured on `rust-lang/log#613`:
-- With default features, 70 of 205 calls stayed guesses.
+- With default features, 70 of 205 calls could not be resolved.
 - With all features enabled, none did.
 - Both sides took about 13 seconds in total, including the clone.
 
@@ -64,7 +71,7 @@ Costs and risks:
 
 - **Build time.** The rust-analyzer crates add about 3 minutes to a clean release build. Building with `--no-default-features` removes them.
 - **Version churn.** The `ra_ap_*` crates are published weekly with breaking changes, so they are pinned to an exact version. They also broke with a newer semver-compatible `salsa` release; `salsa` is pinned as a direct dependency for that reason.
-- **Limits.** rust-analyzer reports no calls made inside `format_args!`-style macro arguments (`write!(f, "{}", x.foo())`). Those keep the syntactic guess, still marked as inferred.
+- **Limits.** rust-analyzer's call hierarchy doesn't list calls inside `format_args!`-style macro arguments (`write!(f, "{}", x.foo())`); *go to definition* resolves them. Code that is inactive with all features enabled (e.g. behind `cfg(not(feature = "x"))`) can't be typed, and its call sites stay unresolved.
 
 ## Safety
 

@@ -8,15 +8,27 @@
 //! comments such as `/* private fields */`) is taken from the new
 //! signature as is, using the byte ranges of the parsed nodes.
 
-use model::{DiffNote, DiffSpan, Kind, SigDiff};
+use model::{DiffNote, DiffSpan, Kind, Ref, SigDiff};
 use proc_macro2::Span;
+use std::collections::BTreeMap;
 use std::ops::Range;
 use syn::spanned::Spanned;
 
 /// Diffs two signatures of the same kind. `None` if they can't be parsed
 /// (then the viewer falls back to a token diff).
-pub fn diff(kind: Kind, old: &str, new: &str) -> Option<SigDiff> {
-    let mut cx = Cx::default();
+pub fn diff(
+    kind: Kind,
+    old: &str,
+    new: &str,
+    (old_refs, new_refs): (&BTreeMap<String, Ref>, &BTreeMap<String, Ref>),
+) -> Option<SigDiff> {
+    let mut cx = Cx {
+        next_g: 0,
+        notes: Vec::new(),
+        old_refs,
+        new_refs,
+        retargets: Vec::new(),
+    };
     let (po, pn) = (Parsed::new(kind, old)?, Parsed::new(kind, new)?);
     let (old_sections, new_sections) = (po.sections()?, pn.sections()?);
     if old_sections.len() != new_sections.len() {
@@ -381,10 +393,16 @@ fn line_section<'a>(
     }
 }
 
-#[derive(Default)]
-struct Cx {
+struct Cx<'r> {
     next_g: u32,
     notes: Vec<DiffNote>,
+    /// What the names in each signature refer to: equal text is only
+    /// unchanged if every name in it still refers to the same item.
+    old_refs: &'r BTreeMap<String, Ref>,
+    new_refs: &'r BTreeMap<String, Ref>,
+    /// Descriptions of names found to refer to other items, for the note of
+    /// the piece being diffed.
+    retargets: Vec<String>,
 }
 
 /// How a type changed, for notes.
@@ -395,7 +413,31 @@ enum TypeChange {
     Changed,
 }
 
-impl Cx {
+impl Cx<'_> {
+    /// Names in two equal texts that refer to different items.
+    fn retargeted(&self, old: &str, new: &str) -> Vec<String> {
+        let mut out = Vec::new();
+        for name in path_tokens(new) {
+            if !path_tokens(old).contains(&name) {
+                continue;
+            }
+            let o = self.old_refs.get(name).map(|r| r.path.as_str());
+            let n = self.new_refs.get(name).map(|r| r.path.as_str());
+            if o != n
+                && !out
+                    .iter()
+                    .any(|d: &String| d.starts_with(&format!("`{name}` ")))
+            {
+                let was = o.map_or("was not resolved".to_string(), |p| format!("was `{p}`"));
+                let now = n.map_or("is not resolved now".to_string(), |p| {
+                    format!("now refers to `{p}`")
+                });
+                out.push(format!("`{name}` {now} ({was})"));
+            }
+        }
+        out
+    }
+
     fn g(&mut self) -> u32 {
         self.next_g += 1;
         self.next_g
@@ -451,18 +493,53 @@ impl Cx {
                     matched_old_order.push(oi);
                     let op = &o.pieces[oi];
                     let otext = &old[op.range.clone()];
-                    if otext == ntext {
-                        continue;
-                    }
-                    let (spans, groups, change) = self.piece(old, new, op, np);
                     let what = if np.key == "head" || np.key == "return type" {
                         label.to_string()
                     } else {
                         format!("{label} `{}`", np.key)
                     };
+                    if otext == ntext {
+                        // Same text: changed only if a name now refers to
+                        // a different item.
+                        let changed = self.retargeted(otext, ntext);
+                        if changed.is_empty() {
+                            continue;
+                        }
+                        if op.ty.is_some() && np.ty.is_some() {
+                            // Mark just the name, inside the type.
+                            let (spans, groups, _) = self.piece(old, new, op, np);
+                            for r in std::mem::take(&mut self.retargets) {
+                                self.note(format!("{what}: {r}"), groups.clone());
+                            }
+                            edits.push(Edit {
+                                range: np.range.clone(),
+                                spans,
+                            });
+                            continue;
+                        }
+                        let g = self.g();
+                        edits.push(Edit {
+                            range: np.range.clone(),
+                            spans: vec![
+                                DiffSpan::Removed {
+                                    text: otext.to_string(),
+                                    g,
+                                },
+                                DiffSpan::Added {
+                                    text: ntext.to_string(),
+                                    g,
+                                },
+                            ],
+                        });
+                        for c in changed {
+                            self.note(format!("{what}: {c}"), vec![g]);
+                        }
+                        continue;
+                    }
+                    let (spans, groups, change) = self.piece(old, new, op, np);
                     let text = match change {
-                        TypeChange::Wrapped(w) => format!("{what} wrapped in `{w}`"),
-                        TypeChange::Unwrapped(w) => format!("{what} unwrapped from `{w}`"),
+                        TypeChange::Wrapped(w) => Some(format!("{what} wrapped in `{w}`")),
+                        TypeChange::Unwrapped(w) => Some(format!("{what} unwrapped from `{w}`")),
                         TypeChange::Changed | TypeChange::Same => {
                             let (a, b) = match (op.ty, np.ty) {
                                 (Some(ot), Some(nt))
@@ -472,10 +549,18 @@ impl Cx {
                                 }
                                 _ => (otext, ntext),
                             };
-                            format!("{what}: {} → {}", code(a, n.strip), code(b, n.strip))
+                            // Equal text: described by the retarget notes.
+                            (a != b).then(|| {
+                                format!("{what}: {} → {}", code(a, n.strip), code(b, n.strip))
+                            })
                         }
                     };
-                    self.note(text, groups);
+                    if let Some(text) = text {
+                        self.note(text, groups.clone());
+                    }
+                    for r in std::mem::take(&mut self.retargets) {
+                        self.note(format!("{what}: {r}"), groups.clone());
+                    }
                     edits.push(Edit {
                         range: np.range.clone(),
                         spans,
@@ -556,12 +641,42 @@ impl Cx {
     ) -> (Vec<DiffSpan>, TypeChange) {
         let (or, nr) = (range_of(ot.span()), range_of(nt.span()));
         let (otext, ntext) = (&old[or.clone()], &new[nr.clone()]);
-        if otext == ntext {
-            return (vec![same(ntext)], TypeChange::Same);
+        let equal = otext == ntext;
+        if equal {
+            let changed = self.retargeted(otext, ntext);
+            if changed.is_empty() {
+                return (vec![same(ntext)], TypeChange::Same);
+            }
+            // Look for the name inside the type arguments, unless the outer
+            // type's own name changed meaning.
+            let head_changed = match path_args(nt) {
+                Some((_, args)) if !args.is_empty() => {
+                    let head = &new[nr.start..range_of(args[0].span()).start];
+                    !self.retargeted(head, head).is_empty()
+                }
+                _ => true,
+            };
+            if head_changed {
+                self.retargets.extend(changed);
+                let g = self.g();
+                return (
+                    vec![
+                        DiffSpan::Removed {
+                            text: otext.to_string(),
+                            g,
+                        },
+                        DiffSpan::Added {
+                            text: ntext.to_string(),
+                            g,
+                        },
+                    ],
+                    TypeChange::Changed,
+                );
+            }
         }
         // Wrapped: the old type (or one of the same shape) is an argument
         // of the new one.
-        if let Some(arg) = wrapped_in(old, ot, new, nt) {
+        if !equal && let Some(arg) = wrapped_in(old, ot, new, nt) {
             let ar = range_of(arg.span());
             let (inner, _) = self.ty(old, ot, new, arg);
             let wrapper = format!("{}_{}", &new[nr.start..ar.start], &new[ar.end..nr.end]);
@@ -577,7 +692,7 @@ impl Cx {
                 TypeChange::Wrapped(wrapper),
             );
         }
-        if let Some(arg) = wrapped_in(new, nt, old, ot) {
+        if !equal && let Some(arg) = wrapped_in(new, nt, old, ot) {
             let ar = range_of(arg.span());
             let (inner, _) = self.ty(old, arg, new, nt);
             let wrapper = format!("{}_{}", &old[or.start..ar.start], &old[ar.end..or.end]);
@@ -737,6 +852,35 @@ fn wrapped_in<'o>(
         .find(|a| path_args(a).is_some_and(|(h, _)| h == inner_head))
 }
 
+/// Paths in some code (`Foo`, `io::Error`), as the keys of a ref map.
+fn path_tokens(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let c = s[i..].chars().next().unwrap();
+        if c.is_alphabetic() || c == '_' {
+            let start = i;
+            loop {
+                while i < s.len() && s[i..].starts_with(|c: char| c.is_alphanumeric() || c == '_') {
+                    i += s[i..].chars().next().unwrap().len_utf8();
+                }
+                if s[i..].starts_with("::")
+                    && s[i + 2..].starts_with(|c: char| c.is_alphabetic() || c == '_')
+                {
+                    i += 2;
+                } else {
+                    break;
+                }
+            }
+            out.push(&s[start..i]);
+        } else {
+            i += c.len_utf8();
+        }
+    }
+    out
+}
+
 fn tokenize(s: &str) -> Vec<&str> {
     let mut out = Vec::new();
     let mut start = 0;
@@ -834,8 +978,46 @@ mod tests {
             .collect()
     }
 
+    fn diff(kind: Kind, old: &str, new: &str) -> Option<SigDiff> {
+        super::diff(kind, old, new, (&BTreeMap::new(), &BTreeMap::new()))
+    }
+
     fn notes(d: &SigDiff) -> Vec<&str> {
         d.notes.iter().map(|n| n.text.as_str()).collect()
+    }
+
+    #[test]
+    fn same_text_with_a_different_meaning_is_a_change() {
+        let r = |p: &str| Ref {
+            id: Some(p.into()),
+            path: p.into(),
+        };
+        let old_refs = BTreeMap::from([
+            ("Error".to_string(), r("c::a::Error")),
+            ("Expr".to_string(), r("c::Expr")),
+        ]);
+        let new_refs = BTreeMap::from([
+            ("Error".to_string(), r("c::b::Error")),
+            ("Expr".to_string(), r("c::Expr")),
+        ]);
+        let d = super::diff(
+            Kind::Fn,
+            "fn f(e: &Expr) -> Result<u8, Error>",
+            "fn f(e: &Expr, x: u8) -> Result<u8, Error>",
+            (&old_refs, &new_refs),
+        )
+        .unwrap();
+        assert_eq!(
+            show(&d.spans),
+            "fn f(e: &Expr, [+x: u8+]) -> Result<u8, [-Error-][+Error+]>"
+        );
+        assert_eq!(
+            notes(&d),
+            [
+                "parameter `x: u8` added",
+                "return type: `Error` now refers to `c::b::Error` (was `c::a::Error`)"
+            ]
+        );
     }
 
     #[test]

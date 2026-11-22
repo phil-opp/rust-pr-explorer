@@ -45,7 +45,6 @@ struct Edge {
     a: usize,
     b: usize,
     call: bool,
-    inferred: bool,
 }
 
 #[derive(Default)]
@@ -106,7 +105,7 @@ fn build(d: &Data, sp: &Space) -> Model {
         for c in &it.info.calls {
             want(&c.to, true);
         }
-        for (f, _) in d.callers.get(&it.info.id).into_iter().flatten() {
+        for f in d.callers.get(&it.info.id).into_iter().flatten() {
             want(f, true);
         }
         if sp.show_uses {
@@ -228,23 +227,13 @@ fn build(d: &Data, sp: &Space) -> Model {
         let it = d.item(&node.id).unwrap();
         for c in &it.info.calls {
             if let Some(&b) = node_index.get(&c.to) {
-                model.edges.push(Edge {
-                    a,
-                    b,
-                    call: true,
-                    inferred: c.inferred,
-                });
+                model.edges.push(Edge { a, b, call: true });
             }
         }
         if sp.show_uses {
             for u in &it.info.uses {
                 if let Some(&b) = node_index.get(&u.to) {
-                    model.edges.push(Edge {
-                        a,
-                        b,
-                        call: false,
-                        inferred: false,
-                    });
+                    model.edges.push(Edge { a, b, call: false });
                 }
             }
         }
@@ -442,8 +431,6 @@ pub fn draw(app: &mut App) {
             &ctx,
             if !e.call {
                 &[2.0, 4.0]
-            } else if e.inferred {
-                &[6.0, 4.0]
             } else if cross {
                 &[1.0, 3.0]
             } else {

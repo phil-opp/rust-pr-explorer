@@ -1,9 +1,9 @@
 //! Precise call resolution with rust-analyzer, used as a library.
 //!
 //! The syntactic analysis in [`crate::analyze`] cannot know the type of a
-//! method call's receiver, so it guesses targets from method names. Here
-//! rust-analyzer's type inference answers "what does this function call?"
-//! for every function, and its answers replace the guesses.
+//! method call's receiver, nor what a macro does with its arguments, so it
+//! leaves those call sites unresolved. Here rust-analyzer's type inference
+//! answers "what does this function call?" for every function.
 //!
 //! By default no code from the analyzed project is executed: build scripts
 //! are not run and procedural macros are not expanded. Only `cargo metadata`
@@ -15,12 +15,16 @@ use crate::analyze::{Analysis, LineCol};
 use crate::source::Trust;
 use anyhow::{Context, Result};
 use model::{Call, Ref};
-use ra_ap_ide::{AnalysisHost, CallHierarchyConfig, FilePosition, TextSize};
+use ra_ap_ide::{
+    AnalysisHost, CallHierarchyConfig, FilePosition, GotoDefinitionConfig, NavigationTarget,
+    TextSize,
+};
 use ra_ap_ide_db::ra_fixture::RaFixtureConfig;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_paths::AbsPathBuf;
 use ra_ap_project_model::{CargoConfig, CargoFeatures, RustLibSource};
 use ra_ap_vfs::{Vfs, VfsPath};
+use std::collections::BTreeMap;
 use std::collections::{BTreeSet, HashMap};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
@@ -29,13 +33,26 @@ use std::path::{Path, PathBuf};
 pub struct Stats {
     /// Functions rust-analyzer answered for.
     pub functions: usize,
-    /// Guessed method calls that were confirmed, corrected or dropped.
-    pub resolved_guesses: usize,
-    /// Calls found only by rust-analyzer.
-    pub new_calls: usize,
+    /// Call sites whose target rust-analyzer determined.
+    pub resolved_sites: usize,
+    /// Call sites it could not resolve either.
+    pub unresolved_sites: usize,
 }
 
-/// Replaces guessed method-call targets with rust-analyzer's results.
+/// What a call site refers to.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Target {
+    /// A function or method of the analyzed crates.
+    Item(String),
+    /// Something else: a function of another crate, a constructor, a
+    /// closure, … Known, but not an edge of the call graph.
+    Other,
+}
+
+/// Replaces each function's calls with what rust-analyzer's type inference
+/// says. Every call site found by the syntactic pass is checked, including
+/// method calls and calls inside macro invocations; sites it can't resolve
+/// are counted as unresolved instead of guessed.
 ///
 /// `manifest_dirs` are the directories whose `Cargo.toml` should be
 /// loaded; each is loaded as a cargo workspace.
@@ -48,7 +65,7 @@ pub fn refine(
     let root = std::fs::canonicalize(root)?;
     let mut stats = Stats::default();
     let mut texts = Texts::default();
-    // Where each analyzed function's name is, to map results back to items.
+    // Where each analyzed item's name is, to map results back to items.
     let mut by_name_pos: HashMap<(String, LineCol), String> = HashMap::new();
     for (id, item) in &analysis.items {
         if let Some(pos) = item.name_pos {
@@ -61,8 +78,11 @@ pub fn refine(
         let (host, vfs) =
             load(&dir, trust).with_context(|| format!("loading {}", dir.display()))?;
         let ra = host.analysis();
-        let config = CallHierarchyConfig {
+        let call_config = CallHierarchyConfig {
             exclude_tests: true,
+            ra_fixture: RaFixtureConfig::default(),
+        };
+        let goto_config = GotoDefinitionConfig {
             ra_fixture: RaFixtureConfig::default(),
         };
         let ids: Vec<String> = analysis
@@ -80,119 +100,127 @@ pub fn refine(
             let Some(text) = texts.get(&root, &rel).map(str::to_string) else {
                 continue;
             };
-            let offset = to_offset(&text, item.name_pos.unwrap());
-            let position = FilePosition {
+            let position = |pos: LineCol| FilePosition {
                 file_id,
-                offset: TextSize::from(offset as u32),
+                offset: TextSize::from(to_offset(&text, pos) as u32),
             };
-            let result = catch_unwind(AssertUnwindSafe(|| ra.outgoing_calls(&config, position)));
+            let result = catch_unwind(AssertUnwindSafe(|| {
+                ra.outgoing_calls(&call_config, position(item.name_pos.unwrap()))
+            }));
             let Ok(Ok(Some(calls))) = result else {
                 continue;
             };
             done.insert(id.clone());
             stats.functions += 1;
 
-            // Call sites (by position) and the local item each one calls, if any.
-            let mut sites: HashMap<LineCol, (String, Option<String>)> = HashMap::new();
+            // Where each call goes, by the range of its call site.
+            let mut ranges: Vec<(LineCol, LineCol, Target)> = Vec::new();
+            let mut targets: BTreeSet<String> = BTreeSet::new();
             for call in calls {
-                let target = call.target;
-                let target_id = vfs
-                    .file_path(target.file_id)
-                    .as_path()
-                    .and_then(|p| Path::new(p.as_str()).strip_prefix(&root).ok())
-                    .map(|p| p.display().to_string())
-                    .and_then(|target_rel| {
-                        let start = target.focus_range.unwrap_or(target.full_range).start();
-                        let pos = to_linecol(texts.get(&root, &target_rel)?, start.into());
-                        by_name_pos.get(&(target_rel, pos)).cloned()
-                    });
+                let target = target_of(&vfs, &root, &mut texts, &by_name_pos, &call.target);
+                if let Target::Item(t) = &target {
+                    targets.insert(t.clone());
+                }
                 for range in call.ranges {
                     if range.file_id == file_id {
-                        let pos = to_linecol(&text, range.range.start().into());
-                        sites.insert(pos, (target.name.as_str().to_string(), target_id.clone()));
+                        let start = to_linecol(&text, range.range.start().into());
+                        let end = to_linecol(&text, range.range.end().into());
+                        ranges.push((start, end, target.clone()));
                     }
                 }
             }
-            apply(analysis, &id, &sites, &mut stats);
+            // Check every syntactic call site; ask "go to definition" for
+            // those the call hierarchy doesn't list (e.g. inside macros).
+            let sites = item.call_sites.clone();
+            let mut site_refs = BTreeMap::new();
+            let mut unresolved = 0;
+            for site in &sites {
+                let listed = ranges
+                    .iter()
+                    .find(|(start, end, _)| *start <= site.pos && site.pos < *end)
+                    .map(|(.., t)| t.clone());
+                let target = listed.or_else(|| {
+                    let result = catch_unwind(AssertUnwindSafe(|| {
+                        ra.goto_definition(position(site.pos), &goto_config)
+                    }));
+                    let Ok(Ok(Some(info))) = result else {
+                        return None;
+                    };
+                    let found: Vec<Target> = info
+                        .info
+                        .iter()
+                        .map(|nav| target_of(&vfs, &root, &mut texts, &by_name_pos, nav))
+                        .collect();
+                    // Several definitions (e.g. ambiguous macro code): unknown.
+                    (found.len() == 1).then(|| found[0].clone())
+                });
+                match target {
+                    Some(Target::Item(t)) => {
+                        stats.resolved_sites += 1;
+                        let callable = analysis
+                            .items
+                            .get(&t)
+                            .is_some_and(|i| i.info.kind.is_callable());
+                        if callable {
+                            if site.method {
+                                site_refs.insert(
+                                    format!("{}:{}", site.pos.line, site.pos.column),
+                                    Ref {
+                                        id: Some(t.clone()),
+                                        path: t.clone(),
+                                    },
+                                );
+                            }
+                            targets.insert(t);
+                        }
+                    }
+                    Some(Target::Other) => stats.resolved_sites += 1,
+                    None => {
+                        stats.unresolved_sites += 1;
+                        unresolved += 1;
+                    }
+                }
+            }
+            targets.remove(&id);
+            let item = analysis.items.get_mut(&id).unwrap();
+            item.info.calls = targets.into_iter().map(|to| Call { to }).collect();
+            item.info.unresolved_calls = unresolved;
+            item.info.site_refs = site_refs;
+            // A function called is no longer only "used".
+            let calls = item.info.calls.clone();
+            item.info
+                .uses
+                .retain(|u| !calls.iter().any(|c| c.to == u.to));
         }
     }
     Ok(stats)
 }
 
-/// Merges rust-analyzer's call sites into one item's calls and references.
-fn apply(
-    analysis: &mut Analysis,
-    id: &str,
-    sites: &HashMap<LineCol, (String, Option<String>)>,
-    stats: &mut Stats,
-) {
-    let item = analysis.items.get_mut(id).unwrap();
-    let mut calls: BTreeSet<Call> = item
-        .info
-        .calls
-        .iter()
-        .filter(|c| !c.inferred)
-        .cloned()
-        .collect();
-    for (_, target) in sites.values() {
-        if let Some(target) = target
-            && target != id
-            && calls.insert(Call {
-                to: target.clone(),
-                inferred: false,
-            })
-        {
-            stats.new_calls += 1;
-        }
+/// The analyzed item a navigation target points at, by its name position.
+fn target_of(
+    vfs: &Vfs,
+    root: &Path,
+    texts: &mut Texts,
+    by_name_pos: &HashMap<(String, LineCol), String>,
+    nav: &NavigationTarget,
+) -> Target {
+    let Some(rel) = vfs
+        .file_path(nav.file_id)
+        .as_path()
+        .and_then(|p| Path::new(p.as_str()).strip_prefix(root).ok())
+        .map(|p| p.display().to_string())
+    else {
+        return Target::Other;
+    };
+    let start = nav.focus_range.unwrap_or(nav.full_range).start();
+    let Some(text) = texts.get(root, &rel) else {
+        return Target::Other;
+    };
+    let pos = to_linecol(text, start.into());
+    match by_name_pos.get(&(rel, pos)) {
+        Some(id) => Target::Item(id.clone()),
+        None => Target::Other,
     }
-    // Keep a guess only where rust-analyzer said nothing about that call site.
-    for guess in &item.guessed_calls {
-        let key = format!(".{}", guess.method);
-        match sites.get(&guess.site) {
-            Some((_, resolved)) => {
-                stats.resolved_guesses += 1;
-                if item.info.body_refs.get(&key).is_some_and(|r| r.inferred) {
-                    match resolved {
-                        Some(target) => {
-                            item.info.body_refs.insert(
-                                key,
-                                Ref {
-                                    id: Some(target.clone()),
-                                    path: target.clone(),
-                                    inferred: false,
-                                },
-                            );
-                        }
-                        None => {
-                            item.info.body_refs.remove(&key);
-                        }
-                    }
-                }
-            }
-            None => {
-                if !calls.iter().any(|c| c.to == guess.target) {
-                    calls.insert(Call {
-                        to: guess.target.clone(),
-                        inferred: true,
-                    });
-                }
-            }
-        }
-    }
-    // Method names the syntactic pass could not guess at all.
-    for (name, target) in sites.values() {
-        if let Some(target) = target {
-            item.info
-                .body_refs
-                .entry(format!(".{name}"))
-                .or_insert_with(|| Ref {
-                    id: Some(target.clone()),
-                    path: target.clone(),
-                    inferred: false,
-                });
-        }
-    }
-    item.info.calls = calls;
 }
 
 fn load(dir: &Path, trust: Trust) -> Result<(AnalysisHost, Vfs)> {

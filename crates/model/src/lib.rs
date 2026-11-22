@@ -91,9 +91,6 @@ pub struct Ref {
     pub id: Option<String>,
     /// Fully qualified path.
     pub path: String,
-    /// Set when the target was guessed (method calls without type info).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub inferred: bool,
 }
 
 /// How an item uses another one.
@@ -120,9 +117,6 @@ impl UseCtx {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Call {
     pub to: String,
-    /// Guessed from the method name alone.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub inferred: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -166,6 +160,18 @@ pub struct ItemInfo {
     pub line: usize,
     pub calls: BTreeSet<Call>,
     pub uses: BTreeSet<Use>,
+    /// Call sites in the body whose target could not be determined (e.g.
+    /// method calls without rust-analyzer). They are not in `calls`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub unresolved_calls: u32,
+    /// Targets of method calls by position (`line:column` of the method
+    /// name, both as in the source file, column 0-based in chars).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub site_refs: BTreeMap<String, Ref>,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]

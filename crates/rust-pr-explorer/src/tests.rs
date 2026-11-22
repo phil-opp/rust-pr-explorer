@@ -88,6 +88,15 @@ fn moved_items_are_detected() {
 }
 
 #[test]
+fn different_code_with_the_same_name_is_not_a_move() {
+    let base = write_crate(&[("src/lib.rs", "mod a { pub fn f() -> u8 { 1 } }\nmod b {}\n")]);
+    let head = write_crate(&[("src/lib.rs", "mod a {}\nmod b { pub fn f() -> u8 { 2 } }\n")]);
+    let out = analyze_dirs(base.path(), head.path());
+    assert_eq!(out.items["t::a::f"].status, Status::Removed);
+    assert_eq!(out.items["t::b::f"].status, Status::Added);
+}
+
+#[test]
 fn calls_and_uses() {
     let out = demo();
     let calc = &out.items["tinycalc::calc"].info;
@@ -96,19 +105,61 @@ fn calls_and_uses() {
         callees,
         ["tinycalc::eval::evaluate", "tinycalc::parser::parse"]
     );
-    // `env.get(..)` resolves through the parameter type `&Env`.
+    assert_eq!(calc.unresolved_calls, 0);
+    // Without type information, method calls are not resolved (never
+    // guessed), but counted.
     let lookup = &out.items["tinycalc::eval::lookup"].info;
-    assert!(
-        lookup
-            .calls
-            .iter()
-            .any(|c| c.to == "tinycalc::env::Env::get" && !c.inferred)
-    );
-    // `self.tokens.get(..)` must not be mistaken for `Env::get`.
-    let peek = &out.items["tinycalc::parser::Parser::peek"].info;
-    assert!(peek.calls.is_empty());
+    assert!(lookup.calls.is_empty());
+    assert_eq!(lookup.unresolved_calls, 2); // env.get(..), name.to_string()
     let uses: Vec<_> = calc.uses.iter().map(|u| u.to.as_str()).collect();
     assert!(uses.contains(&"tinycalc::env::Env"));
+}
+
+#[test]
+fn shadowing_and_name_spaces() {
+    let dir = write_crate(&[(
+        "src/lib.rs",
+        "pub mod helper {}\n\
+         pub fn helper() {}\n\
+         pub struct T;\n\
+         pub fn x() {}\n\
+         pub fn f<T>(t: T) -> T { helper(); let x = 1; let _ = x; t }\n\
+         pub fn g() { fn x() {} x(); }\n",
+    )]);
+    let out = analyze_dirs(dir.path(), dir.path());
+    let f = &out.items["t::f"].info;
+    // `helper()` is the function, not the module of the same name.
+    assert!(f.calls.iter().any(|c| c.to == "t::helper"));
+    // `T` is the generic parameter, not the struct; `x` is the local.
+    assert!(!f.sig_refs.contains_key("T"));
+    assert!(!f.uses.iter().any(|u| u.to == "t::T"));
+    assert!(!f.body_refs.contains_key("x"));
+    // `x()` calls the function declared inside `g`, not `t::x`.
+    let g = &out.items["t::g"].info;
+    assert!(g.calls.is_empty());
+}
+
+#[test]
+fn unknown_globs_hide_the_prelude() {
+    let dir = write_crate(&[(
+        "src/lib.rs",
+        "use somewhere::*;\npub fn f() -> Result<u8, u8> { Ok(1) }\npub fn g() -> Vec<u8> { Vec::new() }\n",
+    )]);
+    let out = analyze_dirs(dir.path(), dir.path());
+    // `somewhere::*` might bring its own `Result`, so no claim is made.
+    let f = &out.items["t::f"].info;
+    assert!(!f.sig_refs.contains_key("Result"));
+}
+
+#[test]
+fn glob_reexports_are_public() {
+    let dir = write_crate(&[
+        ("src/lib.rs", "mod inner;\npub use inner::*;\n"),
+        ("src/inner.rs", "pub struct Thing;\nstruct Hidden;\n"),
+    ]);
+    let out = analyze_dirs(dir.path(), dir.path());
+    assert!(out.items["t::inner::Thing"].info.public);
+    assert!(!out.items["t::inner::Hidden"].info.public);
 }
 
 #[test]
@@ -220,21 +271,24 @@ fn semantic_calls() {
             .unwrap();
     let root = &checkout.head_dir;
     let mut analysis = Analyzer::run(root, &crate::source::find_crates(root));
-    let calls = |a: &crate::analyze::Analysis, id: &str| -> Vec<(String, bool)> {
+    let calls = |a: &crate::analyze::Analysis, id: &str| -> Vec<String> {
         a.items[id]
             .info
             .calls
             .iter()
-            .map(|c| (c.to.clone(), c.inferred))
+            .map(|c| c.to.clone())
             .collect()
     };
-    // `Parser::new(input)?.parse_expr()`: the receiver is an expression.
+    // `Parser::new(input)?.parse_expr()`: the method call needs types.
     assert_eq!(
         calls(&analysis, "tinycalc::parser::parse"),
-        [
-            ("tinycalc::parser::Parser::new".to_string(), false),
-            ("tinycalc::parser::Parser::parse_expr".to_string(), true),
-        ]
+        ["tinycalc::parser::Parser::new"]
+    );
+    assert_eq!(
+        analysis.items["tinycalc::parser::parse"]
+            .info
+            .unresolved_calls,
+        1
     );
     let stats = crate::semantic::refine(
         root,
@@ -244,20 +298,34 @@ fn semantic_calls() {
     )
     .unwrap();
     assert!(stats.functions > 10, "{stats:?}");
+    assert_eq!(stats.unresolved_sites, 0, "{stats:?}");
     assert_eq!(
         calls(&analysis, "tinycalc::parser::parse"),
         [
-            ("tinycalc::parser::Parser::new".to_string(), false),
-            ("tinycalc::parser::Parser::parse_expr".to_string(), false),
+            "tinycalc::parser::Parser::new",
+            "tinycalc::parser::Parser::parse_expr"
         ]
     );
     // `op.precedence()` on a local whose type comes from a pattern.
     assert!(
         calls(&analysis, "tinycalc::parser::Parser::parse_binary")
-            .contains(&("tinycalc::ast::Op::precedence".to_string(), false))
+            .contains(&"tinycalc::ast::Op::precedence".to_string())
     );
+    // `op.symbol()` inside `write!(…)`: checked with "go to definition".
+    assert!(
+        calls(&analysis, "tinycalc::ast::Expr::<impl Display>::fmt")
+            .contains(&"tinycalc::ast::Op::symbol".to_string())
+    );
+    // Method calls are linked by position in the source.
     let parse = &analysis.items["tinycalc::parser::parse"].info;
-    assert!(!parse.body_refs[".parse_expr"].inferred);
+    assert_eq!(
+        parse
+            .site_refs
+            .values()
+            .next()
+            .and_then(|r| r.id.as_deref()),
+        Some("tinycalc::parser::Parser::parse_expr")
+    );
 }
 
 #[test]

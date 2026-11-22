@@ -7,7 +7,7 @@ use std::collections::HashMap;
 pub struct Data {
     pub out: Output,
     /// Callers of each item: (caller id, guessed?).
-    pub callers: HashMap<String, Vec<(String, bool)>>,
+    pub callers: HashMap<String, Vec<String>>,
     /// Users of each item: (user id, context).
     pub used_by: HashMap<String, Vec<(String, UseCtx)>>,
     /// Items listed directly in each module (no associated items).
@@ -23,16 +23,13 @@ pub fn within(m: &str, s: &str) -> bool {
 
 impl Data {
     pub fn new(out: Output) -> Data {
-        let mut callers: HashMap<String, Vec<(String, bool)>> = HashMap::new();
+        let mut callers: HashMap<String, Vec<String>> = HashMap::new();
         let mut used_by: HashMap<String, Vec<(String, UseCtx)>> = HashMap::new();
         let mut mod_children: HashMap<String, Vec<String>> = HashMap::new();
         for item in out.items.values() {
             let i = &item.info;
             for c in &i.calls {
-                callers
-                    .entry(c.to.clone())
-                    .or_default()
-                    .push((i.id.clone(), c.inferred));
+                callers.entry(c.to.clone()).or_default().push(i.id.clone());
             }
             for u in &i.uses {
                 used_by
@@ -395,39 +392,61 @@ impl Data {
         use crate::code::{code_html, sig_diff_html};
         let new = self.sig_for(it, scope);
         let refs = &it.info.sig_refs;
+        let plain = |note: &str| {
+            let note = if note.is_empty() {
+                String::new()
+            } else {
+                format!(r#"<div class="sig-note">{note}</div>"#)
+            };
+            format!(
+                r#"<pre class="sig">{}</pre>{note}"#,
+                code_html(self, new, refs)
+            )
+        };
         if !it.changes.signature {
-            return format!(r#"<pre class="sig">{}</pre>"#, code_html(self, new, refs));
+            return plain("");
         }
-        let Some(old_full) = &it.old_sig else {
-            return format!(
-                r#"<pre class="sig">{}</pre><div class="sig-note">Same text, but names in the signature now refer to different items.</div>"#,
-                code_html(self, new, refs)
-            );
-        };
         let public_view = !within(scope, self.mod_of(it));
-        let old = if public_view {
-            it.old_sig_public.as_deref().unwrap_or(old_full)
-        } else {
-            old_full
-        };
-        if old == new {
-            return format!(
-                r#"<pre class="sig">{}</pre><div class="sig-note">Only private parts of the definition changed.</div>"#,
-                code_html(self, new, refs)
-            );
-        }
-        let structured = if public_view && it.info.sig_public.is_some() {
-            it.sig_diff_public.as_ref().or(it.sig_diff.as_ref())
+        let has_public = it.info.sig_public.is_some() || it.old_sig_public.is_some();
+        let structured = if public_view && has_public {
+            it.sig_diff_public.as_ref()
         } else {
             it.sig_diff.as_ref()
         };
         match structured {
-            Some(diff) => crate::code::structured_diff_html(self, diff, refs),
+            Some(diff)
+                if diff
+                    .spans
+                    .iter()
+                    .any(|s| !matches!(s, model::DiffSpan::Same { .. })) =>
+            {
+                crate::code::structured_diff_html(self, diff, refs)
+            }
+            Some(_) if public_view && has_public => {
+                plain("Only private parts of the definition changed.")
+            }
+            Some(_) => plain("The signature changed in a way the diff can't show."),
             // The analysis could not parse the signatures: token diff.
-            None => format!(
-                r#"<div class="sig-block"><pre class="sig sig-diff">{}</pre></div>"#,
-                sig_diff_html(self, old, new, refs)
-            ),
+            None => match &it.old_sig {
+                Some(old_full) => {
+                    let old = if public_view {
+                        it.old_sig_public.as_deref().unwrap_or(old_full)
+                    } else {
+                        old_full
+                    };
+                    if old == new {
+                        plain("Only private parts of the definition changed.")
+                    } else {
+                        format!(
+                            r#"<div class="sig-block"><pre class="sig sig-diff">{}</pre></div>"#,
+                            sig_diff_html(self, old, new, refs)
+                        )
+                    }
+                }
+                None => {
+                    plain("Same text, but names in the signature now refer to different items.")
+                }
+            },
         }
     }
 }

@@ -285,10 +285,7 @@ pub fn expand(app: &mut App, id: &str, kind: Related) {
     let Some(it) = d.item(id) else { return };
     let mut targets: Vec<String> = match kind {
         Related::Callees => it.info.calls.iter().map(|c| c.to.clone()).collect(),
-        Related::Callers => d
-            .callers
-            .get(id)
-            .map_or(Vec::new(), |v| v.iter().map(|(f, _)| f.clone()).collect()),
+        Related::Callers => d.callers.get(id).map_or(Vec::new(), |v| v.to_vec()),
         Related::UsedBy => d
             .used_by
             .get(id)
@@ -476,10 +473,7 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     };
     let mut callees: Vec<String> = it.info.calls.iter().map(|c| c.to.clone()).collect();
     callees.dedup();
-    let mut callers: Vec<String> = d
-        .callers
-        .get(id)
-        .map_or(Vec::new(), |v| v.iter().map(|(f, _)| f.clone()).collect());
+    let mut callers: Vec<String> = d.callers.get(id).map_or(Vec::new(), |v| v.to_vec());
     callers.sort();
     callers.dedup();
     let used_by = d.used_by.get(id).cloned().unwrap_or_default();
@@ -621,6 +615,9 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         let removed = it.source.iter().filter(|l| l.0 == '-').count();
         let mut refs = it.info.sig_refs.clone();
         refs.extend(it.info.body_refs.clone());
+        let none = BTreeMap::new();
+        // Line numbers in the file the item's (head) source comes from.
+        let mut line = it.info.line;
         let lines: String = it
             .source
             .iter()
@@ -630,7 +627,16 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
                     '-' => "del",
                     _ => "",
                 };
-                let code = code_html(d, &l.1, &refs);
+                // Removed lines are base code: what their names referred
+                // to is not known here, so they get no links.
+                let code = if l.0 == '-' || it.status == Status::Removed {
+                    code_html(d, &l.1, &none)
+                } else {
+                    let html =
+                        crate::code::code_html_at(d, &l.1, &refs, Some((line, &it.info.site_refs)));
+                    line += 1;
+                    html
+                };
                 format!(
                     r#"<span class="ln {class}" data-t="{}">{}</span>"#,
                     if l.0 == ' ' {
@@ -695,7 +701,21 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         d.status_html(it),
         esc(id),
         esc(&d.mod_label(d.mod_of(it))),
-        hidden_note(d, scope, &callees, "callees are"),
+        if it.info.unresolved_calls > 0 {
+            let n = it.info.unresolved_calls;
+            let why = if d.out.meta.resolution.starts_with("rust-analyzer") {
+                "rust-analyzer could not determine their targets"
+            } else {
+                "method calls and calls inside macros need rust-analyzer"
+            };
+            format!(
+                r#"<div class="hidden-note">{n} call site{} not resolved ({why}); {} not shown as calls.</div>"#,
+                if n > 1 { "s" } else { "" },
+                if n > 1 { "they are" } else { "it is" }
+            )
+        } else {
+            String::new()
+        } + &hidden_note(d, scope, &callees, "callees are"),
         hidden_note(d, scope, &callers, "callers are"),
     )
 }
@@ -899,11 +919,8 @@ pub fn draw_edges(app: &App) {
         };
         for gb in &vis {
             if let Some(call) = a.info.calls.iter().find(|c| c.to == gb.active) {
-                let class = if call.inferred {
-                    "call inferred"
-                } else {
-                    "call"
-                };
+                let _ = call;
+                let class = "call";
                 add(
                     ga,
                     gb,
@@ -1238,13 +1255,12 @@ pub fn show_module_graph(app: &mut App, m: &str) {
     }
     let mut ids: Vec<String> = own.iter().map(|it| it.info.id.clone()).collect();
     for it in &own {
-        let neighbours = it.info.calls.iter().map(|c| c.to.clone()).chain(
-            d.callers
-                .get(&it.info.id)
-                .into_iter()
-                .flatten()
-                .map(|(f, _)| f.clone()),
-        );
+        let neighbours = it
+            .info
+            .calls
+            .iter()
+            .map(|c| c.to.clone())
+            .chain(d.callers.get(&it.info.id).into_iter().flatten().cloned());
         for n in neighbours {
             if let Some(ni) = d.item(&n)
                 && d.mod_of(ni) == m

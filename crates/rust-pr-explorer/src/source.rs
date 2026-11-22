@@ -26,6 +26,11 @@ pub struct CrateSrc {
     /// Directory containing the crate's `Cargo.toml`.
     #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
     pub manifest_dir: PathBuf,
+    /// Names under which dependencies can be used in paths (`-` replaced
+    /// by `_`, renames applied).
+    pub deps: Vec<String>,
+    /// Rust edition, which decides the prelude; `None` if unknown.
+    pub edition: Option<u16>,
 }
 
 /// Two checked out source trees plus a description of where they came from.
@@ -303,6 +308,25 @@ fn sanitize(dir: &Path, trust: Trust) -> Result<()> {
     Ok(())
 }
 
+/// The `[workspace.package] edition` of the nearest workspace manifest
+/// above (or at) `dir`.
+fn workspace_edition(manifests: &[(PathBuf, toml::Table)], dir: &Path) -> Option<u16> {
+    manifests
+        .iter()
+        .filter(|(path, t)| {
+            t.contains_key("workspace") && path.parent().is_some_and(|p| dir.starts_with(p))
+        })
+        .max_by_key(|(path, _)| path.components().count())
+        .and_then(|(_, t)| {
+            t.get("workspace")?
+                .get("package")?
+                .get("edition")?
+                .as_str()?
+                .parse()
+                .ok()
+        })
+}
+
 /// Copies a source tree, skipping build output and version control data.
 fn copy_tree(from: &Path, to: &Path) -> Result<()> {
     std::fs::create_dir_all(to)?;
@@ -330,6 +354,16 @@ pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
     walk_manifests(root, &mut manifests, 0);
     // Outermost manifests first: the root crate is the main subject.
     manifests.sort_by_key(|m| (m.components().count(), m.clone()));
+    let manifests_text: Vec<(PathBuf, toml::Table)> = manifests
+        .iter()
+        .filter_map(|m| {
+            let table = std::fs::read_to_string(m)
+                .ok()?
+                .parse::<toml::Table>()
+                .ok()?;
+            Some((m.clone(), table))
+        })
+        .collect();
     let mut crates = Vec::new();
     for manifest in manifests {
         let Ok(text) = std::fs::read_to_string(&manifest) else {
@@ -362,10 +396,35 @@ pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
         } else {
             continue;
         };
+        let mut deps = Vec::new();
+        for section in ["dependencies", "dev-dependencies", "build-dependencies"] {
+            if let Some(table) = value.get(section).and_then(|d| d.as_table()) {
+                deps.extend(table.keys().map(|k| k.replace('-', "_")));
+            }
+        }
+        if let Some(targets) = value.get("target").and_then(|t| t.as_table()) {
+            for target in targets.values().filter_map(|t| t.as_table()) {
+                for section in ["dependencies", "dev-dependencies"] {
+                    if let Some(table) = target.get(section).and_then(|d| d.as_table()) {
+                        deps.extend(table.keys().map(|k| k.replace('-', "_")));
+                    }
+                }
+            }
+        }
+        let edition = match package.get("edition") {
+            Some(toml::Value::String(e)) => e.parse().ok(),
+            // `edition.workspace = true`: inherited from the workspace.
+            Some(toml::Value::Table(_)) => workspace_edition(&manifests_text, dir),
+            // Cargo's default.
+            None => Some(2015),
+            Some(_) => None,
+        };
         crates.push(CrateSrc {
             name: lib_name.replace('-', "_"),
             root_file,
             manifest_dir: dir.to_path_buf(),
+            deps,
+            edition,
         });
     }
     crates

@@ -29,13 +29,30 @@ impl From<proc_macro2::LineColumn> for LineCol {
     }
 }
 
-/// A method call whose target was guessed from the method name.
+/// A place in a function body that looks like a call.
 #[derive(Clone, Debug)]
-#[cfg_attr(not(feature = "semantic"), allow(dead_code))]
-pub struct GuessedCall {
-    pub method: String,
-    pub target: String,
-    pub site: LineCol,
+pub struct CallSite {
+    /// Position of the called name (the method name, or the last segment
+    /// of a path).
+    #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
+    pub pos: LineCol,
+    pub method: bool,
+    /// Inside a macro invocation, where the syntax alone doesn't prove that
+    /// the code runs (or runs as a call).
+    pub in_macro: bool,
+    /// The path's target is known (maybe outside the analyzed crates).
+    pub known: bool,
+    /// For path calls outside macros: the function the path names, by
+    /// Rust's name resolution rules.
+    pub target: Option<String>,
+}
+
+/// A name space of Rust paths: a name can refer to a type and to a value
+/// at the same time (e.g. `mod foo` and `fn foo`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ns {
+    Type,
+    Value,
 }
 
 /// One item of one side (base or head) of the pull request.
@@ -52,7 +69,7 @@ pub struct ItemData {
     #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
     pub name_pos: Option<LineCol>,
     #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
-    pub guessed_calls: Vec<GuessedCall>,
+    pub call_sites: Vec<CallSite>,
 }
 
 pub struct Analysis {
@@ -105,6 +122,8 @@ struct Pending {
     /// Item id that `Self` refers to.
     self_ty: Option<String>,
     impl_ctx: Option<Rc<ImplCtx>>,
+    /// Generic parameters of the enclosing impl or trait.
+    outer_generics: Vec<String>,
 }
 
 struct ImplCtx {
@@ -149,124 +168,90 @@ pub struct Analyzer {
     impls: Vec<RawImpl>,
     /// Type or trait id → associated items as (name, id).
     assoc: HashMap<String, Vec<(String, String)>>,
-    /// Method name → method ids.
-    method_names: HashMap<String, Vec<String>>,
-    /// Associated item id → id of the trait it belongs to.
-    member_trait: HashMap<String, String>,
     enum_variants: HashMap<String, Vec<String>>,
+    /// Declared visibility scope of module-level definitions (`None` = pub),
+    /// to know what a glob import brings in.
+    def_vis: HashMap<String, Option<String>>,
+    /// Tuple and unit structs, which are also values (constructors).
+    value_structs: std::collections::HashSet<String>,
+    /// Per crate root: dependency names and edition.
+    crate_info: HashMap<String, (BTreeSet<String>, Option<u16>)>,
     children: HashMap<String, Vec<String>>,
     crate_roots: BTreeSet<String>,
     warnings: Vec<String>,
 }
 
-/// Method names too common in std to guess a crate-local target from.
-const COMMON_STD_METHODS: &[&str] = &[
-    "as_ref",
-    "as_mut",
-    "as_str",
-    "borrow",
-    "chars",
-    "clear",
-    "clone",
-    "cloned",
-    "collect",
-    "contains",
-    "contains_key",
-    "copied",
-    "count",
-    "default",
-    "drain",
-    "entry",
-    "eq",
-    "extend",
-    "filter",
-    "find",
-    "first",
-    "flat_map",
-    "fmt",
-    "fold",
-    "get",
-    "get_mut",
-    "hash",
-    "insert",
-    "into",
-    "into_iter",
-    "is_empty",
-    "is_none",
-    "is_some",
-    "iter",
-    "iter_mut",
-    "join",
-    "keys",
-    "last",
-    "len",
-    "lines",
-    "map",
-    "map_err",
-    "max",
-    "min",
-    "new",
-    "next",
-    "ok",
-    "ok_or",
-    "parse",
-    "peek",
-    "pop",
-    "push",
-    "push_str",
-    "remove",
-    "replace",
-    "rev",
-    "skip",
-    "sort",
-    "split",
-    "take",
-    "to_owned",
-    "to_string",
-    "trim",
-    "unwrap",
-    "unwrap_or",
-    "values",
-    "write",
-    "zip",
+/// Names of the standard prelude: name, path, name space, and the first
+/// edition that has them.
+const PRELUDE: &[(&str, &str, Ns, u16)] = &[
+    ("Option", "core::option::Option", Ns::Type, 2015),
+    ("Some", "core::option::Option::Some", Ns::Value, 2015),
+    ("None", "core::option::Option::None", Ns::Value, 2015),
+    ("Result", "core::result::Result", Ns::Type, 2015),
+    ("Ok", "core::result::Result::Ok", Ns::Value, 2015),
+    ("Err", "core::result::Result::Err", Ns::Value, 2015),
+    ("String", "alloc::string::String", Ns::Type, 2015),
+    ("ToString", "alloc::string::ToString", Ns::Type, 2015),
+    ("Vec", "alloc::vec::Vec", Ns::Type, 2015),
+    ("Box", "alloc::boxed::Box", Ns::Type, 2015),
+    ("Clone", "core::clone::Clone", Ns::Type, 2015),
+    ("Copy", "core::marker::Copy", Ns::Type, 2015),
+    ("Send", "core::marker::Send", Ns::Type, 2015),
+    ("Sync", "core::marker::Sync", Ns::Type, 2015),
+    ("Sized", "core::marker::Sized", Ns::Type, 2015),
+    ("Unpin", "core::marker::Unpin", Ns::Type, 2015),
+    ("Default", "core::default::Default", Ns::Type, 2015),
+    ("Drop", "core::ops::Drop", Ns::Type, 2015),
+    ("Fn", "core::ops::Fn", Ns::Type, 2015),
+    ("FnMut", "core::ops::FnMut", Ns::Type, 2015),
+    ("FnOnce", "core::ops::FnOnce", Ns::Type, 2015),
+    ("From", "core::convert::From", Ns::Type, 2015),
+    ("Into", "core::convert::Into", Ns::Type, 2015),
+    ("AsRef", "core::convert::AsRef", Ns::Type, 2015),
+    ("AsMut", "core::convert::AsMut", Ns::Type, 2015),
+    ("Iterator", "core::iter::Iterator", Ns::Type, 2015),
+    ("IntoIterator", "core::iter::IntoIterator", Ns::Type, 2015),
+    (
+        "DoubleEndedIterator",
+        "core::iter::DoubleEndedIterator",
+        Ns::Type,
+        2015,
+    ),
+    (
+        "ExactSizeIterator",
+        "core::iter::ExactSizeIterator",
+        Ns::Type,
+        2015,
+    ),
+    ("Extend", "core::iter::Extend", Ns::Type, 2015),
+    ("PartialEq", "core::cmp::PartialEq", Ns::Type, 2015),
+    ("Eq", "core::cmp::Eq", Ns::Type, 2015),
+    ("PartialOrd", "core::cmp::PartialOrd", Ns::Type, 2015),
+    ("Ord", "core::cmp::Ord", Ns::Type, 2015),
+    ("ToOwned", "alloc::borrow::ToOwned", Ns::Type, 2015),
+    ("TryFrom", "core::convert::TryFrom", Ns::Type, 2021),
+    ("TryInto", "core::convert::TryInto", Ns::Type, 2021),
+    ("FromIterator", "core::iter::FromIterator", Ns::Type, 2021),
 ];
 
-const PRELUDE: &[(&str, &str)] = &[
-    ("Option", "core::option::Option"),
-    ("Some", "core::option::Option::Some"),
-    ("None", "core::option::Option::None"),
-    ("Result", "core::result::Result"),
-    ("Ok", "core::result::Result::Ok"),
-    ("Err", "core::result::Result::Err"),
-    ("String", "alloc::string::String"),
-    ("ToString", "alloc::string::ToString"),
-    ("Vec", "alloc::vec::Vec"),
-    ("Box", "alloc::boxed::Box"),
-    ("Clone", "core::clone::Clone"),
-    ("Copy", "core::marker::Copy"),
-    ("Send", "core::marker::Send"),
-    ("Sync", "core::marker::Sync"),
-    ("Sized", "core::marker::Sized"),
-    ("Default", "core::default::Default"),
-    ("Drop", "core::ops::Drop"),
-    ("Fn", "core::ops::Fn"),
-    ("FnMut", "core::ops::FnMut"),
-    ("FnOnce", "core::ops::FnOnce"),
-    ("From", "core::convert::From"),
-    ("Into", "core::convert::Into"),
-    ("TryFrom", "core::convert::TryFrom"),
-    ("TryInto", "core::convert::TryInto"),
-    ("AsRef", "core::convert::AsRef"),
-    ("AsMut", "core::convert::AsMut"),
-    ("Iterator", "core::iter::Iterator"),
-    ("IntoIterator", "core::iter::IntoIterator"),
-    ("Extend", "core::iter::Extend"),
-    ("PartialEq", "core::cmp::PartialEq"),
-    ("Eq", "core::cmp::Eq"),
-    ("PartialOrd", "core::cmp::PartialOrd"),
-    ("Ord", "core::cmp::Ord"),
-    ("ToOwned", "alloc::borrow::ToOwned"),
-];
+/// Crates every crate can name without declaring them.
+const BUILTIN_CRATES: &[&str] = &["std", "core", "alloc"];
+
+/// Whether an item of `kind` (with `value_struct` for tuple and unit
+/// structs) lives in name space `ns`. `None` accepts any.
+fn in_ns(kind: Kind, value_struct: bool, ns: Option<Ns>) -> bool {
+    match ns {
+        None => true,
+        Some(Ns::Type) => matches!(
+            kind,
+            Kind::Mod | Kind::Struct | Kind::Enum | Kind::Union | Kind::Trait | Kind::TypeAlias
+        ),
+        Some(Ns::Value) => {
+            matches!(kind, Kind::Fn | Kind::Const | Kind::Static)
+                || (kind == Kind::Struct && value_struct)
+        }
+    }
+}
 
 impl Analyzer {
     pub fn run(root: &Path, crates: &[CrateSrc]) -> Analysis {
@@ -277,9 +262,10 @@ impl Analyzer {
             pending: Vec::new(),
             impls: Vec::new(),
             assoc: HashMap::new(),
-            method_names: HashMap::new(),
-            member_trait: HashMap::new(),
             enum_variants: HashMap::new(),
+            def_vis: HashMap::new(),
+            value_structs: Default::default(),
+            crate_info: HashMap::new(),
             children: HashMap::new(),
             crate_roots: BTreeSet::new(),
             warnings: Vec::new(),
@@ -290,6 +276,10 @@ impl Analyzer {
                 continue;
             }
             crate_order.push(krate.name.clone());
+            an.crate_info.insert(
+                krate.name.clone(),
+                (krate.deps.iter().cloned().collect(), krate.edition),
+            );
             match an.load_file(&krate.root_file) {
                 Ok((file, src)) => {
                     let dir = krate.root_file.parent().unwrap().to_path_buf();
@@ -307,6 +297,7 @@ impl Analyzer {
                         parent: None,
                         self_ty: None,
                         impl_ctx: None,
+                        outer_generics: Vec::new(),
                     });
                     an.collect_items(&krate.name, &file.items, &src, &dir);
                 }
@@ -339,7 +330,9 @@ impl Analyzer {
         Ok((file, src))
     }
 
-    fn define(&mut self, module: &str, name: &str, id: &str, kind: Kind) {
+    fn define(&mut self, module: &str, name: &str, id: &str, kind: Kind, vis: &Visibility) {
+        let scope = self.declared_scope(module, vis);
+        self.def_vis.insert(id.to_string(), scope);
         self.modules
             .get_mut(module)
             .unwrap()
@@ -354,6 +347,31 @@ impl Analyzer {
             .push(id.to_string());
     }
 
+    /// The module a declared visibility makes an item visible in, without
+    /// name resolution (paths in `pub(in …)` are absolute or relative).
+    fn declared_scope(&self, module: &str, vis: &Visibility) -> Option<String> {
+        match vis {
+            Visibility::Public(_) => None,
+            Visibility::Inherited => Some(module.to_string()),
+            Visibility::Restricted(r) => {
+                let mut scope = module.to_string();
+                for seg in path_segments(&r.path) {
+                    scope = match seg.as_str() {
+                        "crate" => Self::crate_of(module).to_string(),
+                        "self" => scope,
+                        "super" => self
+                            .modules
+                            .get(&scope)
+                            .and_then(|m| m.parent.clone())
+                            .unwrap_or(scope),
+                        name => format!("{scope}::{name}"),
+                    };
+                }
+                Some(scope)
+            }
+        }
+    }
+
     /// Pass 1: module tree, definitions and imports.
     fn collect_items(&mut self, module: &str, items: &[Item], src: &Rc<SrcFile>, dir: &Path) {
         for item in items {
@@ -362,7 +380,18 @@ impl Analyzer {
             }
             let push = |an: &mut Analyzer, name: String, kind: Kind| {
                 let id = format!("{module}::{name}");
-                an.define(module, &name, &id, kind);
+                let vis = match item {
+                    Item::Fn(i) => i.vis.clone(),
+                    Item::Struct(i) => i.vis.clone(),
+                    Item::Union(i) => i.vis.clone(),
+                    Item::Enum(i) => i.vis.clone(),
+                    Item::Const(i) => i.vis.clone(),
+                    Item::Static(i) => i.vis.clone(),
+                    Item::Type(i) => i.vis.clone(),
+                    Item::Trait(i) => i.vis.clone(),
+                    _ => Visibility::Inherited,
+                };
+                an.define(module, &name, &id, kind, &vis);
                 an.pending.push(Pending {
                     id,
                     name,
@@ -372,11 +401,17 @@ impl Analyzer {
                     parent: None,
                     self_ty: None,
                     impl_ctx: None,
+                    outer_generics: Vec::new(),
                 });
             };
             match item {
                 Item::Fn(f) => push(self, f.sig.ident.to_string(), Kind::Fn),
-                Item::Struct(s) => push(self, s.ident.to_string(), Kind::Struct),
+                Item::Struct(s) => {
+                    if !matches!(s.fields, syn::Fields::Named(_)) {
+                        self.value_structs.insert(format!("{module}::{}", s.ident));
+                    }
+                    push(self, s.ident.to_string(), Kind::Struct)
+                }
                 Item::Union(u) => push(self, u.ident.to_string(), Kind::Union),
                 Item::Enum(e) => {
                     let id = format!("{module}::{}", e.ident);
@@ -415,7 +450,7 @@ impl Analyzer {
                             _ => continue,
                         };
                         let id = format!("{trait_id}::{name}");
-                        self.register_assoc(&trait_id, &name, &id, kind, Some(&trait_id));
+                        self.register_assoc(&trait_id, &name, &id, kind);
                         self.pending.push(Pending {
                             id,
                             name,
@@ -425,6 +460,7 @@ impl Analyzer {
                             parent: Some(trait_id.clone()),
                             self_ty: Some(trait_id.clone()),
                             impl_ctx: None,
+                            outer_generics: generic_names(&t.generics),
                         });
                     }
                 }
@@ -509,7 +545,7 @@ impl Analyzer {
                             }
                         }
                     };
-                    self.define(module, &name, &id, Kind::Mod);
+                    self.define(module, &name, &id, Kind::Mod, &m.vis);
                     self.modules.insert(
                         id.clone(),
                         ModData {
@@ -531,6 +567,7 @@ impl Analyzer {
                         parent: None,
                         self_ty: None,
                         impl_ctx: None,
+                        outer_generics: Vec::new(),
                     });
                     self.collect_items(&id, &child_items, &child_src, &child_dir);
                 }
@@ -539,28 +576,12 @@ impl Analyzer {
         }
     }
 
-    fn register_assoc(
-        &mut self,
-        owner: &str,
-        name: &str,
-        id: &str,
-        kind: Kind,
-        trait_id: Option<&str>,
-    ) {
+    fn register_assoc(&mut self, owner: &str, name: &str, id: &str, kind: Kind) {
         self.assoc
             .entry(owner.to_string())
             .or_default()
             .push((name.to_string(), id.to_string()));
         self.kinds.insert(id.to_string(), kind);
-        if kind.is_callable() {
-            self.method_names
-                .entry(name.to_string())
-                .or_default()
-                .push(id.to_string());
-        }
-        if let Some(t) = trait_id {
-            self.member_trait.insert(id.to_string(), t.to_string());
-        }
         self.children
             .entry(owner.to_string())
             .or_default()
@@ -577,18 +598,19 @@ impl Analyzer {
             }
             let self_id = match &*item.self_ty {
                 syn::Type::Path(tp) if tp.qself.is_none() => self
-                    .resolve(&raw.module, &path_segments(&tp.path), None)
+                    .resolve(&raw.module, &path_segments(&tp.path), None, Some(Ns::Type))
                     .and_then(|r| r.id)
                     .filter(|id| self.kinds.get(id).is_some_and(|k| k.is_type_like())),
                 _ => None,
             };
             let trait_res = item.trait_.as_ref().map(|(path, _)| {
                 let segs = path_segments(path);
-                self.resolve(&raw.module, &segs, None).unwrap_or(Res {
-                    id: None,
-                    path: segs.join("::"),
-                    display_start: segs.len() - 1,
-                })
+                self.resolve(&raw.module, &segs, None, Some(Ns::Type))
+                    .unwrap_or(Res {
+                        id: None,
+                        path: segs.join("::"),
+                        display_start: segs.len() - 1,
+                    })
             });
             // Header, displayed with normalized paths.
             let mut header_item = item.clone();
@@ -604,7 +626,7 @@ impl Analyzer {
                 unparse_type(&ty)
             };
 
-            let (owner, impl_id, trait_id) = match &trait_res {
+            let (owner, impl_id) = match &trait_res {
                 Some(tr) => {
                     let trait_display = {
                         let mut p = item.trait_.as_ref().unwrap().0.clone();
@@ -647,20 +669,20 @@ impl Analyzer {
                             trait_ref: Some(Ref {
                                 id: tr.id.clone(),
                                 path: tr.path.clone(),
-                                inferred: false,
                             }),
                             self_ty: self_id.clone(),
                             vis_parent: self_id.clone(),
                         })),
+                        outer_generics: generic_names(&item.generics),
                     });
-                    (impl_id.clone(), impl_id, tr.id.clone())
+                    (impl_id.clone(), impl_id)
                 }
                 None => {
                     let owner = match &self_id {
                         Some(id) => id.clone(),
                         None => format!("{}::<impl {self_display}>", raw.module),
                     };
-                    (owner.clone(), owner, None)
+                    (owner.clone(), owner)
                 }
             };
             let ctx = Rc::new(ImplCtx {
@@ -668,7 +690,6 @@ impl Analyzer {
                 trait_ref: trait_res.as_ref().map(|tr| Ref {
                     id: tr.id.clone(),
                     path: tr.path.clone(),
-                    inferred: false,
                 }),
                 self_ty: self_id.clone(),
                 vis_parent: self_id.clone(),
@@ -701,7 +722,7 @@ impl Analyzer {
                 if self.kinds.contains_key(&id) {
                     continue;
                 }
-                self.register_assoc(&owner, &name, &id, kind, trait_id.as_deref());
+                self.register_assoc(&owner, &name, &id, kind);
                 // Trait impl members are also reachable as `Type::name`.
                 if trait_res.is_some()
                     && let Some(sid) = &self_id
@@ -720,6 +741,7 @@ impl Analyzer {
                     parent: Some(owner.clone()),
                     self_ty: self_id.clone(),
                     impl_ctx: Some(ctx.clone()),
+                    outer_generics: generic_names(&item.generics),
                 });
             }
         }
@@ -729,9 +751,27 @@ impl Analyzer {
         id.split("::").next().unwrap()
     }
 
-    /// Resolves a path as written in `module`.
-    fn resolve(&self, module: &str, segs: &[String], self_ty: Option<&str>) -> Option<Res> {
-        self.resolve_depth(module, segs, self_ty, 0)
+    fn deps_of(&self, module: &str) -> Option<&BTreeSet<String>> {
+        self.crate_info.get(Self::crate_of(module)).map(|(d, _)| d)
+    }
+
+    /// A crate name usable in paths of `module`'s crate other than the
+    /// analyzed crates: a declared dependency or `std`/`core`/`alloc`.
+    fn is_extern_crate(&self, module: &str, name: &str) -> bool {
+        BUILTIN_CRATES.contains(&name) || self.deps_of(module).is_some_and(|d| d.contains(name))
+    }
+
+    /// Resolves a path as written in `module`. `ns` is the name space of the
+    /// last segment, if the context tells (a type or an expression).
+    /// Returns `None` whenever the target is not certain.
+    fn resolve(
+        &self,
+        module: &str,
+        segs: &[String],
+        self_ty: Option<&str>,
+        ns: Option<Ns>,
+    ) -> Option<Res> {
+        self.resolve_depth(module, segs, self_ty, ns, 0)
     }
 
     fn resolve_depth(
@@ -739,12 +779,14 @@ impl Analyzer {
         module: &str,
         segs: &[String],
         self_ty: Option<&str>,
+        ns: Option<Ns>,
         depth: usize,
     ) -> Option<Res> {
         if depth > 12 || segs.is_empty() {
             return None;
         }
         let first = segs[0].as_str();
+        let first_ns = if segs.len() == 1 { ns } else { Some(Ns::Type) };
         let mut idx = 1;
         let mut cur: Res = match first {
             "crate" => Res {
@@ -779,29 +821,37 @@ impl Analyzer {
                     display_start: 0,
                 }
             }
-            _ => match self.lookup_name(module, first, depth) {
+            _ => match self.lookup_name(module, first, first_ns, depth) {
                 Some(r) => r,
+                None if self.has_opaque_glob(module, depth + 1) => {
+                    // A glob import we can't see into might bring this name.
+                    return None;
+                }
+                None if first_ns != Some(Ns::Value) && self.crate_roots.contains(first) => Res {
+                    id: Some(first.to_string()),
+                    path: first.to_string(),
+                    display_start: 1,
+                },
+                None if segs.len() > 1 && self.is_extern_crate(module, first) => Res {
+                    id: None,
+                    path: first.to_string(),
+                    display_start: 0,
+                },
                 None => {
-                    if self.crate_roots.contains(first) {
-                        Res {
-                            id: Some(first.to_string()),
-                            path: first.to_string(),
-                            display_start: 1,
-                        }
-                    } else if let Some((_, p)) = PRELUDE.iter().find(|(n, _)| *n == first) {
-                        Res {
-                            id: None,
-                            path: p.to_string(),
-                            display_start: 0,
-                        }
-                    } else if segs.len() > 1 {
-                        Res {
-                            id: None,
-                            path: first.to_string(),
-                            display_start: 0,
-                        }
-                    } else {
-                        return None;
+                    let edition = self
+                        .crate_info
+                        .get(Self::crate_of(module))
+                        .and_then(|(_, e)| *e);
+                    let (_, path, _, _) = PRELUDE.iter().find(|(n, _, pns, since)| {
+                        *n == first
+                            && first_ns.is_none_or(|ns| ns == *pns)
+                            // Unknown edition: only names in every prelude.
+                            && edition.unwrap_or(2015) >= *since
+                    })?;
+                    Res {
+                        id: None,
+                        path: path.to_string(),
+                        display_start: 0,
                     }
                 }
             },
@@ -809,9 +859,11 @@ impl Analyzer {
         let mut reached_type = None;
         while idx < segs.len() {
             let seg = &segs[idx];
+            let last = idx == segs.len() - 1;
             match cur.id.as_deref() {
                 Some(id) if self.kinds.get(id) == Some(&Kind::Mod) => {
-                    let r = self.lookup_name(id, seg, depth + 1)?;
+                    let seg_ns = if last { ns } else { Some(Ns::Type) };
+                    let r = self.lookup_name(id, seg, seg_ns, depth + 1)?;
                     cur = Res {
                         display_start: idx,
                         ..r
@@ -837,7 +889,8 @@ impl Analyzer {
                         // Variants refer to their enum.
                         cur.path = format!("{id}::{seg}");
                     } else {
-                        // Unknown associated item (e.g. derived); keep the type.
+                        // An associated item we don't see (from a derive or a
+                        // trait impl elsewhere): it is still the type's.
                         cur.path = format!("{id}::{seg}");
                     }
                 }
@@ -864,20 +917,30 @@ impl Analyzer {
         Some(cur)
     }
 
-    fn lookup_name(&self, module: &str, name: &str, depth: usize) -> Option<Res> {
+    /// Looks a name up in a module: its definitions, then its imports, then
+    /// its glob imports (only what they make visible).
+    fn lookup_name(&self, module: &str, name: &str, ns: Option<Ns>, depth: usize) -> Option<Res> {
+        if depth > 12 {
+            return None;
+        }
         let m = self.modules.get(module)?;
-        if let Some(ids) = m.defs.get(name) {
-            let id = ids[0].clone();
+        if let Some(ids) = m.defs.get(name)
+            && let Some(id) = ids.iter().find(|id| {
+                self.kinds
+                    .get(*id)
+                    .is_some_and(|k| in_ns(*k, self.value_structs.contains(*id), ns))
+            })
+        {
             return Some(Res {
                 path: id.clone(),
-                id: Some(id),
+                id: Some(id.clone()),
                 display_start: 0,
             });
         }
         for u in &m.uses {
             if u.alias.as_deref() == Some(name) {
                 if u.path.len() == 1 && u.path[0] == name {
-                    // `use foo;` of an external crate (or an extern crate).
+                    // `use foo;` / `extern crate foo;`
                     if self.crate_roots.contains(name) {
                         return Some(Res {
                             id: Some(name.to_string()),
@@ -885,87 +948,85 @@ impl Analyzer {
                             display_start: 0,
                         });
                     }
-                    return Some(Res {
-                        id: None,
-                        path: name.to_string(),
-                        display_start: 0,
-                    });
+                    if self.is_extern_crate(module, name) {
+                        return Some(Res {
+                            id: None,
+                            path: name.to_string(),
+                            display_start: 0,
+                        });
+                    }
+                    return None;
                 }
-                if let Some(r) = self.resolve_depth(module, &u.path, None, depth + 1) {
+                if let Some(r) = self.resolve_depth(module, &u.path, None, ns, depth + 1) {
                     return Some(r);
                 }
             }
         }
         for u in &m.uses {
-            if u.alias.is_none()
-                && let Some(Res {
-                    id: Some(target), ..
-                }) = self.resolve_depth(module, &u.path, None, depth + 1)
-                && target != module
-                && let Some(r) = self.lookup_name(&target, name, depth + 1)
-            {
-                return Some(r);
+            if u.alias.is_some() {
+                continue;
+            }
+            let Some(Res {
+                id: Some(target), ..
+            }) = self.resolve_depth(module, &u.path, None, Some(Ns::Type), depth + 1)
+            else {
+                continue;
+            };
+            if target == module {
+                continue;
+            }
+            if self.kinds.get(&target) == Some(&Kind::Enum) {
+                if ns != Some(Ns::Type)
+                    && self
+                        .enum_variants
+                        .get(&target)
+                        .is_some_and(|v| v.iter().any(|v| v == name))
+                {
+                    return Some(Res {
+                        id: Some(target.clone()),
+                        path: format!("{target}::{name}"),
+                        display_start: 0,
+                    });
+                }
+                continue;
+            }
+            if let Some(r) = self.lookup_name(&target, name, ns, depth + 1) {
+                // A glob only imports what is visible to the importing module.
+                let visible = r.id.as_ref().is_none_or(|id| {
+                    self.def_vis.get(id).is_none_or(|scope| {
+                        scope
+                            .as_ref()
+                            .is_none_or(|s| crate::analyze::within(module, s))
+                    })
+                });
+                if visible {
+                    return Some(r);
+                }
             }
         }
         None
     }
 
-    /// Guesses the target of a method call without type information.
-    fn resolve_method(
-        &self,
-        name: &str,
-        receiver_ty: Option<&str>,
-        simple_receiver: bool,
-    ) -> Option<Ref> {
-        if let Some(t) = receiver_ty
-            && let Some((_, id)) = self.assoc.get(t).and_then(|m| {
-                m.iter()
-                    .find(|(n, id)| n == name && self.kinds[id].is_callable())
-            })
-        {
-            return Some(Ref {
-                id: Some(id.clone()),
-                path: id.clone(),
-                inferred: false,
-            });
+    /// Whether a module has glob imports of something whose contents we
+    /// can't see (another crate, or a path we can't resolve).
+    fn has_opaque_glob(&self, module: &str, depth: usize) -> bool {
+        if depth > 8 {
+            return true;
         }
-        if receiver_ty.is_some() && simple_receiver {
-            // The receiver's type is known and has no such method (e.g. a
-            // method from a derive or an external trait).
-            return None;
-        }
-        if COMMON_STD_METHODS.contains(&name) {
-            return None;
-        }
-        let candidates = self.method_names.get(name)?;
-        let methods: Vec<&String> = candidates
-            .iter()
-            .filter(|id| self.kinds.get(*id) != Some(&Kind::Fn))
-            .collect();
-        let target = if methods.len() == 1 {
-            methods[0].clone()
-        } else {
-            // All candidates implement the same trait method: use the declaration.
-            let traits: BTreeSet<_> = methods
-                .iter()
-                .map(|id| self.member_trait.get(*id))
-                .collect();
-            match traits.into_iter().collect::<Vec<_>>().as_slice() {
-                [Some(t)] => {
-                    let decl = format!("{t}::{name}");
-                    if self.kinds.contains_key(&decl) {
-                        decl
-                    } else {
-                        return None;
-                    }
-                }
-                _ => return None,
-            }
+        let Some(m) = self.modules.get(module) else {
+            return false;
         };
-        Some(Ref {
-            id: Some(target.clone()),
-            path: target,
-            inferred: true,
+        m.uses.iter().filter(|u| u.alias.is_none()).any(|u| {
+            match self.resolve_depth(module, &u.path, None, Some(Ns::Type), depth + 1) {
+                Some(Res {
+                    id: Some(target), ..
+                }) => {
+                    target != module
+                        && self.kinds.get(&target) == Some(&Kind::Mod)
+                        && self.has_opaque_glob(&target, depth + 1)
+                }
+                _ => true,
+            }
         })
     }
 
@@ -980,7 +1041,7 @@ impl Analyzer {
                     if r.in_token.is_some() { "in " } else { "" },
                     segs.join("::")
                 );
-                let scope = match self.resolve(module, &segs, None) {
+                let scope = match self.resolve(module, &segs, None, Some(Ns::Type)) {
                     Some(Res { id: Some(id), .. }) => id,
                     _ => Self::crate_of(module).to_string(),
                 };
@@ -996,11 +1057,25 @@ impl Analyzer {
         let mut reexports: Vec<(String, String)> = Vec::new();
         for (module, data) in &self.modules {
             for u in &data.uses {
-                if u.public
-                    && u.alias.is_some()
-                    && let Some(Res { id: Some(id), .. }) = self.resolve(module, &u.path, None)
-                {
-                    reexports.push((module.clone(), id));
+                // `pub use path::Item;` and `pub use path::*;`
+                if !u.public {
+                    continue;
+                }
+                let ns = if u.alias.is_some() {
+                    None
+                } else {
+                    Some(Ns::Type)
+                };
+                if let Some(Res { id: Some(id), .. }) = self.resolve(module, &u.path, None, ns) {
+                    if u.alias.is_some() {
+                        reexports.push((module.clone(), id));
+                    } else if self.kinds.get(&id) == Some(&Kind::Mod) {
+                        for child in self.children.get(&id).into_iter().flatten() {
+                            if self.def_vis.get(child).is_some_and(|v| v.is_none()) {
+                                reexports.push((module.clone(), child.clone()));
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -1019,18 +1094,40 @@ impl Analyzer {
             let public = reachable(id, &items, &mut memo);
             items.get_mut(id).unwrap().info.public = public;
         }
-        for (module, target) in reexports {
-            if items.get(&module).is_some_and(|m| m.info.public)
-                && let Some(item) = items.get_mut(&target)
-            {
-                item.info.public = true;
-                for child in item.info.children.clone() {
-                    if let Some(c) = items.get_mut(&child)
-                        && c.info.vis_scope.is_none()
-                    {
-                        c.info.public = true;
-                    }
+        // Re-exports from public modules make their targets public, and
+        // with them everything public inside; repeat until nothing changes,
+        // since a module can itself become public through a re-export.
+        fn mark_public(id: &str, items: &mut BTreeMap<String, ItemData>) {
+            let Some(item) = items.get_mut(id) else {
+                return;
+            };
+            if item.info.public {
+                return;
+            }
+            item.info.public = true;
+            for child in item.info.children.clone() {
+                if items
+                    .get(&child)
+                    .is_some_and(|c| c.info.vis_scope.is_none())
+                {
+                    mark_public(&child, items);
                 }
+            }
+        }
+        loop {
+            let pending: Vec<String> = reexports
+                .iter()
+                .filter(|(module, target)| {
+                    items.get(module).is_some_and(|m| m.info.public)
+                        && items.get(target).is_some_and(|t| !t.info.public)
+                })
+                .map(|(_, target)| target.clone())
+                .collect();
+            if pending.is_empty() {
+                break;
+            }
+            for target in pending {
+                mark_public(&target, &mut items);
             }
         }
         items
@@ -1064,7 +1161,6 @@ impl Analyzer {
                     match item {
                         Item::Fn(f) => {
                             let mut f = f.clone();
-                            body_col.add_params(&f.sig);
                             sig_col.visit_signature_mut(&mut f.sig);
                             body_col.visit_block_mut(&mut f.block);
                             let body = norm_block(&f.block);
@@ -1252,7 +1348,6 @@ impl Analyzer {
                 Node::ImplFn(f) => {
                     let span = f.span();
                     let mut sig_ = f.sig.clone();
-                    body_col.add_params(&f.sig);
                     sig_col.visit_signature_mut(&mut sig_);
                     let mut block = f.block.clone();
                     body_col.visit_block_mut(&mut block);
@@ -1270,7 +1365,6 @@ impl Analyzer {
                 Node::TraitFn(f) => {
                     let span = f.span();
                     let mut sig_ = f.sig.clone();
-                    body_col.add_params(&f.sig);
                     sig_col.visit_signature_mut(&mut sig_);
                     let mut body = String::new();
                     if let Some(block) = &f.default {
@@ -1362,6 +1456,12 @@ impl Analyzer {
         let kind = *self.kinds.get(&p.id)?;
         let mut sig_col = Collector::new(self, &p.module, p.self_ty.as_deref(), true);
         let mut body_col = Collector::new(self, &p.module, p.self_ty.as_deref(), true);
+        // Generic parameters and local bindings hide items of the same name.
+        let mut generics = p.outer_generics.clone();
+        generics.extend(node_generics(&p.node));
+        sig_col.shadow(generics.iter().cloned());
+        body_col.shadow(generics);
+        body_col.shadow(node_bindings(&p.node));
         let Rendered {
             attrs,
             vis,
@@ -1411,21 +1511,19 @@ impl Analyzer {
                         Ref {
                             id: Some(id.clone()),
                             path: id.clone(),
-                            inferred: false,
                         },
                     );
                     continue;
                 }
             }
             if segs.iter().all(|s| is_ident(s))
-                && let Some(r) = self.resolve(scope, &segs, p.self_ty.as_deref())
+                && let Some(r) = self.resolve(scope, &segs, p.self_ty.as_deref(), None)
             {
                 doc_refs.insert(
                     key,
                     Ref {
                         id: r.id,
                         path: r.path,
-                        inferred: false,
                     },
                 );
             }
@@ -1473,7 +1571,23 @@ impl Analyzer {
             None => (p.file.rel.clone(), 1, String::new()),
         };
 
+        // Calls: path calls outside macros, resolved by Rust's rules. Method
+        // calls and calls inside macros need type information; see
+        // `semantic`.
         let mut calls = BTreeSet::new();
+        for site in &body_col.sites {
+            if let Some(target) = &site.target
+                && !site.in_macro
+                && *target != p.id
+            {
+                calls.insert(Call { to: target.clone() });
+            }
+        }
+        let unresolved_calls = body_col
+            .sites
+            .iter()
+            .filter(|s| s.method || s.in_macro || !s.known)
+            .count() as u32;
         let mut uses = BTreeSet::new();
         for (target, ctx) in sig_col
             .targets
@@ -1481,30 +1595,19 @@ impl Analyzer {
             .map(|t| (t, use_ctx))
             .chain(body_col.targets.iter().map(|t| (t, UseCtx::Body)))
         {
-            if *target == p.id {
+            if *target == p.id || calls.iter().any(|c| c.to == *target) {
                 continue;
             }
-            let Some(target_kind) = self.kinds.get(target) else {
-                continue;
-            };
-            if target_kind.is_callable() && ctx == UseCtx::Body {
-                calls.insert(Call {
-                    to: target.clone(),
-                    inferred: false,
-                });
-            } else if *target_kind != Kind::Mod {
-                uses.insert(Use {
-                    to: target.clone(),
-                    ctx,
-                });
-            }
-        }
-        for g in &body_col.guessed {
-            if g.target != p.id && !calls.iter().any(|c| c.to == g.target) {
-                calls.insert(Call {
-                    to: g.target.clone(),
-                    inferred: true,
-                });
+            match self.kinds.get(target) {
+                None | Some(Kind::Mod) => {}
+                // A function named without being called (e.g. passed as a
+                // value) is a use.
+                Some(_) => {
+                    uses.insert(Use {
+                        to: target.clone(),
+                        ctx,
+                    });
+                }
             }
         }
         // An impl uses its self type.
@@ -1519,8 +1622,7 @@ impl Analyzer {
         }
 
         let sig_norm = format!("{sig}|{:?}", sig_col.refs);
-        let certain: Vec<_> = body_col.refs.iter().filter(|(_, r)| !r.inferred).collect();
-        let body_norm = format!("{body_norm}|{certain:?}");
+        let body_norm = format!("{body_norm}|{:?}", body_col.refs);
         let mut children = self.children.get(&p.id).cloned().unwrap_or_default();
         children.dedup();
 
@@ -1554,6 +1656,8 @@ impl Analyzer {
             line,
             calls,
             uses,
+            unresolved_calls,
+            site_refs: BTreeMap::new(),
         };
         Some(ItemData {
             info,
@@ -1561,7 +1665,7 @@ impl Analyzer {
             body_norm,
             source,
             name_pos,
-            guessed_calls: body_col.guessed,
+            call_sites: body_col.sites,
         })
     }
 }
@@ -1591,16 +1695,25 @@ fn reachable(
 
 /// Walks a syntax tree, resolving every path. With `normalize`, paths are
 /// shortened to the name a reader needs (`crate::a::Foo` → `Foo`).
+///
+/// Only certain resolutions are recorded: names that could refer to a
+/// local variable, a generic parameter or an item declared inside the
+/// body are left alone, and a name that resolves differently in two places
+/// of one item is not linked at all.
 struct Collector<'a> {
     an: &'a Analyzer,
     module: &'a str,
     self_ty: Option<&'a str>,
     normalize: bool,
     refs: BTreeMap<String, Ref>,
+    /// Display keys that resolved to different targets.
+    ambiguous: BTreeSet<String>,
+    /// Items referred to (outside macro invocations).
     targets: BTreeSet<String>,
-    guessed: Vec<GuessedCall>,
-    /// Local variables with a known local type (from function parameters).
-    locals: HashMap<String, String>,
+    /// Names bound locally or as generic parameters.
+    shadowed: std::collections::HashSet<String>,
+    sites: Vec<CallSite>,
+    in_macro: bool,
 }
 
 impl<'a> Collector<'a> {
@@ -1611,66 +1724,57 @@ impl<'a> Collector<'a> {
             self_ty,
             normalize,
             refs: BTreeMap::new(),
+            ambiguous: BTreeSet::new(),
             targets: BTreeSet::new(),
-            guessed: Vec::new(),
-            locals: HashMap::new(),
+            shadowed: Default::default(),
+            sites: Vec::new(),
+            in_macro: false,
         }
     }
 
-    /// Records parameter types so that `param.method()` can be resolved.
-    fn add_params(&mut self, sig: &syn::Signature) {
-        for input in &sig.inputs {
-            let syn::FnArg::Typed(pt) = input else {
-                continue;
-            };
-            let syn::Pat::Ident(pi) = &*pt.pat else {
-                continue;
-            };
-            let mut ty = &*pt.ty;
-            while let syn::Type::Reference(r) = ty {
-                ty = &r.elem;
-            }
-            if let syn::Type::Path(tp) = ty
-                && tp.qself.is_none()
-                && let Some(Res { id: Some(id), .. }) =
-                    self.an
-                        .resolve(self.module, &path_segments(&tp.path), self.self_ty)
-            {
-                self.locals.insert(pi.ident.to_string(), id);
-            }
-        }
+    fn shadow(&mut self, names: impl IntoIterator<Item = String>) {
+        self.shadowed.extend(names);
     }
 
-    fn handle_path(&mut self, path: &mut syn::Path) {
+    /// Resolves a path unless its first name is shadowed.
+    fn resolve(&self, segs: &[String], ns: Option<Ns>) -> Option<Res> {
+        if segs.is_empty() || self.shadowed.contains(&segs[0]) {
+            return None;
+        }
+        if segs.len() == 1 && matches!(segs[0].as_str(), "self" | "crate" | "super") {
+            return None;
+        }
+        self.an.resolve(self.module, segs, self.self_ty, ns)
+    }
+
+    fn handle_path(&mut self, path: &mut syn::Path, ns: Option<Ns>) {
         let segs = path_segments(path);
-        if segs.len() == 1 && (segs[0] == "self" || segs[0] == "crate" || segs[0] == "super") {
-            return;
-        }
-        let Some(res) = self.an.resolve(self.module, &segs, self.self_ty) else {
+        let Some(res) = self.resolve(&segs, ns) else {
             return;
         };
         let start = res.display_start.min(segs.len() - 1);
         let r = Ref {
             id: res.id.clone(),
             path: res.path.clone(),
-            inferred: false,
         };
-        let short = segs[start..].join("::");
-        let key = match self.refs.get(&short) {
+        if self.normalize && start > 0 {
+            path.leading_colon = None;
+            path.segments = path.segments.iter().skip(start).cloned().collect();
+        }
+        let key = segs[start..].join("::");
+        match self.refs.get(&key) {
+            _ if self.ambiguous.contains(&key) => {}
             Some(existing) if existing.path != r.path => {
-                // Name clash within one item: keep the path as written.
-                segs.join("::")
+                self.refs.remove(&key);
+                self.ambiguous.insert(key);
             }
             _ => {
-                if self.normalize && start > 0 {
-                    path.leading_colon = None;
-                    path.segments = path.segments.iter().skip(start).cloned().collect();
-                }
-                short
+                self.refs.insert(key, r);
             }
-        };
-        self.refs.insert(key, r);
-        if let Some(id) = res.id {
+        }
+        if let Some(id) = res.id
+            && !self.in_macro
+        {
             self.targets.insert(id);
         }
     }
@@ -1678,18 +1782,17 @@ impl<'a> Collector<'a> {
     fn visit_macro_tokens(&mut self, tokens: &TokenStream) {
         use syn::parse::Parser;
         let parser = syn::punctuated::Punctuated::<Expr, syn::Token![,]>::parse_terminated;
+        let normalize = std::mem::replace(&mut self.normalize, false);
+        let in_macro = std::mem::replace(&mut self.in_macro, true);
         if let Ok(exprs) = parser.parse2(tokens.clone()) {
             for mut expr in exprs {
-                let normalize = std::mem::replace(&mut self.normalize, false);
                 self.visit_expr_mut(&mut expr);
-                self.normalize = normalize;
             }
-        } else if let Ok(block) = syn::parse2::<syn::Block>(quote::quote!({ #tokens })) {
-            let mut block = block;
-            let normalize = std::mem::replace(&mut self.normalize, false);
+        } else if let Ok(mut block) = syn::parse2::<syn::Block>(quote::quote!({ #tokens })) {
             self.visit_block_mut(&mut block);
-            self.normalize = normalize;
         }
+        self.normalize = normalize;
+        self.in_macro = in_macro;
     }
 }
 
@@ -1698,9 +1801,12 @@ impl VisitMut for Collector<'_> {
 
     fn visit_visibility_mut(&mut self, _: &mut Visibility) {}
 
+    /// Items nested in a body are not part of it.
+    fn visit_item_mut(&mut self, _: &mut Item) {}
+
     fn visit_path_mut(&mut self, path: &mut syn::Path) {
         visit_mut::visit_path_mut(self, path);
-        self.handle_path(path);
+        self.handle_path(path, None);
     }
 
     fn visit_type_path_mut(&mut self, tp: &mut syn::TypePath) {
@@ -1708,7 +1814,8 @@ impl VisitMut for Collector<'_> {
             self.visit_type_mut(&mut q.ty);
             return;
         }
-        visit_mut::visit_type_path_mut(self, tp);
+        visit_mut::visit_path_mut(self, &mut tp.path);
+        self.handle_path(&mut tp.path, Some(Ns::Type));
     }
 
     fn visit_expr_path_mut(&mut self, ep: &mut syn::ExprPath) {
@@ -1716,7 +1823,23 @@ impl VisitMut for Collector<'_> {
             self.visit_type_mut(&mut q.ty);
             return;
         }
-        visit_mut::visit_expr_path_mut(self, ep);
+        visit_mut::visit_path_mut(self, &mut ep.path);
+        self.handle_path(&mut ep.path, Some(Ns::Value));
+    }
+
+    fn visit_expr_struct_mut(&mut self, e: &mut syn::ExprStruct) {
+        if let Some(q) = &mut e.qself {
+            self.visit_type_mut(&mut q.ty);
+        } else {
+            visit_mut::visit_path_mut(self, &mut e.path);
+            self.handle_path(&mut e.path, Some(Ns::Type));
+        }
+        for field in e.fields.iter_mut() {
+            self.visit_expr_mut(&mut field.expr);
+        }
+        if let Some(rest) = &mut e.rest {
+            self.visit_expr_mut(rest);
+        }
     }
 
     fn visit_macro_mut(&mut self, mac: &mut syn::Macro) {
@@ -1724,41 +1847,159 @@ impl VisitMut for Collector<'_> {
         self.visit_macro_tokens(&tokens);
     }
 
-    fn visit_expr_method_call_mut(&mut self, call: &mut syn::ExprMethodCall) {
-        visit_mut::visit_expr_method_call_mut(self, call);
-        let receiver = match &*call.receiver {
-            Expr::Path(p) if p.qself.is_none() => p.path.get_ident().map(|i| i.to_string()),
+    fn visit_expr_call_mut(&mut self, call: &mut syn::ExprCall) {
+        // Resolve before visiting, which may shorten the path.
+        let site = match &*call.func {
+            Expr::Path(p) if p.qself.is_none() => {
+                let segs = path_segments(&p.path);
+                let shadowed = self.shadowed.contains(&segs[0]);
+                (!shadowed).then(|| {
+                    let res = self.resolve(&segs, Some(Ns::Value));
+                    let target = res
+                        .as_ref()
+                        .and_then(|r| r.id.clone())
+                        .filter(|id| self.an.kinds.get(id).is_some_and(|k| k.is_callable()));
+                    let pos = p.path.segments.last().unwrap().ident.span().start().into();
+                    CallSite {
+                        pos,
+                        method: false,
+                        in_macro: self.in_macro,
+                        // Resolved outside the analyzed items (e.g. `Some(..)`)
+                        // or to a constructor: known, but not a call target.
+                        known: res.is_some(),
+                        target,
+                    }
+                })
+            }
             _ => None,
         };
-        let name = call.method.to_string();
-        let receiver_ty = match receiver.as_deref() {
-            Some("self") => self.self_ty.map(str::to_string),
-            Some(local) => self.locals.get(local).cloned(),
-            None => None,
+        visit_mut::visit_expr_call_mut(self, call);
+        if let Some(site) = site {
+            self.sites.push(site);
+        }
+    }
+
+    fn visit_expr_method_call_mut(&mut self, call: &mut syn::ExprMethodCall) {
+        visit_mut::visit_expr_method_call_mut(self, call);
+        // Which method is called depends on the receiver's type: only type
+        // inference (rust-analyzer) can tell.
+        self.sites.push(CallSite {
+            pos: call.method.span().start().into(),
+            method: true,
+            in_macro: self.in_macro,
+            known: false,
+            target: None,
+        });
+    }
+}
+
+/// Names bound in patterns (parameters, `let`, closures, `match` arms) and
+/// items declared inside a body.
+#[derive(Default)]
+struct Bindings(Vec<String>);
+
+impl<'ast> syn::visit::Visit<'ast> for Bindings {
+    fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
+        self.0.push(p.ident.to_string());
+        syn::visit::visit_pat_ident(self, p);
+    }
+
+    fn visit_item(&mut self, item: &'ast Item) {
+        let ident = match item {
+            Item::Fn(i) => Some(&i.sig.ident),
+            Item::Struct(i) => Some(&i.ident),
+            Item::Enum(i) => Some(&i.ident),
+            Item::Union(i) => Some(&i.ident),
+            Item::Const(i) => Some(&i.ident),
+            Item::Static(i) => Some(&i.ident),
+            Item::Type(i) => Some(&i.ident),
+            Item::Trait(i) => Some(&i.ident),
+            Item::Mod(i) => Some(&i.ident),
+            _ => None,
         };
-        if let Some(r) = self
-            .an
-            .resolve_method(&name, receiver_ty.as_deref(), receiver.is_some())
-        {
-            let id = r.id.clone().unwrap();
-            if r.inferred {
-                self.guessed.push(GuessedCall {
-                    method: name.clone(),
-                    target: id,
-                    site: call.method.span().start().into(),
-                });
-            } else {
-                self.targets.insert(id);
+        self.0.extend(ident.map(|i| i.to_string()));
+        if let Item::Use(u) = item {
+            let mut entries = Vec::new();
+            flatten_use(&u.tree, Vec::new(), &mut entries);
+            self.0
+                .extend(entries.into_iter().filter_map(|(alias, _)| alias));
+        }
+    }
+
+    fn visit_macro(&mut self, mac: &'ast syn::Macro) {
+        use syn::parse::Parser;
+        let parser = syn::punctuated::Punctuated::<Expr, syn::Token![,]>::parse_terminated;
+        if let Ok(exprs) = parser.parse2(mac.tokens.clone()) {
+            for expr in &exprs {
+                self.visit_expr(expr);
             }
-            let key = format!(".{name}");
-            match self.refs.get(&key) {
-                Some(existing) if existing.path != r.path => {}
-                _ => {
-                    self.refs.insert(key, r);
-                }
+        } else {
+            let tokens = &mac.tokens;
+            if let Ok(block) = syn::parse2::<syn::Block>(quote::quote!({ #tokens })) {
+                self.visit_block(&block);
             }
         }
     }
+}
+
+/// Generic parameter names an item declares itself.
+fn node_generics(node: &Node) -> Vec<String> {
+    match node {
+        Node::Item(item) => match item {
+            Item::Fn(f) => generic_names(&f.sig.generics),
+            Item::Struct(i) => generic_names(&i.generics),
+            Item::Enum(i) => generic_names(&i.generics),
+            Item::Union(i) => generic_names(&i.generics),
+            Item::Trait(i) => generic_names(&i.generics),
+            Item::Type(i) => generic_names(&i.generics),
+            Item::Impl(i) => generic_names(&i.generics),
+            _ => Vec::new(),
+        },
+        Node::ImplFn(f) => generic_names(&f.sig.generics),
+        Node::TraitFn(f) => generic_names(&f.sig.generics),
+        Node::ImplType(t) => generic_names(&t.generics),
+        Node::TraitType(t) => generic_names(&t.generics),
+        _ => Vec::new(),
+    }
+}
+
+/// Names bound inside an item's signature and body.
+fn node_bindings(node: &Node) -> Vec<String> {
+    use syn::visit::Visit;
+    let mut b = Bindings::default();
+    match node {
+        Node::Item(Item::Fn(f)) => {
+            b.visit_signature(&f.sig);
+            b.visit_block(&f.block);
+        }
+        Node::Item(Item::Const(c)) => b.visit_expr(&c.expr),
+        Node::Item(Item::Static(s)) => b.visit_expr(&s.expr),
+        Node::ImplFn(f) => {
+            b.visit_signature(&f.sig);
+            b.visit_block(&f.block);
+        }
+        Node::TraitFn(f) => {
+            b.visit_signature(&f.sig);
+            if let Some(block) = &f.default {
+                b.visit_block(block);
+            }
+        }
+        Node::ImplConst(c) => b.visit_expr(&c.expr),
+        _ => {}
+    }
+    b.0
+}
+
+/// Type and const parameter names of some generics.
+fn generic_names(g: &syn::Generics) -> Vec<String> {
+    g.params
+        .iter()
+        .filter_map(|p| match p {
+            syn::GenericParam::Type(t) => Some(t.ident.to_string()),
+            syn::GenericParam::Const(c) => Some(c.ident.to_string()),
+            syn::GenericParam::Lifetime(_) => None,
+        })
+        .collect()
 }
 
 fn path_segments(path: &syn::Path) -> Vec<String> {
@@ -1987,6 +2228,11 @@ fn unparse_type(ty: &syn::Type) -> String {
         .trim_start_matches("type __X = ")
         .trim_end_matches(';')
         .to_string()
+}
+
+/// `m` is `s` or nested inside it.
+pub fn within(m: &str, s: &str) -> bool {
+    m == s || (m.len() > s.len() + 2 && m.starts_with(s) && m[s.len()..].starts_with("::"))
 }
 
 /// Turns `fn foo() {}` into `fn foo()`.
