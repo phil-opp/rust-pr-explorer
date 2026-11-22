@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{TITLE}} · Rust PR Explorer</title>
+<style>
+/*{{STYLE}}*/
+</style>
+</head>
+<body>
+<header id="top">
+  <div class="brand">Rust PR Explorer</div>
+  <div id="pr-title"></div>
+  <nav id="views">
+    <button data-view="overview">Overview</button>
+    <button data-view="module">Modules</button>
+    <button data-view="canvas">Canvas</button>
+    <button data-view="space">3D</button>
+  </nav>
+  <div class="search"><input id="search" type="search" placeholder="Find item…" autocomplete="off"><div id="search-results"></div></div>
+</header>
+<div id="layout">
+  <aside id="sidebar"></aside>
+  <main id="main">
+    <section id="view-overview" class="view page"></section>
+    <section id="view-module" class="view page"></section>
+    <section id="view-canvas" class="view">
+      <div id="canvas-bar"></div>
+      <div id="viewport">
+        <div id="world"><svg id="frames"></svg><svg id="edges"></svg><div id="cards"></div></div>
+        <div id="canvas-empty"></div>
+      </div>
+    </section>
+    <section id="view-space" class="view">
+      <div id="space-bar"></div>
+      <canvas id="space"></canvas>
+      <div id="space-legend"></div>
+    </section>
+  </main>
+</div>
+<div id="tooltip"></div>
+<div id="toast"></div>
+<script id="data" type="application/json">/*{{DATA}}*/</script>
+<script>
+/*{{SCRIPT}}*/
+</script>
+</body>
+</html>
