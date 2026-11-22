@@ -159,10 +159,10 @@ code { font-size: .92em; }
 /* A run of neighboring parts that changed the same way shares one bar. */
 .mark { border-left: 3px solid transparent; padding-left: 7px; margin-left: -10px; display: flex; flex-direction: column; gap: 10px; }
 /* Each marker differs in line style too, not only in color:
-   added = solid, removed = dashed, changed = dotted. */
-.m-add { border-left: 3px solid var(--added) !important; }
+   changed (the most common) = solid, added = dotted, removed = dashed. */
+.m-add { border-left: 3px dotted var(--added) !important; }
 .m-del { border-left: 3px dashed var(--removed) !important; }
-.m-chg { border-left: 3px dotted var(--changed) !important; }
+.m-chg { border-left: 3px solid var(--changed) !important; }
 .mk { font-family: var(--mono); font-weight: 700; }
 .export s { text-decoration-color: var(--removed); }
 /* An unchanged signature, shown for reference: muted, no code background. */
@@ -277,7 +277,7 @@ a.ref:hover { text-decoration: underline; }
   border-radius: 8px; box-shadow: var(--shadow); cursor: default;
 }
 .card.cs-added { border-top: 4px solid var(--added); }
-.card.cs-changed { border-top: 4px dotted var(--changed); }
+.card.cs-changed { border-top: 4px solid var(--changed); }
 .card.cs-removed { border-top: 4px dashed var(--removed); }
 .card.cs-removed .card-h .title-name { text-decoration: line-through; text-decoration-color: var(--removed); }
 .card.cs-unchanged { border-top: 4px solid var(--border); opacity: .93; }
