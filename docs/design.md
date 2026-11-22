@@ -65,6 +65,8 @@ Measured on `rust-lang/log#613`:
 
 On the demo fixture, rust-analyzer resolves calls such as `Parser::new(input)?.parse_expr()` and `op.precedence()`, where `op` comes from a pattern.
 
+The same session also describes items outside the analyzed crates. For each path into the standard library or a dependency, the tool takes one place in the code that names it and asks rust-analyzer for *hover* (declaration and docs, with intra-doc links turned into URLs), *go to definition* (the kind of item) and *external docs* (the docs.rs or doc.rust-lang.org URL). The description is kept only if the definition has the same name and crate as the path the syntactic pass resolved (`std`, `core` and `alloc` count as one crate). This is the "on demand" form of what rustdoc does for the whole dependency tree: only what the analyzed code names is looked up. On `rust-lang/log#613` it describes 74 items on the base side and 59 on the head side; the whole run, including the clone, took about 14 seconds (about 13 before this step existed).
+
 If loading fails (no `Cargo.toml`, `cargo metadata` errors, missing network for dependencies), the tool falls back to the syntactic results, notes this in the page, and continues. `--syntax-only` skips this layer.
 
 Costs and risks:
@@ -123,7 +125,7 @@ rust-analyzer already provides most of the semantic precision the views need, wi
 
 ### rustdoc HTML — not implemented
 
-Embedding or scraping rustdoc's HTML pages would reuse rustdoc's rendering. But the HTML is not a stable interface. It comes with rustdoc's own JavaScript and CSS, which are large, and it needs the same build as rustdoc JSON. The explorer already renders signatures in rustdoc style. A cheaper use of rustdoc HTML would be linking names in external crates to their pages on docs.rs: the fully qualified path is already known for every name.
+Embedding or scraping rustdoc's HTML pages would reuse rustdoc's rendering. But the HTML is not a stable interface. It comes with rustdoc's own JavaScript and CSS, which are large, and it needs the same build as rustdoc JSON. The explorer already renders signatures in rustdoc style. Names in external crates link to their pages on docs.rs through rust-analyzer's *external docs* instead.
 
 ### rust-analyzer over LSP — not implemented
 
@@ -162,6 +164,6 @@ The tool calls the `git` binary to clone, fetch pull request refs, compute merge
 
 - Opt-in rustdoc JSON in trusted mode, for an exact public API.
 - Public-API computation via rust-analyzer's `hir` (exact re-exports, `doc(hidden)`).
-- docs.rs links for external names.
+- Report changes of the public API that come from `pub use` alone (an item newly re-exported or no longer re-exported), and show items at their public path.
 - Fetch PR metadata (title, description) through the GitHub API when a token is available.
 - Smaller wasm, for example by replacing `serde_json` with a more compact format, or by running `wasm-opt`.

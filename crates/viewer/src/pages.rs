@@ -1,7 +1,7 @@
 //! The sidebar, the overview and the module pages.
 
 use crate::App;
-use crate::code::{docs_html, esc, first_paragraph};
+use crate::code::esc;
 use crate::data::{Data, changed, kind_order};
 use crate::dom;
 use model::{Item, Kind, Status};
@@ -93,20 +93,18 @@ fn item_row(
     } else {
         d.sig_html(it, scope)
     };
-    let first = first_paragraph(&it.info.docs);
-    let docs = if first.is_empty() {
-        String::new()
+    let docs = d.docs_block_html(it, false);
+    // What changed in the body, expandable to the diff.
+    let src = if it.changes.body || it.changes.cosmetic {
+        d.source_html(it, false, false)
     } else {
-        format!(
-            r#"<div class="docs">{}</div>"#,
-            docs_html(d, first, &it.info.doc_refs)
-        )
+        String::new()
     };
     format!(
         r#"<div class="irow {} {} {}" data-id="{}">
         <div class="ihead"><span class="kind">{}</span>{} {} {}</div>
         <div class="iacts"><button data-open="{}" title="Open on the canvas">Open ▸</button></div>
-        {sig}{docs}</div>"#,
+        {sig}{docs}{src}</div>"#,
         it.status.css(),
         if context { "context" } else { "" },
         if member { "member" } else { "" },
@@ -158,12 +156,6 @@ fn item_with_members(
 pub fn render_overview(app: &App) {
     let d = &app.d;
     let all: Vec<&Item> = d.items().filter(|it| it.info.kind != Kind::Mod).collect();
-    let count = |st: Status| all.iter().filter(|it| it.status == st).count();
-    let pub_changed = all
-        .iter()
-        .filter(|it| it.info.public && changed(it))
-        .count();
-    let cosmetic = all.iter().filter(|it| it.changes.cosmetic).count();
     let is_pub = |it: &Item| it.info.public && changed(it);
     // Seen from outside the crate.
     const OUTSIDE: &str = "<extern>";
@@ -255,13 +247,6 @@ pub fn render_overview(app: &App) {
     let html = format!(
         r#"<h1>{}</h1>
         <div class="sub">{} → {} {}</div>
-        <div class="stats">
-          <div class="stat"><b style="color:var(--added)">{}</b><span>items added</span></div>
-          <div class="stat"><b style="color:var(--changed)">{}</b><span>items changed</span></div>
-          <div class="stat"><b style="color:var(--removed)">{}</b><span>items removed</span></div>
-          <div class="stat"><b>{pub_changed}</b><span>in the public API</span></div>
-          <div class="stat"><b>{cosmetic}</b><span>formatting-only (hidden)</span></div>
-        </div>
         <h2>Public API changes</h2>
         <p class="sub">Items reachable from outside the crate that were added, changed or removed, in rustdoc form. Types appear as context when only their members changed.</p>
         {}
@@ -278,9 +263,6 @@ pub fn render_overview(app: &App) {
                 esc(u)
             ))
             .unwrap_or_default(),
-        count(Status::Added),
-        count(Status::Changed),
-        count(Status::Removed),
         if public_html.is_empty() {
             r#"<div class="empty-state">This pull request does not change the public API.</div>"#
                 .to_string()
@@ -424,7 +406,7 @@ pub fn render_module_page(app: &App) {
         <h1><span class="kind">{}</span> {} {} {}</h1>
         <div class="sub">{} · <label><input type="checkbox" id="show-unchanged" {}> show unchanged items</label> ·
           <button id="mod-graph">Internal call graph on canvas ▸</button></div>
-        {}{}
+        {}
         <h2>Exposed by this module</h2><div>{}</div>
         <h2>Private to this module</h2><div class="private-zone">{}</div>
         {subs_html}"#,
@@ -434,25 +416,10 @@ pub fn render_module_page(app: &App) {
         d.status_html(module),
         esc(&module.info.file),
         if show_unchanged { "checked" } else { "" },
-        if module.info.docs.is_empty() {
+        if module.info.docs.is_empty() && !module.changes.docs {
             String::new()
         } else {
-            format!(
-                r#"<div class="docs">{}</div>"#,
-                docs_html(d, &module.info.docs, &module.info.doc_refs)
-            )
-        },
-        if module.changes.docs {
-            format!(
-                r#"<details class="docs-old"><summary>Module docs changed — show previous</summary><div class="docs">{}</div></details>"#,
-                docs_html(
-                    d,
-                    module.old_docs.as_deref().unwrap_or(""),
-                    &module.info.doc_refs
-                )
-            )
-        } else {
-            String::new()
+            d.docs_block_html(module, true)
         },
         if exposed_html.is_empty() {
             none("exposed")

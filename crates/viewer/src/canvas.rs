@@ -8,7 +8,7 @@ use model::{Item, Kind, Status, UseCtx};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use web_sys::{Element, PointerEvent, WheelEvent};
 
-const CARD_W: f64 = 440.0;
+const CARD_W: f64 = 580.0;
 /// At most this many cards are opened by one "calls"/"callers" click.
 const EXPAND_LIMIT: usize = 10;
 
@@ -523,28 +523,35 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     } else {
         d.sig_html(it, scope)
     };
-    let docs = if it.info.docs.is_empty() {
-        r#"<div class="docs empty">No documentation.</div>"#.to_string()
+    // External docs (e.g. the standard library's) can be long: first
+    // paragraph, the rest expandable.
+    let docs = if d.external(id).is_some() {
+        let first = crate::code::first_paragraph(&it.info.docs);
+        let more = if first.len() < it.info.docs.trim().len() {
+            format!(
+                r#"<details class="docs-old"><summary>full documentation</summary><div class="docs">{}</div></details>"#,
+                docs_html(d, &it.info.docs, &BTreeMap::new())
+            )
+        } else {
+            String::new()
+        };
+        d.docs_block_html(it, false) + &more
     } else {
-        format!(
-            r#"<div class="docs">{}</div>"#,
-            docs_html(d, &it.info.docs, &it.info.doc_refs)
-        )
+        d.docs_block_html(it, true)
     };
-    let old_docs = if it.changes.docs && it.status == Status::Changed {
-        let old = docs_html(d, it.old_docs.as_deref().unwrap_or(""), &BTreeMap::new());
+    let src = d.source_html(it, g.open_src.contains(id), true);
+    let external = d.external(id).map(|e| {
         format!(
-            r#"<details class="docs-old"><summary>docs changed — show previous</summary><div class="docs">{}</div></details>"#,
-            if old.is_empty() {
-                "<i>none</i>".to_string()
-            } else {
-                old
-            }
+            r#"<div class="ext-note">Outside the analyzed crates, as rust-analyzer describes it.{}</div>"#,
+            e.url
+                .as_deref()
+                .map(|u| format!(
+                    r#" <a href="{}" target="_blank" rel="noopener">Documentation ↗</a>"#,
+                    esc(u)
+                ))
+                .unwrap_or_default()
         )
-    } else {
-        String::new()
-    };
-
+    });
     // Members, like a rustdoc type or module page.
     let ms: Vec<&Item> = if it.info.kind == Kind::Mod {
         d.mod_children_items(id)
@@ -609,65 +616,6 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         html
     };
 
-    let src = if it.source.is_empty() {
-        String::new()
-    } else {
-        let added = it.source.iter().filter(|l| l.0 == '+').count();
-        let removed = it.source.iter().filter(|l| l.0 == '-').count();
-        // Line numbers in the file the item's (head) source comes from.
-        let mut line = it.info.line;
-        let lines: String = it
-            .source
-            .iter()
-            .map(|l| {
-                let class = match l.0 {
-                    '+' => "add",
-                    '-' => "del",
-                    _ => "",
-                };
-                // Removed lines are base code: what their names referred
-                // to is not known here, so they get no links.
-                let code = if l.0 == '-' || it.status == Status::Removed {
-                    code_html(d, &l.1, Links::None)
-                } else {
-                    let links = Links::Source {
-                        line,
-                        refs: &it.info.source_refs,
-                    };
-                    line += 1;
-                    code_html(d, &l.1, links)
-                };
-                format!(
-                    r#"<span class="ln {class}" data-t="{}">{}</span>"#,
-                    if l.0 == ' ' {
-                        String::new()
-                    } else {
-                        l.0.to_string()
-                    },
-                    if code.is_empty() {
-                        " ".to_string()
-                    } else {
-                        code
-                    }
-                )
-            })
-            .collect();
-        let diff = if added + removed > 0 {
-            format!(
-                r#" · <span style="color:var(--added)">+{added}</span> <span style="color:var(--removed)">−{removed}</span>"#
-            )
-        } else {
-            String::new()
-        };
-        format!(
-            r#"<details class="src" data-src="{}" {}><summary>Source · {}:{} · {} lines{diff}</summary><pre>{lines}</pre></details>"#,
-            esc(id),
-            if g.open_src.contains(id) { "open" } else { "" },
-            esc(&it.info.file),
-            it.info.line,
-            it.source.len()
-        )
-    };
     let impl_header = it
         .info
         .impl_header
@@ -689,8 +637,8 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         {tabs}
         <div class="card-h"><span class="kind">{}</span>{} {}<span class="grow"></span>{}<span class="x" data-close="{}" title="Close">×</span></div>
         <div class="card-loc">{}</div>
-        <div class="card-b">{impl_header}{sig}{docs}{old_docs}{members}{}{}
-          <div class="card-acts">{acts}</div>{src}</div></div>"#,
+        <div class="card-b">{impl_header}{sig}{docs}{src}{}{members}{}{}
+          <div class="card-acts">{acts}</div></div></div>"#,
         it.status.css(),
         g.gid,
         g.x,
@@ -700,7 +648,12 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         d.vis_html(it),
         d.status_html(it),
         esc(id),
-        esc(&d.mod_label(d.mod_of(it))),
+        if external.is_some() {
+            String::new()
+        } else {
+            esc(&d.mod_label(d.mod_of(it)))
+        },
+        external.unwrap_or_default(),
         if it.info.unresolved_calls > 0 {
             let n = it.info.unresolved_calls;
             let why = if d.out.meta.resolution.starts_with("rust-analyzer") {

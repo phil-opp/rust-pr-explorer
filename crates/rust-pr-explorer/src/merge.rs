@@ -63,10 +63,14 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
         .map(|w| format!("base: {w}"))
         .collect();
     warnings.extend(head.warnings.into_iter().map(|w| format!("head: {w}")));
+    // Externals are not part of the review; the head's view wins.
+    let mut externals = base.externals;
+    externals.extend(head.externals);
     Output {
         meta,
         crates,
         items,
+        externals,
         warnings,
     }
 }

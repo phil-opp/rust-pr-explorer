@@ -64,7 +64,12 @@ const KEYWORDS: &[&str] = &[
 
 /// A link (or, for names outside the analyzed crates, a hover target).
 pub fn ref_html(d: &Data, text: &str, r: &Ref, extra: &str) -> String {
-    if let Some(item) = r.id.as_deref().and_then(|id| d.item(id)) {
+    let item = match r.id.as_deref() {
+        Some(id) => d.item(id),
+        // Outside the analyzed crates: linked if rust-analyzer described it.
+        None => d.external(&r.path).and_then(|_| d.item(&r.path)),
+    };
+    if let Some(item) = item {
         format!(
             r#"<a class="ref {extra}" data-id="{}" data-kind="{}" data-path="{}">{}</a>"#,
             esc(&item.info.id),
@@ -722,6 +727,111 @@ pub fn docs_html(d: &Data, md: &str, refs: &BTreeMap<String, Ref>) -> String {
 }
 
 /// The first paragraph of some docs.
+/// A line that defines a link reference (`[name]: target`).
+fn is_link_def(line: &str) -> bool {
+    let t = line.trim_start();
+    line.len() - t.len() <= 3
+        && t.starts_with('[')
+        && t.find("]:").is_some_and(|i| !t[1..i].contains(['[', ']']))
+}
+
+/// Splits Markdown into blocks separated by blank lines (not inside code
+/// fences), plus its link reference definitions, which every block needs.
+fn doc_blocks(md: &str) -> (Vec<String>, String) {
+    let mut blocks = Vec::new();
+    let mut cur = String::new();
+    let mut fence: Option<&str> = None;
+    for line in md.lines() {
+        let t = line.trim_start();
+        match fence {
+            Some(f) if t.starts_with(f) => fence = None,
+            Some(_) => {}
+            None if t.starts_with("```") => fence = Some("```"),
+            None if t.starts_with("~~~") => fence = Some("~~~"),
+            None if t.is_empty() => {
+                if !cur.is_empty() {
+                    blocks.push(std::mem::take(&mut cur));
+                }
+                continue;
+            }
+            None => {}
+        }
+        cur.push_str(line);
+        cur.push('\n');
+    }
+    if !cur.is_empty() {
+        blocks.push(cur);
+    }
+    let defs: String = md
+        .lines()
+        .filter(|l| is_link_def(l))
+        .map(|l| format!("{l}\n"))
+        .collect();
+    (blocks, defs)
+}
+
+/// Docs with their changes marked block by block: added and changed
+/// paragraphs (list, code block, …) get a colored bar, removed ones are
+/// shown struck out, and the previous text of a changed block can be
+/// expanded.
+pub fn docs_diff_html(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Ref>) -> String {
+    use similar::{Algorithm, DiffOp, capture_diff_slices};
+    let (a, a_defs) = doc_blocks(old);
+    let (b, b_defs) = doc_blocks(new);
+    let no_refs = BTreeMap::new();
+    let block = |text: &str, defs: &str, refs: &BTreeMap<String, Ref>, class: &str| {
+        if text.lines().all(is_link_def) {
+            // Definitions render as nothing; show a changed one as text.
+            return if class.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    r#"<div class="dblk {class}"><code>{}</code></div>"#,
+                    esc(text.trim())
+                )
+            };
+        }
+        format!(
+            r#"<div class="dblk {class}">{}</div>"#,
+            docs_html(d, &format!("{text}\n{defs}"), refs)
+        )
+    };
+    let mut out = String::new();
+    for op in capture_diff_slices(Algorithm::Myers, &a, &b) {
+        let (old_range, new_range) = (op.old_range(), op.new_range());
+        match op {
+            DiffOp::Equal { .. } => {
+                for t in &b[new_range] {
+                    out.push_str(&block(t, &b_defs, refs, ""));
+                }
+            }
+            DiffOp::Insert { .. } => {
+                for t in &b[new_range] {
+                    out.push_str(&block(t, &b_defs, refs, "m-add"));
+                }
+            }
+            DiffOp::Delete { .. } => {
+                for t in &a[old_range] {
+                    out.push_str(&block(t, &a_defs, &no_refs, "m-del"));
+                }
+            }
+            DiffOp::Replace { .. } => {
+                for t in &b[new_range] {
+                    out.push_str(&block(t, &b_defs, refs, "m-chg"));
+                }
+                let previous: String = a[old_range]
+                    .iter()
+                    .map(|t| block(t, &a_defs, &no_refs, "m-del"))
+                    .collect();
+                out.push_str(&format!(
+                    r#"<details class="dblk-old"><summary>previous text</summary>{previous}</details>"#
+                ));
+            }
+        }
+    }
+    out
+}
+
 pub fn first_paragraph(md: &str) -> &str {
     let md = md.trim();
     let mut end = md.len();
@@ -752,6 +862,7 @@ mod tests {
             },
             crates: vec!["c".into()],
             items: BTreeMap::new(),
+            externals: BTreeMap::new(),
             warnings: Vec::new(),
         })
     }
@@ -947,5 +1058,50 @@ mod tests {
         assert!(within("a", "a"));
         assert!(!within("ab", "a"));
         assert!(!within("a", "a::b"));
+    }
+
+    #[test]
+    fn doc_blocks_keep_code_fences_whole() {
+        let md = "Intro.\n\n```\nlet a = 1;\n\nlet b = 2;\n```\n\nSee [x].\n\n[x]: https://example.com\n";
+        let (blocks, defs) = doc_blocks(md);
+        assert_eq!(
+            blocks,
+            [
+                "Intro.\n",
+                "```\nlet a = 1;\n\nlet b = 2;\n```\n",
+                "See [x].\n",
+                "[x]: https://example.com\n"
+            ]
+        );
+        assert_eq!(defs, "[x]: https://example.com\n");
+    }
+
+    #[test]
+    fn docs_diff_marks_blocks() {
+        let d = empty();
+        let html = docs_diff_html(
+            &d,
+            "Same.\n\nOld text.\n\nGone.",
+            "Same.\n\nNew text.\n\nGone.\n\nAdded, see [x].\n\n[x]: https://example.com",
+            &BTreeMap::new(),
+        );
+        assert!(
+            html.starts_with(r#"<div class="dblk "><p>Same.</p>"#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<div class="dblk m-chg"><p>New text.</p>"#),
+            "{html}"
+        );
+        assert!(html.contains(r#"<details class="dblk-old"><summary>previous text</summary><div class="dblk m-del"><p>Old text.</p>"#), "{html}");
+        // The link definition applies to the block that uses it.
+        assert!(
+            html.contains(r#"<div class="dblk m-add"><p>Added, see <a href="https://example.com""#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<div class="dblk m-add"><code>[x]: https://example.com</code></div>"#),
+            "{html}"
+        );
     }
 }

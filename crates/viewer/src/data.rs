@@ -1,7 +1,7 @@
 //! The embedded analysis plus derived indexes and privacy rules.
 
 use crate::code::esc;
-use model::{Item, Kind, Output, Status, UseCtx};
+use model::{External, Item, ItemInfo, Kind, Output, Status, UseCtx};
 use std::collections::HashMap;
 
 pub struct Data {
@@ -14,6 +14,8 @@ pub struct Data {
     pub mod_children: HashMap<String, Vec<String>>,
     /// Whether an item or anything it contains changed.
     touched: HashMap<String, bool>,
+    /// Items outside the analyzed crates, shown read-only, by path.
+    ext: HashMap<String, Item>,
 }
 
 /// `m` is `s` or nested inside it.
@@ -44,12 +46,34 @@ impl Data {
                     .push(i.id.clone());
             }
         }
+        let ext = out
+            .externals
+            .iter()
+            .map(|(path, e)| {
+                let info = ItemInfo {
+                    id: path.clone(),
+                    kind: e.kind,
+                    name: e.name.clone(),
+                    module: e.module.clone(),
+                    public: true,
+                    sig: e.sig.clone(),
+                    docs: e.docs.clone(),
+                    ..Default::default()
+                };
+                let item = Item {
+                    info,
+                    ..Default::default()
+                };
+                (path.clone(), item)
+            })
+            .collect();
         let mut d = Data {
             out,
             callers,
             used_by,
             mod_children,
             touched: HashMap::new(),
+            ext,
         };
         let ids: Vec<String> = d.out.items.keys().cloned().collect();
         let mut memo = HashMap::new();
@@ -87,8 +111,18 @@ impl Data {
         r
     }
 
+    /// An item of the analyzed crates, or one outside them that the code
+    /// names.
     pub fn item(&self, id: &str) -> Option<&Item> {
-        self.out.items.get(id)
+        self.out.items.get(id).or_else(|| self.ext.get(id))
+    }
+
+    /// What is known about an item outside the analyzed crates.
+    pub fn external(&self, id: &str) -> Option<&External> {
+        if self.out.items.contains_key(id) {
+            return None;
+        }
+        self.out.externals.get(id)
     }
 
     pub fn items(&self) -> impl Iterator<Item = &Item> {
@@ -272,6 +306,14 @@ impl Data {
     }
 
     pub fn title_html(&self, it: &Item, with_module: bool) -> String {
+        if let Some(e) = self.external(&it.info.id) {
+            return format!(
+                r#"<span class="title-name"><span class="dim">{}::</span><span class="k-{}">{}</span></span>"#,
+                esc(&e.module),
+                it.info.kind.css(),
+                esc(&e.name)
+            );
+        }
         let prefix = if with_module
             && it.info.kind != Kind::Mod
             && !self.item(&it.info.module).is_some_and(|m| self.is_root(m))
@@ -309,33 +351,22 @@ impl Data {
         match it.status {
             Status::Added => r#"<span class="st st-added">+ added</span>"#.into(),
             Status::Removed => r#"<span class="st st-removed">− removed</span>"#.into(),
+            // What changed is marked where it changed (signature, docs,
+            // body), not summarized here.
             Status::Changed => {
-                let what: Vec<&str> = [
-                    (c.signature, "signature"),
-                    (c.body, "body"),
-                    (c.docs, "docs"),
-                ]
-                .iter()
-                .filter(|(on, _)| *on)
-                .map(|(_, w)| *w)
-                .collect();
-                let mut s = format!(
-                    r#"<span class="st st-changed">{}</span>"#,
-                    if what.is_empty() {
-                        "changed".to_string()
-                    } else {
-                        format!("changed: {}", what.join(", "))
-                    }
-                );
+                let mut s = String::new();
                 if let Some(from) = &c.moved_from {
                     let from_mod = from.rsplit_once("::").map_or(from.as_str(), |(m, _)| m);
                     s.push_str(&format!(
-                        r#" <span class="st st-changed" title="{}">moved from {}</span>"#,
+                        r#"<span class="st st-changed" title="{}">moved from {}</span>"#,
                         esc(from),
                         esc(self.short_path(from_mod))
                     ));
                 }
                 s
+            }
+            Status::Unchanged if self.external(&it.info.id).is_some() => {
+                r#"<span class="st st-unchanged">outside the analyzed crates</span>"#.into()
             }
             Status::Unchanged => {
                 if c.cosmetic {
@@ -349,14 +380,10 @@ impl Data {
         }
     }
 
+    /// The visibility of a module. Other items show it in their signature.
     pub fn vis_html(&self, it: &Item) -> String {
         let i = &it.info;
-        let in_trait_impl = i.kind.is_member()
-            && i.parent
-                .as_deref()
-                .and_then(|p| self.item(p))
-                .is_some_and(|p| p.info.kind == Kind::Impl);
-        if in_trait_impl || i.kind == Kind::TraitMethod {
+        if i.kind != Kind::Mod {
             return String::new();
         }
         let class = if i.vis_label == "pub" {
@@ -386,9 +413,139 @@ impl Data {
 }
 
 impl Data {
-    /// The signature block of an item seen from `scope`. A changed
-    /// signature is shown as a diff against the base version.
+    /// The signature block of an item seen from `scope`, with a bar on the
+    /// left that tells at a glance whether it changed: a changed signature
+    /// is shown as a diff against the base version, an unchanged one is
+    /// shown muted, for reference.
     pub fn sig_html(&self, it: &Item, scope: &str) -> String {
+        let (class, title) = match it.status {
+            Status::Added => ("m-add", "added"),
+            Status::Removed => ("m-del", "removed"),
+            _ if it.changes.signature => ("m-chg", "signature changed"),
+            _ => ("m-ref", "signature unchanged"),
+        };
+        format!(
+            r#"<div class="sigbox {class}" title="{title}">{}</div>"#,
+            self.sig_inner(it, scope)
+        )
+    }
+
+    /// The item's docs, with changes marked. Listings show only the first
+    /// paragraph of unchanged docs (`full: false`).
+    pub fn docs_block_html(&self, it: &Item, full: bool) -> String {
+        use crate::code::{docs_diff_html, docs_html, first_paragraph};
+        let docs = &it.info.docs;
+        if it.status == Status::Changed && it.changes.docs {
+            let old = it.old_docs.as_deref().unwrap_or("");
+            return format!(
+                r#"<div class="docs">{}</div>"#,
+                docs_diff_html(self, old, docs, &it.info.doc_refs)
+            );
+        }
+        let md = if full {
+            docs.as_str()
+        } else {
+            first_paragraph(docs)
+        };
+        if md.trim().is_empty() {
+            return if full {
+                r#"<div class="docs empty">No documentation.</div>"#.to_string()
+            } else {
+                String::new()
+            };
+        }
+        let class = match it.status {
+            Status::Added => "m-add",
+            Status::Removed => "m-del",
+            _ => "",
+        };
+        format!(
+            r#"<div class="docs"><div class="dblk {class}">{}</div></div>"#,
+            docs_html(self, md, &it.info.doc_refs)
+        )
+    }
+
+    /// The item's source as an expandable section, summarized by what
+    /// changed in it. `card`: inside a canvas card, which remembers
+    /// whether it is open.
+    pub fn source_html(&self, it: &Item, open: bool, card: bool) -> String {
+        use crate::code::{Links, code_html};
+        if it.source.is_empty() {
+            return String::new();
+        }
+        let added = it.source.iter().filter(|l| l.0 == '+').count();
+        let removed = it.source.iter().filter(|l| l.0 == '-').count();
+        // Line numbers in the file the item's (head) source comes from.
+        let mut line = it.info.line;
+        let lines: String = it
+            .source
+            .iter()
+            .map(|l| {
+                let class = match l.0 {
+                    '+' => "add",
+                    '-' => "del",
+                    _ => "",
+                };
+                // Removed lines are base code: what their names referred
+                // to is not known here, so they get no links.
+                let code = if l.0 == '-' || it.status == Status::Removed {
+                    code_html(self, &l.1, Links::None)
+                } else {
+                    let links = Links::Source {
+                        line,
+                        refs: &it.info.source_refs,
+                    };
+                    line += 1;
+                    code_html(self, &l.1, links)
+                };
+                format!(
+                    r#"<span class="ln {class}" data-t="{}">{}</span>"#,
+                    if l.0 == ' ' {
+                        String::new()
+                    } else {
+                        l.0.to_string()
+                    },
+                    if code.is_empty() {
+                        " ".to_string()
+                    } else {
+                        code
+                    }
+                )
+            })
+            .collect();
+        let stats =
+            format!(r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>"#);
+        let where_ = format!("{}:{}", esc(&it.info.file), it.info.line);
+        let (class, summary) = match it.status {
+            Status::Changed if it.changes.body => {
+                let what = if it.info.kind.is_callable() {
+                    "Body changed"
+                } else {
+                    "Definition changed"
+                };
+                ("m-chg", format!("<b>{what}</b> {stats} · {where_}"))
+            }
+            Status::Added => ("m-add", format!("<b>Source</b> {stats} · {where_}")),
+            Status::Removed => ("m-del", format!("<b>Removed source</b> {stats} · {where_}")),
+            _ if it.changes.cosmetic => (
+                "",
+                format!("Source {stats} (formatting, comments or imports only) · {where_}"),
+            ),
+            _ if added + removed > 0 => ("", format!("Source {stats} · {where_}")),
+            _ => ("", format!("Source · {where_} · {} lines", it.source.len())),
+        };
+        format!(
+            r#"<details class="src {class}" {} {}><summary>{summary}</summary><pre>{lines}</pre></details>"#,
+            if card {
+                format!(r#"data-src="{}""#, esc(&it.info.id))
+            } else {
+                String::new()
+            },
+            if open { "open" } else { "" },
+        )
+    }
+
+    fn sig_inner(&self, it: &Item, scope: &str) -> String {
         use crate::code::{Links, code_html, sig_diff_html};
         let new = self.sig_for(it, scope);
         let refs = &it.info.sig_refs;

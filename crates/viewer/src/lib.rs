@@ -415,16 +415,30 @@ fn on_mouse_over(app: &mut App, el: &Element) {
         Some(id) => {
             let it = d.item(&id).unwrap();
             html.push_str(&format!(
-                "<div>{} · {}{}</div>",
+                "<div>{} · {}</div>",
                 it.info.kind.label(),
-                d.status_html(it),
-                ""
+                if d.external(&id).is_some() {
+                    "outside the analyzed crates · click for its docs".to_string()
+                } else {
+                    let st = d.status_html(it);
+                    if st.is_empty() {
+                        format!(r#"<span class="st st-{0}">{0}</span>"#, it.status.css())
+                    } else {
+                        st
+                    }
+                }
             ));
             if it.info.kind != model::Kind::Mod {
                 html.push_str(&format!(
                     "<pre>{}</pre>",
                     esc(&it.info.sig.lines().take(6).collect::<Vec<_>>().join("\n"))
                 ));
+            }
+            if d.external(&id).is_some() {
+                let first = code::first_paragraph(&it.info.docs);
+                if !first.is_empty() {
+                    html.push_str(&code::docs_html(&d, first, &Default::default()));
+                }
             }
             canvas::highlight_card_of(app, &id);
         }

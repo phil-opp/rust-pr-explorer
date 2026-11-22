@@ -4,9 +4,12 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, PartialEq, Eq, Debug, Default, Serialize, Deserialize, Hash, PartialOrd, Ord,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum Kind {
+    #[default]
     Mod,
     Struct,
     Enum,
@@ -22,6 +25,8 @@ pub enum Kind {
     Impl,
     AssocConst,
     AssocType,
+    /// An enum variant (only used for items outside the analyzed crates).
+    Variant,
 }
 
 impl Kind {
@@ -58,6 +63,7 @@ impl Kind {
             Kind::TypeAlias | Kind::AssocType => "type",
             Kind::Macro => "macro",
             Kind::Impl => "impl",
+            Kind::Variant => "variant",
         }
     }
 
@@ -79,6 +85,7 @@ impl Kind {
             Kind::Impl => "impl",
             Kind::AssocConst => "assoc_const",
             Kind::AssocType => "assoc_type",
+            Kind::Variant => "variant",
         }
     }
 }
@@ -126,7 +133,7 @@ pub struct Use {
 }
 
 /// Everything known about an item on one side (base or head) of a PR.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ItemInfo {
     pub id: String,
     pub kind: Kind,
@@ -184,12 +191,13 @@ fn is_zero(n: &u32) -> bool {
     *n == 0
 }
 
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum Status {
     Added,
     Removed,
     Changed,
+    #[default]
     Unchanged,
 }
 
@@ -269,7 +277,7 @@ pub struct SigDiff {
 pub struct SourceLine(pub char, pub String);
 
 /// An item as compared between base and head.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Item {
     /// Head data, or base data for removed items.
     #[serde(flatten)]
@@ -309,5 +317,25 @@ pub struct Output {
     /// Crate root ids, the main crate first.
     pub crates: Vec<String>,
     pub items: BTreeMap<String, Item>,
+    /// Items outside the analyzed crates (the standard library and
+    /// dependencies) that the analyzed code names, by the path it uses.
+    #[serde(default)]
+    pub externals: BTreeMap<String, External>,
     pub warnings: Vec<String>,
+}
+
+/// An item outside the analyzed crates, as rust-analyzer describes it.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct External {
+    pub kind: Kind,
+    /// Where it is defined, e.g. `core::result` for `std::result::Result`.
+    pub module: String,
+    pub name: String,
+    /// Its declaration as rust-analyzer shows it (rustdoc style).
+    pub sig: String,
+    /// Doc comment (Markdown); intra-doc links point to the web.
+    pub docs: String,
+    /// Its documentation on docs.rs or doc.rust-lang.org.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }

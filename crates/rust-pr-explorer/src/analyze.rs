@@ -70,10 +70,17 @@ pub struct ItemData {
     pub name_pos: Option<LineCol>,
     #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
     pub call_sites: Vec<CallSite>,
+    /// For each path outside the analyzed crates, where one occurrence
+    /// names it (the position of its last segment).
+    #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
+    pub ext_sites: BTreeMap<String, LineCol>,
 }
 
 pub struct Analysis {
     pub items: BTreeMap<String, ItemData>,
+    /// Items outside the analyzed crates that the code names, as
+    /// rust-analyzer describes them.
+    pub externals: BTreeMap<String, model::External>,
     pub crates: Vec<String>,
     pub warnings: Vec<String>,
 }
@@ -307,6 +314,7 @@ impl Analyzer {
         an.collect_impls();
         let items = an.build_items();
         Analysis {
+            externals: BTreeMap::new(),
             items,
             crates: crate_order,
             warnings: an.warnings,
@@ -1171,7 +1179,7 @@ impl Analyzer {
                             (
                                 attrs,
                                 vis,
-                                strip_body(&unparse(Item::Fn(f))),
+                                wrap_fn_sig(&strip_body(&unparse(Item::Fn(f)))),
                                 body,
                                 Some(span),
                             )
@@ -1353,7 +1361,9 @@ impl Analyzer {
                     body_col.visit_block_mut(&mut block);
                     let shown = shown_attrs(&f.attrs);
                     let vis = &f.vis;
-                    let text = strip_body(&unparse(parse_quote!(#(#shown)* #vis #sig_ {})));
+                    let text = wrap_fn_sig(&strip_body(&unparse(
+                        parse_quote!(#(#shown)* #vis #sig_ {}),
+                    )));
                     (
                         f.attrs.clone(),
                         f.vis.clone(),
@@ -1372,7 +1382,7 @@ impl Analyzer {
                         body_col.visit_block_mut(&mut block);
                         body = norm_block(&block);
                     }
-                    let mut text = strip_body(&unparse(parse_quote!(#sig_ {})));
+                    let mut text = wrap_fn_sig(&strip_body(&unparse(parse_quote!(#sig_ {}))));
                     text.push_str(if f.default.is_some() { " { ... }" } else { ";" });
                     (f.attrs.clone(), parse_quote!(pub), text, body, Some(span))
                 }
@@ -1626,6 +1636,8 @@ impl Analyzer {
             .as_deref()
             .map(|s| sig_link_offsets(kind, s, &sig_col.refs))
             .unwrap_or_default();
+        let mut ext_sites = body_col.ext_sites.clone();
+        ext_sites.extend(sig_col.ext_sites.clone());
         let mut source_refs = sig_col.pos_refs.clone();
         source_refs.extend(body_col.pos_refs.clone());
         let sig_norm = format!("{sig}|{:?}", sig_col.refs);
@@ -1675,6 +1687,7 @@ impl Analyzer {
             source,
             name_pos,
             call_sites: body_col.sites,
+            ext_sites,
         })
     }
 }
@@ -1725,6 +1738,9 @@ struct Collector<'a> {
     in_macro: bool,
     /// Resolved paths by the source position of their first segment.
     pos_refs: BTreeMap<String, Ref>,
+    /// Paths outside the analyzed crates, by the position of their last
+    /// segment.
+    ext_sites: BTreeMap<String, LineCol>,
 }
 
 impl<'a> Collector<'a> {
@@ -1741,6 +1757,7 @@ impl<'a> Collector<'a> {
             sites: Vec::new(),
             in_macro: false,
             pos_refs: BTreeMap::new(),
+            ext_sites: BTreeMap::new(),
         }
     }
 
@@ -1774,6 +1791,15 @@ impl<'a> Collector<'a> {
             if pos.line > 0 {
                 self.pos_refs
                     .insert(format!("{}:{}", pos.line, pos.column), r.clone());
+            }
+        }
+        if r.id.is_none()
+            && !self.in_macro
+            && let Some(last) = path.segments.last()
+        {
+            let pos = last.ident.span().start();
+            if pos.line > 0 {
+                self.ext_sites.entry(r.path.clone()).or_insert(pos.into());
             }
         }
         if self.normalize && start > 0 {
@@ -2326,6 +2352,56 @@ fn unparse_type(ty: &syn::Type) -> String {
 /// `m` is `s` or nested inside it.
 pub fn within(m: &str, s: &str) -> bool {
     m == s || (m.len() > s.len() + 2 && m.starts_with(s) && m[s.len()..].starts_with("::"))
+}
+
+/// Maximum line width of rendered function signatures.
+const SIG_WIDTH: usize = 64;
+
+/// Lays out a function signature the way rustfmt does: on one line if it
+/// fits, otherwise one parameter per line, and a `where` clause with one
+/// predicate per line.
+pub fn wrap_fn_sig(sig: &str) -> String {
+    let Ok(f) = syn::parse_str::<syn::ItemFn>(&format!("{sig} {{}}")) else {
+        return sig.to_string();
+    };
+    let source = format!("{sig} {{}}");
+    let text = |node: &dyn Spanned| -> String {
+        let r = node.span().byte_range();
+        source[r].split_whitespace().collect::<Vec<_>>().join(" ")
+    };
+    let paren = f.sig.paren_token.span;
+    let head = &source[..paren.open().byte_range().end];
+    let params: Vec<String> = f.sig.inputs.iter().map(|a| text(a)).collect();
+    let ret = match &f.sig.output {
+        syn::ReturnType::Default => String::new(),
+        syn::ReturnType::Type(_, ty) => format!(" -> {}", text(&**ty)),
+    };
+    let preds: Vec<String> = f
+        .sig
+        .generics
+        .where_clause
+        .iter()
+        .flat_map(|w| w.predicates.iter().map(|p| text(p)))
+        .collect();
+    let where_block = if preds.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\nwhere\n{}",
+            preds
+                .iter()
+                .map(|p| format!("    {p},"))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+    let one_line = format!("{head}{}){ret}", params.join(", "));
+    let last_line = one_line.rsplit('\n').next().unwrap_or("");
+    if last_line.chars().count() <= SIG_WIDTH || params.is_empty() {
+        return one_line + &where_block;
+    }
+    let params: String = params.iter().map(|p| format!("    {p},\n")).collect();
+    format!("{head}\n{params}){ret}{where_block}")
 }
 
 /// Turns `fn foo() {}` into `fn foo()`.

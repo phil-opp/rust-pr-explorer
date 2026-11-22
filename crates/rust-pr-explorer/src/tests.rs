@@ -331,6 +331,15 @@ fn semantic_calls() {
     .unwrap();
     assert!(stats.functions > 10, "{stats:?}");
     assert_eq!(stats.unresolved_sites, 0, "{stats:?}");
+    // Names from the standard library are described by rust-analyzer,
+    // under the path the code uses for them.
+    let string = &analysis.externals["alloc::string::String"];
+    assert_eq!(string.kind, model::Kind::Struct);
+    assert_eq!(string.module, "alloc::string");
+    assert!(string.sig.starts_with("pub struct String"), "{}", string.sig);
+    assert!(string.docs.starts_with("A UTF-8"), "{}", string.docs);
+    let display = &analysis.externals["std::fmt::Display"];
+    assert_eq!((display.kind, display.module.as_str()), (model::Kind::Trait, "core::fmt"));
     assert_eq!(
         calls(&analysis, "tinycalc::parser::parse"),
         [
@@ -390,4 +399,25 @@ fn checkouts_drop_tool_configuration_and_symlinks() {
     // The originals are untouched.
     assert!(dir.path().join(".cargo/config.toml").is_file());
     assert!(dir.path().join("rust-toolchain.toml").is_file());
+}
+
+#[test]
+fn long_signatures_wrap_like_rustfmt() {
+    let dir = write_crate(&[(
+        "src/lib.rs",
+        "pub struct Expr; pub struct Env; pub struct Error;\n\
+         pub fn evaluate_expression(expression: &Expr, environment: &Env) -> Result<f64, Error> { todo!() }\n\
+         pub fn short(a: u8) -> u8 { a }\n\
+         pub fn bounded<T>(t: T) -> T where T: Clone + Send { t }\n",
+    )]);
+    let out = analyze_dirs(dir.path(), dir.path());
+    assert_eq!(
+        out.items["t::evaluate_expression"].info.sig,
+        "pub fn evaluate_expression(\n    expression: &Expr,\n    environment: &Env,\n) -> Result<f64, Error>"
+    );
+    assert_eq!(out.items["t::short"].info.sig, "pub fn short(a: u8) -> u8");
+    assert_eq!(
+        out.items["t::bounded"].info.sig,
+        "pub fn bounded<T>(t: T) -> T\nwhere\n    T: Clone + Send,"
+    );
 }

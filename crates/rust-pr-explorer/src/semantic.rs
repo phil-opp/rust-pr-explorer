@@ -14,10 +14,10 @@
 use crate::analyze::{Analysis, LineCol};
 use crate::source::Trust;
 use anyhow::{Context, Result};
-use model::{Call, Ref};
+use model::{Call, External, Kind, Ref};
 use ra_ap_ide::{
-    AnalysisHost, CallHierarchyConfig, FilePosition, GotoDefinitionConfig, NavigationTarget,
-    TextSize,
+    AnalysisHost, CallHierarchyConfig, FilePosition, FileRange, GotoDefinitionConfig, HoverConfig,
+    HoverDocFormat, NavigationTarget, SubstTyLen, SymbolKind, TextRange, TextSize,
 };
 use ra_ap_ide_db::ra_fixture::RaFixtureConfig;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
@@ -37,6 +37,8 @@ pub struct Stats {
     pub resolved_sites: usize,
     /// Call sites it could not resolve either.
     pub unresolved_sites: usize,
+    /// Items outside the analyzed crates it described.
+    pub externals: usize,
 }
 
 /// What a call site refers to.
@@ -192,8 +194,164 @@ pub fn refine(
                 .uses
                 .retain(|u| !calls.iter().any(|c| c.to == u.to));
         }
+        describe_externals(&ra, &vfs, &root, &mut texts, analysis, &goto_config);
     }
+    stats.externals = analysis.externals.len();
     Ok(stats)
+}
+
+/// Describes the items outside the analyzed crates that the code names
+/// (the standard library and dependencies): rust-analyzer's hover at one
+/// place that names each of them gives its declaration and docs. Only
+/// what the analyzed code refers to is looked up, not whole crates.
+fn describe_externals(
+    ra: &ra_ap_ide::Analysis,
+    vfs: &Vfs,
+    root: &Path,
+    texts: &mut Texts,
+    analysis: &mut Analysis,
+    goto_config: &GotoDefinitionConfig,
+) {
+    let config = HoverConfig {
+        links_in_hover: true,
+        memory_layout: None,
+        documentation: true,
+        keywords: false,
+        format: HoverDocFormat::Markdown,
+        max_trait_assoc_items_count: Some(12),
+        max_fields_count: Some(12),
+        max_enum_variants_count: Some(12),
+        max_subst_ty_len: SubstTyLen::Hide,
+        show_drop_glue: false,
+        ra_fixture: RaFixtureConfig::default(),
+    };
+    // One place in the code per external path.
+    let mut sites: BTreeMap<String, (String, LineCol)> = BTreeMap::new();
+    for item in analysis.items.values() {
+        for (path, pos) in &item.ext_sites {
+            sites
+                .entry(path.clone())
+                .or_insert_with(|| (item.info.file.clone(), *pos));
+        }
+    }
+    for (path, (rel, pos)) in sites {
+        if analysis.externals.contains_key(&path) {
+            continue;
+        }
+        let Some(file_id) = file_id(vfs, &root.join(&rel)) else {
+            continue;
+        };
+        let Some(text) = texts.get(root, &rel) else {
+            continue;
+        };
+        let offset = TextSize::from(to_offset(text, pos) as u32);
+        let position = FilePosition { file_id, offset };
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let nav = ra.goto_definition(position, goto_config).ok()??;
+            let [nav] = nav.info.as_slice() else {
+                return None;
+            };
+            let hover = ra
+                .hover(
+                    &config,
+                    FileRange {
+                        file_id,
+                        range: TextRange::empty(offset),
+                    },
+                )
+                .ok()??;
+            let url = ra
+                .external_docs(position, None, None)
+                .ok()
+                .and_then(|l| l.web_url);
+            Some((nav.clone(), hover.info.markup.as_str().to_string(), url))
+        }));
+        let Ok(Some((nav, markup, url))) = result else {
+            continue;
+        };
+        if let Some(ext) = external_from(&path, &nav, &markup, url) {
+            analysis.externals.insert(path, ext);
+        }
+    }
+}
+
+/// Builds the description of `path` from rust-analyzer's answers, if they
+/// are about the item the analysis means by `path`.
+fn external_from(
+    path: &str,
+    nav: &NavigationTarget,
+    markup: &str,
+    url: Option<String>,
+) -> Option<External> {
+    let kind = match nav.kind? {
+        SymbolKind::Module | SymbolKind::CrateRoot => Kind::Mod,
+        SymbolKind::Struct => Kind::Struct,
+        SymbolKind::Enum => Kind::Enum,
+        SymbolKind::Union => Kind::Union,
+        SymbolKind::Trait => Kind::Trait,
+        SymbolKind::TypeAlias => Kind::TypeAlias,
+        SymbolKind::Function => Kind::Fn,
+        SymbolKind::Method => Kind::Method,
+        SymbolKind::Const => Kind::Const,
+        SymbolKind::Static => Kind::Static,
+        SymbolKind::Macro => Kind::Macro,
+        SymbolKind::Variant => Kind::Variant,
+        _ => return None,
+    };
+    let (module, sig, docs) = parse_hover(markup)?;
+    let name = nav.name.to_string();
+    // The same item: same name, and from the same crate (the standard
+    // library re-exports `core` and `alloc` as `std`).
+    let (path_crate, path_name) = (path.split("::").next()?, path.rsplit("::").next()?);
+    let module_crate = module.split("::").next()?;
+    let std = |c: &str| matches!(c, "std" | "core" | "alloc");
+    let same_crate = path_crate == module_crate || (std(path_crate) && std(module_crate));
+    if name != path_name || !same_crate {
+        return None;
+    }
+    // Functions are laid out like the analyzed ones; an associated
+    // function's hover starts with its impl header.
+    let sig = match (kind, sig.split_once('\n')) {
+        (Kind::Fn | Kind::Method, Some((header, f))) if header.starts_with("impl") => {
+            format!("{header}\n{}", crate::analyze::wrap_fn_sig(f))
+        }
+        (Kind::Fn | Kind::Method, _) => crate::analyze::wrap_fn_sig(&sig),
+        _ => sig,
+    };
+    Some(External {
+        kind,
+        module,
+        name,
+        sig,
+        docs,
+        url,
+    })
+}
+
+/// Splits rust-analyzer's hover text: the module path, the declaration
+/// and the docs.
+fn parse_hover(markup: &str) -> Option<(String, String, String)> {
+    const OPEN: &str = "```rust\n";
+    const CLOSE: &str = "\n```";
+    let block = |s: &str| -> Option<(String, usize)> {
+        let rest = s.strip_prefix(OPEN)?;
+        let end = rest.find(CLOSE)?;
+        Some((rest[..end].to_string(), OPEN.len() + end + CLOSE.len()))
+    };
+    let markup = markup.trim_start();
+    let (first, used) = block(markup)?;
+    let rest = &markup[used..];
+    let (module, sig, rest) = match rest.strip_prefix("\n\n").and_then(block) {
+        Some((sig, used2)) => (first, sig, &rest[2 + used2..]),
+        None => return None,
+    };
+    // A horizontal rule separates the docs.
+    let docs = ["\n---\n", "\n___\n"]
+        .iter()
+        .filter_map(|rule| rest.find(rule).map(|i| i + rule.len()))
+        .min()
+        .map_or(String::new(), |i| rest[i..].trim().to_string());
+    Some((module, sig, docs))
 }
 
 /// The analyzed item a navigation target points at, by its name position.
@@ -294,6 +452,21 @@ fn to_linecol(text: &str, offset: u32) -> LineCol {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hover_text_is_split() {
+        let markup = "\n```rust\ncore::result\n```\n\n```rust\npub enum Result<T, E> {\n    Ok(T),\n}\n```\n\n---\n\n`Result` is a type.";
+        assert_eq!(
+            parse_hover(markup),
+            Some((
+                "core::result".into(),
+                "pub enum Result<T, E> {\n    Ok(T),\n}".into(),
+                "`Result` is a type.".into()
+            ))
+        );
+        // Without a module path it is not an item.
+        assert_eq!(parse_hover("```rust\nlet x: u8\n```"), None);
+    }
 
     #[test]
     fn offsets_round_trip() {
