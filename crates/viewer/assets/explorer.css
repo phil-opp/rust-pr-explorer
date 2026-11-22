@@ -157,7 +157,7 @@ code { font-size: .92em; }
 .sig { margin: 0; padding: 8px 10px; background: var(--bg-code); border-radius: 4px; white-space: pre; overflow-x: auto; }
 /* Change markers: a bar on the left of what changed. */
 /* A run of neighboring parts that changed the same way shares one bar. */
-.mark { border-left: 3px solid transparent; padding-left: 7px; margin-left: -10px; display: flex; flex-direction: column; gap: 6px; }
+.mark { border-left: 3px solid transparent; padding-left: 7px; margin-left: -10px; display: flex; flex-direction: column; gap: 10px; }
 /* Each marker differs in line style too, not only in color:
    added = solid, removed = dashed, changed = dotted. */
 .m-add { border-left: 3px solid var(--added) !important; }
@@ -303,7 +303,16 @@ a.ref:hover { text-decoration: underline; }
 .card-h .x { cursor: pointer; color: var(--muted); padding: 0 4px; font-size: 16px; line-height: 1; }
 .card-h .x:hover { color: var(--removed); }
 .card-loc { padding: 0 10px; font: 12px var(--mono); color: var(--muted); }
-.card-b { padding: 6px 10px 10px; display: flex; flex-direction: column; gap: 6px; }
+/* Card sections: definition and docs, body (source), members, footer. */
+.card-b { padding: 6px 10px 12px; display: flex; flex-direction: column; gap: 10px; }
+.card > .members { padding: 8px 10px 10px; border-top: 1px solid var(--border); }
+.card-foot { padding: 8px 10px; border-top: 1px solid var(--border); background: var(--panel); border-radius: 0 0 8px 8px; display: flex; flex-direction: column; gap: 6px; }
+.card-b details.src, .card-b .src-small, .irow details.src, .irow .src-small { border-top: 1px solid var(--border); padding-top: 8px; }
+.src-sum { font-size: 12.5px; color: var(--muted); margin: 0 0 4px; }
+.src-small.src-chg .src-sum b { color: var(--changed); }
+.src-small pre, .src-small .sbs { margin-top: 0; }
+.src .ln.skip, .src-small .ln.skip, .sbs .skip { color: var(--muted); text-align: center; }
+.sbs .skip { grid-column: 1 / -1; }
 .card-impl { font: 12px var(--mono); color: var(--muted); }
 .card-acts { display: flex; gap: 4px; flex-wrap: wrap; }
 .card-acts button { font-size: 12px; padding: 1px 7px; }
@@ -354,7 +363,7 @@ a.ref:hover { text-decoration: underline; }
 .sig-block { display: flex; flex-direction: column; gap: 4px; }
 .sig-lines { display: flex; align-items: stretch; background: var(--bg-code); border-radius: 4px; overflow-x: auto; }
 .sig-lines .sig { white-space: pre; overflow: visible; background: none; padding-left: 4px; }
-.sig-gutter { margin: 0; padding: 8px 0 8px 6px; color: var(--muted); user-select: none; font-size: 13.5px; }
+.sig-gutter { margin: 0; padding: 8px 0 8px 6px; color: var(--muted); user-select: none; font-family: var(--code-font); font-size: var(--code-size); }
 .sig-gutter .ma { color: var(--added); font-weight: 600; }
 .sig-gutter .mr { color: var(--removed); font-weight: 600; }
 .sig-gutter .mc { color: var(--changed); font-weight: 600; }
@@ -412,3 +421,4 @@ button.mini { font: inherit; font-size: 12px; padding: 1px 8px; }
 details.private-def > summary { cursor: pointer; font-size: 12.5px; color: var(--muted); margin: 2px 0; }
 details.private-def > summary b { color: var(--changed); font-weight: 600; }
 details.private-def .sigbox { margin-top: 4px; }
+.src-small details.src { border-top: none !important; padding-top: 0 !important; }

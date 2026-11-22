@@ -637,8 +637,7 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         {tabs}
         <div class="card-h"><span class="kind">{}</span>{} {}<span class="grow"></span>{}<span class="x" data-close="{}" title="Close">×</span></div>
         <div class="card-loc">{}</div>
-        <div class="card-b">{impl_header}{body}{}{members}{}{}
-          <div class="card-acts">{acts}</div></div></div>"#,
+        <div class="card-b">{impl_header}{body}{}</div>{members}{}</div>"#,
         it.status.css(),
         g.gid,
         g.x,
@@ -665,22 +664,32 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
             esc(&d.mod_label(d.mod_of(it)))
         },
         external.unwrap_or_default(),
-        if it.info.unresolved_calls > 0 {
-            let n = it.info.unresolved_calls;
-            let why = if d.out.meta.resolution.starts_with("rust-analyzer") {
-                "rust-analyzer could not determine their targets"
+        {
+            // Footer: what is not shown, and what can be opened next.
+            let notes = (if it.info.unresolved_calls > 0 {
+                let n = it.info.unresolved_calls;
+                let why = if d.out.meta.resolution.starts_with("rust-analyzer") {
+                    "rust-analyzer could not determine their targets"
+                } else {
+                    "method calls and calls inside macros need rust-analyzer"
+                };
+                format!(
+                    r#"<div class="hidden-note">{n} call site{} not resolved ({why}), so not shown as {}.</div>"#,
+                    if n > 1 { "s" } else { "" },
+                    if n > 1 { "calls" } else { "a call" }
+                )
             } else {
-                "method calls and calls inside macros need rust-analyzer"
-            };
-            format!(
-                r#"<div class="hidden-note">{n} call site{} not resolved ({why}), so not shown as {}.</div>"#,
-                if n > 1 { "s" } else { "" },
-                if n > 1 { "calls" } else { "a call" }
-            )
-        } else {
-            String::new()
-        } + &hidden_note(d, scope, &callees, "callees are"),
-        hidden_note(d, scope, &callers, "callers are"),
+                String::new()
+            } + &hidden_note(d, scope, &callees, "callees are")
+                + &hidden_note(d, scope, &callers, "callers are"));
+            if notes.is_empty() && acts.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    r#"<div class="card-foot">{notes}<div class="card-acts">{acts}</div></div>"#
+                )
+            }
+        },
     )
 }
 

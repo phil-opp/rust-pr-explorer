@@ -740,48 +740,87 @@ impl Data {
         };
         let old_code = |o: usize| code_html(self, old[o], Links::None);
         let nonempty = |s: String| if s.is_empty() { " ".to_string() } else { s };
-        let lines: String = if split {
-            let cells: String = rows
-                .iter()
-                .map(|&(o, n)| {
-                    let same = matches!((o, n), (Some(a), Some(b)) if ok[a] == nk[b]);
-                    let cell = |idx: Option<usize>, start: usize, class: &str, code: &dyn Fn(usize) -> String| match idx {
-                        Some(i) => format!(
-                            r#"<span class="no">{}</span><span class="ln {}" data-t="{}">{}</span>"#,
-                            start + i,
-                            if same { "" } else { class },
-                            if same { "" } else if class == "del" { "-" } else { "+" },
-                            nonempty(code(i))
-                        ),
-                        None => r#"<span class="no"></span><span class="ln gap"> </span>"#.to_string(),
-                    };
-                    cell(o, old_start, "del", &old_code) + &cell(n, new_start, "add", &new_code)
-                })
-                .collect();
-            format!(r#"<div class="sbs">{cells}</div>"#)
-        } else {
-            let body: String = rows
-                .iter()
-                .map(|&(o, n)| {
-                    let (class, tag, no, code) = match (o, n) {
-                        (_, Some(b)) if o.is_some() => ("", ' ', new_start + b, new_code(b)),
-                        (None, Some(b)) => ("add", '+', new_start + b, new_code(b)),
-                        (Some(a), _) => ("del", '-', old_start + a, old_code(a)),
-                        (None, None) => unreachable!(),
-                    };
-                    format!(
-                        r#"<span class="ln {class}" data-t="{}" data-no="{no}">{}</span>"#,
-                        if tag == ' ' {
-                            String::new()
-                        } else {
-                            tag.to_string()
-                        },
-                        nonempty(code)
-                    )
-                })
-                .collect();
-            format!("<pre>{body}</pre>")
+        let changed_row = |&(o, n): &(Option<usize>, Option<usize>)| match (o, n) {
+            (Some(a), Some(b)) => ok[a] != nk[b],
+            _ => true,
         };
+        // Renders the rows given by index; `None` stands for skipped
+        // unchanged lines.
+        let render = |sel: &[Option<usize>]| -> String {
+            if split {
+                let cells: String = sel
+                    .iter()
+                    .map(|r| {
+                        let Some(&(o, n)) = r.map(|r| &rows[r]) else {
+                            return r#"<span class="skip">⋯</span>"#.to_string();
+                        };
+                        let same = matches!((o, n), (Some(a), Some(b)) if ok[a] == nk[b]);
+                        let cell = |idx: Option<usize>, start: usize, class: &str, code: &dyn Fn(usize) -> String| match idx {
+                            Some(i) => format!(
+                                r#"<span class="no">{}</span><span class="ln {}" data-t="{}">{}</span>"#,
+                                start + i,
+                                if same { "" } else { class },
+                                if same { "" } else if class == "del" { "-" } else { "+" },
+                                nonempty(code(i))
+                            ),
+                            None => r#"<span class="no"></span><span class="ln gap"> </span>"#.to_string(),
+                        };
+                        cell(o, old_start, "del", &old_code) + &cell(n, new_start, "add", &new_code)
+                    })
+                    .collect();
+                format!(r#"<div class="sbs">{cells}</div>"#)
+            } else {
+                let body: String = sel
+                    .iter()
+                    .map(|r| {
+                        let Some(&(o, n)) = r.map(|r| &rows[r]) else {
+                            return r#"<span class="ln skip">⋯</span>"#.to_string();
+                        };
+                        let (class, tag, no, code) = match (o, n) {
+                            (_, Some(b)) if o.is_some() => ("", ' ', new_start + b, new_code(b)),
+                            (None, Some(b)) => ("add", '+', new_start + b, new_code(b)),
+                            (Some(a), _) => ("del", '-', old_start + a, old_code(a)),
+                            (None, None) => unreachable!(),
+                        };
+                        format!(
+                            r#"<span class="ln {class}" data-t="{}" data-no="{no}">{}</span>"#,
+                            if tag == ' ' {
+                                String::new()
+                            } else {
+                                tag.to_string()
+                            },
+                            nonempty(code)
+                        )
+                    })
+                    .collect();
+                format!("<pre>{body}</pre>")
+            }
+        };
+        let all: Vec<Option<usize>> = (0..rows.len()).map(Some).collect();
+        let lines = render(&all);
+        // A small change is shown right away: the changed lines with two
+        // lines of context, the rest behind "whole source".
+        const SMALL: usize = 4;
+        const CONTEXT: usize = 2;
+        let small = it.status == Status::Changed
+            && it.changes.body
+            && (1..=SMALL).contains(&(added + removed));
+        let hunks = small.then(|| {
+            let near = |i: usize| {
+                rows[i.saturating_sub(CONTEXT)..(i + CONTEXT + 1).min(rows.len())]
+                    .iter()
+                    .any(changed_row)
+            };
+            let mut sel: Vec<Option<usize>> = Vec::new();
+            for i in 0..rows.len() {
+                if near(i) {
+                    sel.push(Some(i));
+                } else if sel.last() != Some(&None) {
+                    sel.push(None);
+                }
+            }
+            render(&sel)
+        });
         let stats = format!(
             r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>{}"#,
             if opts.ignore_ws {
@@ -809,6 +848,19 @@ impl Data {
             _ if added + removed > 0 => ("", format!("Source {stats} · {where_}")),
             _ => ("", format!("Source · {where_} · {} lines", it.source.len())),
         };
+        let data_src = if card {
+            format!(r#"data-src="{}""#, esc(&it.info.id))
+        } else {
+            String::new()
+        };
+        if let Some(hunks) = hunks {
+            let html = format!(
+                r#"<div class="src src-small src-chg"><div class="src-sum">{summary}</div>{hunks}<details class="src" {data_src} {}><summary>whole source ({} lines)</summary>{lines}</details></div>"#,
+                if open { "open" } else { "" },
+                it.source.len()
+            );
+            return Some(Seg::new(class, html));
+        }
         let html = format!(
             r#"<details class="src {}" {} {}><summary>{summary}</summary>{lines}</details>"#,
             // The marker is drawn around it; this only colors the summary.

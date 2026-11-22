@@ -600,7 +600,9 @@ pub fn structured_diff_html(
                         '~' => "c",
                         _ => "n",
                     },
-                    m
+                    // A line changed in place is shown by the marks in
+                    // it; the gutter only flags whole lines.
+                    if *m == '~' { ' ' } else { *m }
                 )
             })
             .collect::<Vec<_>>()
@@ -1579,5 +1581,43 @@ mod tests {
         let html = d.item_body_html(it, "c", true, d.source_seg(it, false, true));
         assert_eq!(html.matches("class=\"mark").count(), 1, "{html}");
         assert!(html.starts_with(r#"<div class="mark m-add">"#), "{html}");
+    }
+
+    #[test]
+    fn small_body_changes_are_shown_directly() {
+        use model::{Item, SourceLine, Status};
+        let d = empty();
+        let mut it = Item {
+            status: Status::Changed,
+            ..Default::default()
+        };
+        it.changes.body = true;
+        it.info.kind = model::Kind::Fn;
+        it.info.line = 1;
+        it.old_line = Some(1);
+        let mut lines: Vec<SourceLine> =
+            (0..12).map(|i| SourceLine(' ', format!("l{i};"))).collect();
+        lines.insert(6, SourceLine('-', "old();".into()));
+        lines.insert(7, SourceLine('+', "new();".into()));
+        it.source = lines.clone();
+        let html = d.source_html(&it, false, true);
+        // The hunk with two lines of context comes first, outside the
+        // collapsed whole source; skipped lines are marked.
+        let (hunk, whole) = html.split_once("<details").unwrap();
+        assert!(hunk.contains("old();") && hunk.contains("new();"), "{hunk}");
+        assert!(hunk.contains("l4;") && hunk.contains("l7;"), "{hunk}");
+        assert!(!hunk.contains("l2;") && !hunk.contains("l9;"), "{hunk}");
+        assert_eq!(hunk.matches("⋯").count(), 2, "{hunk}");
+        assert!(whole.contains("l0;"), "{whole}");
+        // Five changed lines or more: collapsed as before.
+        for k in 0..3 {
+            lines.insert(1, SourceLine('+', format!("more{k}();")));
+        }
+        it.source = lines;
+        let html = d.source_html(&it, false, true);
+        assert!(
+            html.starts_with("<div class=\"mark m-chg\"><details"),
+            "{html}"
+        );
     }
 }
