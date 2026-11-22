@@ -171,12 +171,11 @@ struct Res {
 
 pub struct Analyzer {
     root: PathBuf,
-    /// The canonical root and the files loaded so far (canonical), so that
-    /// no file outside the checkout is read and no file is loaded twice
-    /// (`#[path]` cycles).
+    /// The canonical root, so that no file outside the checkout is read.
     canonical_root: PathBuf,
-    /// Per (crate, canonical file): the module id it was loaded as.
-    loaded: HashMap<(String, PathBuf), String>,
+    /// Per (crate, canonical file): the module ids it was loaded as, so
+    /// that a `#[path]` cycle (a file inside its own module) ends.
+    loaded: HashMap<(String, PathBuf), Vec<String>>,
     /// Name lookups, memoized (see `lookup_name`).
     lookup_memo: std::cell::RefCell<HashMap<LookupKey, Option<Res>>>,
     lookup_active: std::cell::RefCell<std::collections::HashSet<LookupKey>>,
@@ -346,10 +345,11 @@ impl Analyzer {
     }
 
     /// Reads and parses a source file for module `id`. Files outside the
-    /// checkout are refused, and so is a file its crate already loaded as
-    /// another module (a `#[path]` cycle); other crates may include the
-    /// same file. The error's flag is set when the file is the same
-    /// module, declared again (under another `cfg`).
+    /// checkout are refused, and so is a file that an enclosing module of
+    /// `id` was loaded from (a `#[path]` cycle). A file may be included as
+    /// several unrelated modules, like rustc allows. The error's flag is
+    /// set when the file is the same module, declared again (under another
+    /// `cfg`).
     fn load_file(
         &mut self,
         path: &Path,
@@ -364,25 +364,28 @@ impl Analyzer {
             ));
         }
         let key = (Self::crate_of(id).to_string(), canonical);
-        if let Some(first) = self.loaded.get(&key) {
-            return Err(if first == id {
-                (
-                    format!(
-                        "module `{id}` is declared more than once (under different `cfg`s); the first declaration is used"
-                    ),
-                    true,
-                )
-            } else {
-                (
-                    format!(
-                        "{} is already loaded as module `{first}` (a `#[path]` cycle?); not read again",
-                        path.display()
-                    ),
-                    false,
-                )
-            });
+        let ids = self.loaded.entry(key).or_default();
+        if ids.iter().any(|first| first == id) {
+            return Err((
+                format!(
+                    "module `{id}` is declared more than once (under different `cfg`s); the first declaration is used"
+                ),
+                true,
+            ));
         }
-        self.loaded.insert(key, id.to_string());
+        if let Some(outer) = ids
+            .iter()
+            .find(|first| id.starts_with(&format!("{first}::")))
+        {
+            return Err((
+                format!(
+                    "{} is included inside itself (module `{outer}` through a `#[path]`); not read again",
+                    path.display()
+                ),
+                false,
+            ));
+        }
+        ids.push(id.to_string());
         let text = std::fs::read_to_string(path)
             .map_err(|e| (format!("cannot read {}: {e}", path.display()), false))?;
         let file = syn::parse_file(&text)

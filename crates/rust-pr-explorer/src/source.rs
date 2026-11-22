@@ -64,8 +64,9 @@ impl Checkout {
         let head_dir = temp.path().join("head");
         copy_tree(base, &base_dir)?;
         copy_tree(head, &head_dir)?;
-        // From the originals: the copies have no symlinks.
-        let files = crate::files::changed_files(base, head);
+        // From the originals: the copies have no symlinks. Without what
+        // `copy_tree` leaves out, too.
+        let files = crate::files::changed_files(base, head, crate::files::BUILD_DIRS);
         sanitize(&base_dir, trust)?;
         sanitize(&head_dir, trust)?;
         Ok(Checkout {
@@ -81,13 +82,18 @@ impl Checkout {
         })
     }
 
-    /// Exports two revisions of a local git repository.
+    /// Checks out two revisions of a local git repository. `repo` may be a
+    /// subdirectory of the repository: then only that subdirectory is
+    /// analyzed and listed.
     pub fn from_git(repo: &Path, base: &str, head: &str, trust: Trust) -> Result<Self> {
         let temp = tempfile::tempdir()?;
         let base_rev = rev_parse(repo, base)?;
         let head_rev = rev_parse(repo, head)?;
-        let base_dir = temp.path().join("base");
-        let head_dir = temp.path().join("head");
+        // `git clone` needs the top-level directory.
+        let top = git_output(repo, &["rev-parse", "--show-toplevel"])?;
+        let prefix = git_output(repo, &["rev-parse", "--show-prefix"])?;
+        let base_tree = temp.path().join("base");
+        let head_tree = temp.path().join("head");
         // A worktree of a shared clone: unlike `git archive`, it doesn't
         // apply the commit's `export-ignore` attributes, which a PR could
         // use to hide files; and the user's repository is not modified.
@@ -99,11 +105,11 @@ impl Checkout {
                 "--quiet",
                 "--shared",
                 "--no-checkout",
-                repo.to_str().context("repository path is not UTF-8")?,
-                clone.to_str().unwrap(),
+                &top,
+                clone.to_str().context("temporary path is not UTF-8")?,
             ],
         )?;
-        for (rev, dir) in [(&base_rev, &base_dir), (&head_rev, &head_dir)] {
+        for (rev, dir) in [(&base_rev, &base_tree), (&head_rev, &head_tree)] {
             run_git(
                 Some(&clone),
                 &[
@@ -116,13 +122,24 @@ impl Checkout {
                 ],
             )?;
         }
-        let files = crate::files::changed_files(&base_dir, &head_dir);
-        sanitize(&base_dir, trust)?;
-        sanitize(&head_dir, trust)?;
+        let (base_dir, head_dir) = (base_tree.join(&prefix), head_tree.join(&prefix));
+        for dir in [&base_dir, &head_dir] {
+            // The subdirectory may not exist in one of the revisions.
+            std::fs::create_dir_all(dir)?;
+        }
+        let files = crate::files::changed_files(&base_dir, &head_dir, &[]);
+        // The whole trees: cargo and rustup also read configuration from
+        // directories above the analyzed one.
+        sanitize(&base_tree, trust)?;
+        sanitize(&head_tree, trust)?;
+        let within = match prefix.trim_end_matches('/') {
+            "" => String::new(),
+            p => format!(" in {p}"),
+        };
         Ok(Checkout {
             base_dir,
             head_dir,
-            title: format!("{base} → {head}"),
+            title: format!("{base} → {head}{within}"),
             base_label: format!("{base} ({})", short(&base_rev)),
             head_label: format!("{head} ({})", short(&head_rev)),
             url: None,
@@ -224,7 +241,7 @@ impl Checkout {
                 ],
             )?;
         }
-        let files = crate::files::changed_files(&base_dir, &head_dir);
+        let files = crate::files::changed_files(&base_dir, &head_dir, &[]);
         sanitize(&base_dir, trust)?;
         sanitize(&head_dir, trust)?;
         Ok(Checkout {
@@ -423,7 +440,10 @@ fn copy_tree(from: &Path, to: &Path) -> Result<()> {
         let path = entry.path();
         let file_type = entry.file_type()?;
         if file_type.is_dir() {
-            if matches!(name.to_str(), Some("target" | ".git" | "node_modules")) {
+            if name
+                .to_str()
+                .is_some_and(|n| n == ".git" || crate::files::BUILD_DIRS.contains(&n))
+            {
                 continue;
             }
             copy_tree(&path, &to.join(&name))?;

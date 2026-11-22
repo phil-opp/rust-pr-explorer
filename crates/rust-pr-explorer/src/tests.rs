@@ -587,7 +587,24 @@ fn files_outside_the_checkout_are_not_read() {
     let warnings = analysis.warnings.join("\n");
     assert!(warnings.contains("outside the checkout"), "{warnings}");
     // `#[path = "lib.rs"]` inside lib.rs: refused, no endless recursion.
-    assert!(warnings.contains("already loaded"), "{warnings}");
+    assert!(warnings.contains("included inside itself"), "{warnings}");
+}
+
+#[test]
+fn one_file_as_two_modules() {
+    // rustc accepts this: two unrelated modules from one file.
+    let dir = write_crate(&[
+        (
+            "src/lib.rs",
+            "#[path = \"common.rs\"]\npub mod a;\n#[path = \"common.rs\"]\npub mod b;\n",
+        ),
+        ("src/common.rs", "pub fn shared() {}\n"),
+    ]);
+    let crates = crate::source::find_crates(dir.path());
+    let analysis = Analyzer::run(dir.path(), &crates);
+    assert!(analysis.items.contains_key("t::a::shared"));
+    assert!(analysis.items.contains_key("t::b::shared"));
+    assert!(analysis.warnings.is_empty(), "{:?}", analysis.warnings);
 }
 
 #[test]
@@ -680,6 +697,44 @@ fn git_checkouts_list_and_remove_what_they_must() {
         .find(|f| f.path == "src/leak.rs")
         .unwrap();
     assert_eq!(leak.hunks[1].1, "symbolic link to /etc/hostname");
+
+    // A subdirectory of the repository: only it is analyzed and listed,
+    // and configuration above it is still removed.
+    let sub = crate::source::Checkout::from_git(
+        &dir.path().join("src"),
+        "HEAD~1",
+        "HEAD",
+        Trust::Untrusted,
+    )
+    .unwrap();
+    assert!(sub.head_dir.join("hidden.rs").is_file());
+    assert!(
+        !sub.head_dir
+            .parent()
+            .unwrap()
+            .join(".cargo/config.toml")
+            .exists()
+    );
+    let listed: Vec<&str> = sub.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(listed, ["hidden.rs", "leak.rs", "lib.rs"]);
+    assert!(sub.title.ends_with(" in src"), "{}", sub.title);
+}
+
+/// In `dirs` mode, build output and downloaded packages are neither copied
+/// nor listed.
+#[test]
+fn dirs_checkouts_skip_build_output() {
+    let base = write_crate(&[("src/lib.rs", "pub fn f() {}\n")]);
+    let head = write_crate(&[
+        ("src/lib.rs", "pub fn f() {}\npub fn g() {}\n"),
+        ("target/debug/demo.d", "x\n"),
+        ("node_modules/x/i.js", "x\n"),
+        ("sub/target/out.txt", "x\n"),
+    ]);
+    let checkout =
+        crate::source::Checkout::from_dirs(base.path(), head.path(), Trust::Untrusted).unwrap();
+    let listed: Vec<&str> = checkout.files.iter().map(|f| f.path.as_str()).collect();
+    assert_eq!(listed, ["src/lib.rs"]);
 }
 
 #[test]
@@ -781,6 +836,10 @@ fn renamed_modules_keep_their_items() {
             Some(id.replacen("::new::", "::old::", 1).as_str()),
             "{id}"
         );
+        // Only moved: references to items that moved along are no change.
+        let c = &it.changes;
+        assert!(!c.signature && !c.body && !c.docs, "{id}: {c:?}");
+        assert!(it.sig_diff.is_none(), "{id}");
     }
     assert!(
         !out.items

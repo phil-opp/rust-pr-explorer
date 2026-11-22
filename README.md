@@ -34,6 +34,8 @@ All commands write `pr-explorer.html` (change it with `-o`). Open that file in a
 
 In a sandboxed environment, `--trust-project-code` (or `RUST_PR_EXPLORER_TRUST_PROJECT_CODE=1`) lets rust-analyzer run the project's build scripts and procedural macros. It then also resolves calls involving generated code, such as types from `include!(concat!(env!("OUT_DIR"), …))` or items produced by proc macros. See [Safety](#safety).
 
+For `git`, the path may also be a subdirectory of the repository; then only that subdirectory is analyzed and listed. For `dirs`, `target/` and `node_modules/` directories are skipped.
+
 For `pr`, the repository is cloned without file contents (`--filter=blob:none`), and only the two revisions being compared are checked out. If the GitHub CLI (`gh`) is installed and logged in, `gh pr view` supplies the PR's title, its base branch and its own branch; the page header then shows the repository, PR number and title, `base-branch @ commit ← pr-branch @ commit`. Without `gh`, the title and PR branch are left out. Without `--base`, the base is the merge base of the PR head and the PR's base branch (without `gh`: the default branch). For a PR that was already merged with a merge commit, the base is the state just before that merge.
 
 The demo in `fixtures/demo` is a small calculator crate. Its "PR" adds variables (a new `env` module, a changed `evaluate` signature, new error variants), moves a helper between modules, re-exports `ast::Op` at the crate root and drops the root re-export of `parser::Parser`, extends one doc comment (shown as a word diff), and changes some import styles and formatting. That last part does not show up as a change.

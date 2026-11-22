@@ -11,11 +11,17 @@ const MAX_BYTES: u64 = 1 << 20;
 /// Lines of context around changes.
 const CONTEXT: usize = 3;
 
+/// Directories of build output and downloaded packages. A plain directory
+/// usually has them; they are neither copied nor listed (see
+/// [`changed_files`]).
+pub const BUILD_DIRS: &[&str] = &["target", "node_modules"];
+
 /// All regular files and symlinks under `root`, by path relative to it,
-/// except version control data. Symlinks are not followed.
-fn files(root: &Path) -> BTreeSet<String> {
+/// except version control data and directories named in `skip`. Symlinks
+/// are not followed.
+fn files(root: &Path, skip: &[&str]) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
-    fn walk(root: &Path, dir: &Path, out: &mut BTreeSet<String>) {
+    fn walk(root: &Path, dir: &Path, skip: &[&str], out: &mut BTreeSet<String>) {
         let Ok(entries) = std::fs::read_dir(dir) else {
             return;
         };
@@ -27,7 +33,9 @@ fn files(root: &Path) -> BTreeSet<String> {
                 continue;
             }
             if ty.is_dir() {
-                walk(root, &path, out);
+                if !name.to_str().is_some_and(|n| skip.contains(&n)) {
+                    walk(root, &path, skip, out);
+                }
             } else if (ty.is_file() || ty.is_symlink())
                 && let Ok(rel) = path.strip_prefix(root)
             {
@@ -35,7 +43,7 @@ fn files(root: &Path) -> BTreeSet<String> {
             }
         }
     }
-    walk(root, root, &mut out);
+    walk(root, root, skip, &mut out);
     out
 }
 
@@ -147,9 +155,10 @@ fn read(path: &Path) -> Result<Option<String>, ()> {
     String::from_utf8(bytes).map(Some).map_err(|_| ())
 }
 
-/// The files that differ between two trees.
-pub fn changed_files(base: &Path, head: &Path) -> Vec<ChangedFile> {
-    let (a, b) = (files(base), files(head));
+/// The files that differ between two trees, leaving out directories named
+/// in `skip`.
+pub fn changed_files(base: &Path, head: &Path, skip: &[&str]) -> Vec<ChangedFile> {
+    let (a, b) = (files(base, skip), files(head, skip));
     let mut out = Vec::new();
     for path in a.union(&b) {
         let (pa, pb) = (base.join(path), head.join(path));
@@ -436,7 +445,7 @@ mod tests {
         std::fs::create_dir(b.path().join("vendor")).unwrap();
         std::fs::write(b.path().join("vendor/lib.js"), "x").unwrap();
         std::fs::write(b.path().join("logo.png"), [0u8, 1, 2]).unwrap();
-        let files = changed_files(a.path(), b.path());
+        let files = changed_files(a.path(), b.path(), &[]);
         let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, ["logo.png", "notes.txt", "vendor/lib.js"]);
         assert_eq!(files[0].lang, "binary");

@@ -68,8 +68,14 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
 }
 
 fn compare(b: ItemData, h: ItemData, moved_from: Option<String>) -> Item {
-    let signature = b.sig_norm != h.sig_norm;
-    let body = b.body_norm != h.body_norm;
+    // Names of items that moved along point into the new module: compare
+    // with the old module's paths rewritten, as `find_moves` does.
+    let (om, nm) = (&b.info.module, &h.info.module);
+    let same = |old: &str, new: &str| {
+        old == new || (moved_from.is_some() && rewrite_module(old, om, nm) == new)
+    };
+    let signature = !same(&b.sig_norm, &h.sig_norm);
+    let body = !same(&b.body_norm, &h.body_norm);
     let docs = b.info.docs != h.info.docs;
     // Public paths gained or lost, e.g. by adding or removing a `pub use`.
     let exports_added: Vec<String> = h
@@ -200,13 +206,9 @@ fn find_moves(
         } else {
             (&old.sig_norm, &new.sig_norm)
         };
-        if o == n {
-            return true;
-        }
         // Names of items that moved along (siblings, `Self`) point into the
         // new module: compare with the old module's paths rewritten.
-        let (om, nm) = (&old.info.module, &new.info.module);
-        om != nm && o.replace(&format!("\"{om}::"), &format!("\"{nm}::")) == *n
+        o == n || rewrite_module(o, &old.info.module, &new.info.module) == *n
     };
     let mut moves = HashMap::new();
     for (k, new_ids) in added {
@@ -218,4 +220,13 @@ fn find_moves(
         }
     }
     moves
+}
+
+/// `norm` (a normalized form, with full paths in quotes) with paths into
+/// module `old` pointing into module `new` instead.
+fn rewrite_module(norm: &str, old: &str, new: &str) -> String {
+    if old == new {
+        return norm.to_string();
+    }
+    norm.replace(&format!("\"{old}::"), &format!("\"{new}::"))
 }
