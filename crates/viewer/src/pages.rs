@@ -179,7 +179,24 @@ fn item_with_members(
     for m in shown {
         let same = whole && m.status == it.status;
         let badge = !same && group != Some(m.status);
-        let row = item_row(d, m, scope, !changed(m), true, with_module, badge);
+        let row = if m.info.kind == Kind::Impl {
+            // A trait impl is folded into its type: one line, then its
+            // members that changed.
+            let new_impl = matches!(m.status, Status::Added | Status::Removed);
+            let methods: String = d
+                .members(m)
+                .into_iter()
+                .filter(|x| filter(x))
+                .map(|x| {
+                    let said = (new_impl || same) && x.status == m.status;
+                    let badge = !said && group != Some(x.status);
+                    item_row(d, x, scope, !changed(x), true, with_module, badge)
+                })
+                .collect();
+            impl_line(d, m, badge) + &methods
+        } else {
+            item_row(d, m, scope, !changed(m), true, with_module, badge)
+        };
         if same {
             inner.push_str(&row);
         } else {
@@ -196,6 +213,31 @@ fn item_with_members(
     }
     // One entry per item, its members included.
     format!(r#"<div class="ientry">{html}{rest}</div>"#)
+}
+
+/// A trait impl of a listed type, as one line.
+fn impl_line(d: &Data, m: &Item, badge: bool) -> String {
+    use crate::code::{Links, code_html};
+    let header = code_html(
+        d,
+        &m.info.sig,
+        Links::Sig {
+            refs: &m.info.sig_refs,
+            at: &m.info.sig_links,
+            base: 0,
+        },
+    );
+    format!(
+        r#"<div class="impl-line {}" data-id="{}"><code>{header}</code> {}<span class="grow"></span><button data-open="{}" title="Open on the canvas">Open ▸</button></div>"#,
+        m.status.css(),
+        esc(&m.info.id),
+        if badge || !matches!(m.status, Status::Added | Status::Removed) {
+            d.status_html(m)
+        } else {
+            String::new()
+        },
+        esc(&m.info.id),
+    )
 }
 
 /// The status a module marks as a whole (new or removed), if any.

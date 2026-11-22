@@ -446,3 +446,9 @@ details.private-def .sigbox { margin-top: 4px; }
 .ientry { padding: 16px 0; }
 /* A thin line between the members of one item. */
 
+
+/* A trait impl folded into its type's entry. */
+.impl-line { display: flex; align-items: center; gap: 8px; margin: 10px 0 0 18px; font-size: 13px; }
+.impl-line code { background: none; font-size: var(--code-size); }
+.impl-line .grow { flex: 1; }
+.impl-line.removed code { text-decoration: line-through; text-decoration-color: var(--removed); }
