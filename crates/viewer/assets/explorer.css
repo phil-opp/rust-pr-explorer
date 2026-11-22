@@ -239,7 +239,10 @@ a.ref:hover { text-decoration: underline; }
 .irow > .sigbox, .irow > .docs, .irow > details, .irow > .mark, .irow > .docs-acts { grid-column: 1 / -1; }
 .irow .docs { margin: 0; }
 .irow.context { opacity: .75; }
-.irow.member { margin-left: 14px; padding-left: 14px; border-left: 2px solid var(--border); }
+/* Members (methods, associated items) are small cards inside their item. */
+.irow.member { margin-left: 18px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); }
+.irow + .irow.member { margin-top: 12px; }
+.irow.member + .irow.member { margin-top: 8px; }
 .irow.removed .sigbox .sig { text-decoration: line-through; text-decoration-color: var(--removed); }
 .collapsed-note { color: var(--muted); font-size: 13px; padding: 6px 0; }
 .empty-state { color: var(--muted); padding: 20px 0; }
@@ -433,14 +436,13 @@ details.private-def .sigbox { margin-top: 4px; }
 .modbox.whole-added > .modbox-b, .modbox.whole-removed > .modbox-b { background: inherit; }
 .modbox.whole-added { background: color-mix(in srgb, var(--added-bg) 55%, var(--bg)); border: 1px solid color-mix(in srgb, var(--added) 45%, transparent); }
 .modbox.whole-removed { background: color-mix(in srgb, var(--removed-bg) 55%, var(--bg)); border: 1px dashed var(--removed); }
-.whole .irow, .irow.grouped { background: none !important; border-top: none !important; border-right: none !important; border-bottom: none !important; border-radius: 0; margin-left: 0; margin-right: 0; padding: 4px 0; }
-.whole .irow:not(.member), .irow.grouped:not(.member) { border-left: none !important; }
-.whole .irow.member, .irow.grouped.member { margin-left: 14px; padding-left: 14px; }
+/* Inside a marked group, rows don't repeat the group's tint. */
+.whole .irow:not(.member), .irow.grouped:not(.member) { background: none !important; border: none !important; border-radius: 0; margin-left: 0; margin-right: 0; padding: 4px 0; }
+.whole .irow.member, .irow.grouped.member { background: color-mix(in srgb, var(--bg) 70%, transparent) !important; border: 1px solid color-mix(in srgb, var(--border) 80%, transparent) !important; margin-left: 18px; margin-right: 0; padding: 10px 12px; }
 .whole-added, .irow.added { background: color-mix(in srgb, var(--added-bg) 55%, var(--bg)); border: 1px solid color-mix(in srgb, var(--added) 45%, transparent); }
 .whole-removed, .irow.removed { background: color-mix(in srgb, var(--removed-bg) 55%, var(--bg)); border: 1px dashed var(--removed); }
 /* A new (or removed) member of a changed type stays indented like its siblings. */
-.irow.member.added:not(.grouped), .irow.member.removed:not(.grouped) { margin-left: 14px; margin-right: -10px; }
+.irow.member.added:not(.grouped), .irow.member.removed:not(.grouped) { margin-left: 18px; margin-right: 0; padding: 10px 12px; }
 .ientry { padding: 16px 0; }
 /* A thin line between the members of one item. */
-.ientry .irow.member + .irow.member { border-top: 1px solid var(--border) !important; padding-top: 14px; margin-top: 0; }
-.ientry .irow.member { padding-bottom: 10px; }
+
