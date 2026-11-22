@@ -336,10 +336,17 @@ fn semantic_calls() {
     let string = &analysis.externals["alloc::string::String"];
     assert_eq!(string.kind, model::Kind::Struct);
     assert_eq!(string.module, "alloc::string");
-    assert!(string.sig.starts_with("pub struct String"), "{}", string.sig);
+    assert!(
+        string.sig.starts_with("pub struct String"),
+        "{}",
+        string.sig
+    );
     assert!(string.docs.starts_with("A UTF-8"), "{}", string.docs);
     let display = &analysis.externals["std::fmt::Display"];
-    assert_eq!((display.kind, display.module.as_str()), (model::Kind::Trait, "core::fmt"));
+    assert_eq!(
+        (display.kind, display.module.as_str()),
+        (model::Kind::Trait, "core::fmt")
+    );
     assert_eq!(
         calls(&analysis, "tinycalc::parser::parse"),
         [
