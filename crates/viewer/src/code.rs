@@ -500,70 +500,6 @@ fn spans_html(
     out
 }
 
-/// Per-line change markers (`+`, `-`, `~`, or space) of a diff, for the
-/// gutter of multi-line definitions.
-fn line_markers(spans: &[DiffSpan]) -> Vec<char> {
-    #[derive(Default, Clone, Copy)]
-    struct Line {
-        same: bool,
-        added: bool,
-        removed: bool,
-    }
-    fn push(lines: &mut Vec<Line>, text: &str, set: &dyn Fn(&mut Line)) {
-        for (i, part) in text.split('\n').enumerate() {
-            if i > 0 {
-                lines.push(Line::default());
-            }
-            if !part.trim().is_empty() {
-                set(lines.last_mut().unwrap());
-            }
-        }
-    }
-    fn walk(spans: &[DiffSpan], lines: &mut Vec<Line>, in_wrap: bool) {
-        for span in spans {
-            match span {
-                DiffSpan::Same { text } => push(lines, text, &|l| {
-                    if in_wrap {
-                        l.added = true;
-                        l.removed = true
-                    } else {
-                        l.same = true
-                    }
-                }),
-                DiffSpan::Added { text, .. } => push(lines, text, &|l| l.added = true),
-                DiffSpan::Removed { text, .. } => push(lines, text, &|l| l.removed = true),
-                DiffSpan::Wrap {
-                    before,
-                    inner,
-                    after,
-                    ..
-                } => {
-                    push(lines, before, &|l| {
-                        l.added = true;
-                        l.removed = true;
-                    });
-                    walk(inner, lines, true);
-                    push(lines, after, &|l| {
-                        l.added = true;
-                        l.removed = true;
-                    });
-                }
-            }
-        }
-    }
-    let mut lines = vec![Line::default()];
-    walk(spans, &mut lines, false);
-    lines
-        .iter()
-        .map(|l| match (l.same, l.added, l.removed) {
-            (_, false, false) => ' ',
-            (false, true, false) => '+',
-            (false, false, true) => '-',
-            _ => '~',
-        })
-        .collect()
-}
-
 /// Text of a diff note: backticks become code.
 fn note_html(text: &str) -> String {
     let mut out = String::new();
@@ -577,8 +513,7 @@ fn note_html(text: &str) -> String {
     out
 }
 
-/// A structured signature diff: the signature (with a change gutter for
-/// multi-line definitions) and one note per change. Hovering a change
+/// A structured signature diff: the signature and one note per change. Hovering a change
 /// or a note highlights everything that belongs to it.
 pub fn structured_diff_html(
     d: &Data,
@@ -587,32 +522,8 @@ pub fn structured_diff_html(
     at: &[u32],
 ) -> String {
     let code = spans_html(d, &diff.spans, refs, at, &mut 0);
-    let markers = line_markers(&diff.spans);
-    let sig = if markers.len() > 1 {
-        let gutter: String = markers
-            .iter()
-            .map(|m| {
-                format!(
-                    r#"<span class="m m{}">{}</span>"#,
-                    match m {
-                        '+' => "a",
-                        '-' => "r",
-                        '~' => "c",
-                        _ => "n",
-                    },
-                    // A line changed in place is shown by the marks in
-                    // it; the gutter only flags whole lines.
-                    if *m == '~' { ' ' } else { *m }
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n");
-        format!(
-            r#"<div class="sig-lines"><pre class="sig-gutter">{gutter}</pre><pre class="sig sig-diff">{code}</pre></div>"#
-        )
-    } else {
-        format!(r#"<pre class="sig sig-diff">{code}</pre>"#)
-    };
+    // No gutter: added parts are highlighted, removed ones struck out.
+    let sig = format!(r#"<pre class="sig sig-diff">{code}</pre>"#);
     let notes: String = diff
         .notes
         .iter()
@@ -1290,7 +1201,6 @@ mod tests {
                 groups: vec![1],
             }],
         };
-        assert_eq!(line_markers(&diff.spans), [' ', ' ', '-', '~', '+', ' ']);
         let html = structured_diff_html(&d, &diff, &BTreeMap::new(), &[]);
         assert!(html.contains(r#"<span class="wrap" data-g="2""#), "{html}");
         assert!(
@@ -1301,7 +1211,7 @@ mod tests {
             html.contains(r#"<li data-gs="1">variant <code>B</code> removed</li>"#),
             "{html}"
         );
-        assert!(html.contains("sig-gutter"), "{html}");
+        assert!(!html.contains("sig-gutter"), "{html}");
     }
 
     #[test]
@@ -1562,7 +1472,7 @@ mod tests {
     }
 
     #[test]
-    fn an_added_item_has_one_marker() {
+    fn an_added_item_has_no_part_markers() {
         use model::{Item, SourceLine, Status};
         let mut out = empty().out;
         let mut it = Item {
@@ -1579,8 +1489,8 @@ mod tests {
         let d = Data::new(out);
         let it = d.item("c::f").unwrap();
         let html = d.item_body_html(it, "c", true, d.source_seg(it, false, true));
-        assert_eq!(html.matches("class=\"mark").count(), 1, "{html}");
-        assert!(html.starts_with(r#"<div class="mark m-add">"#), "{html}");
+        // Marked as a whole (by the card or row), not part by part.
+        assert_eq!(html.matches("class=\"mark").count(), 0, "{html}");
     }
 
     #[test]

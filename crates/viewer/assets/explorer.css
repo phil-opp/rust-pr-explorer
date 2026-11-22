@@ -361,12 +361,6 @@ a.ref:hover { text-decoration: underline; }
 .sig-diff .g-hot, .sig-notes li.g-hot { outline: 2px solid var(--highlight); outline-offset: 1px; }
 .sig-diff .wrap.g-hot { outline-offset: 2px; }
 .sig-block { display: flex; flex-direction: column; gap: 4px; }
-.sig-lines { display: flex; align-items: stretch; background: var(--bg-code); border-radius: 4px; overflow-x: auto; }
-.sig-lines .sig { white-space: pre; overflow: visible; background: none; padding-left: 4px; }
-.sig-gutter { margin: 0; padding: 8px 0 8px 6px; color: var(--muted); user-select: none; font-family: var(--code-font); font-size: var(--code-size); }
-.sig-gutter .ma { color: var(--added); font-weight: 600; }
-.sig-gutter .mr { color: var(--removed); font-weight: 600; }
-.sig-gutter .mc { color: var(--changed); font-weight: 600; }
 .sig-notes { margin: 0; padding-left: 18px; font-size: 12.5px; color: var(--muted); }
 .sig-notes:empty { display: none; }
 .sig-notes li { margin: 1px 0; border-radius: 3px; cursor: default; }
@@ -422,3 +416,16 @@ details.private-def > summary { cursor: pointer; font-size: 12.5px; color: var(-
 details.private-def > summary b { color: var(--changed); font-weight: 600; }
 details.private-def .sigbox { margin-top: 4px; }
 .src-small details.src { border-top: none !important; padding-top: 0 !important; }
+
+/* Added and removed items: every part is new (or gone), so the item as a
+   whole is marked: a badge, and a tinted, bordered background around it
+   (solid for added, dashed for removed). */
+.st.badge { font-weight: 700; text-transform: uppercase; letter-spacing: .05em; font-size: 10.5px; padding: 1px 7px; }
+.st-added.badge { background: var(--added); color: var(--bg); }
+.st-removed.badge { background: var(--removed); color: var(--bg); }
+.card.cs-added { background: color-mix(in srgb, var(--added-bg) 55%, var(--bg)); border: 1px solid color-mix(in srgb, var(--added) 45%, transparent); border-top: 4px solid var(--added); }
+.card.cs-removed { background: color-mix(in srgb, var(--removed-bg) 55%, var(--bg)); border: 1px dashed var(--removed); border-top: 4px dashed var(--removed); }
+.whole, .irow.added, .irow.removed { border-radius: 6px; padding-left: 10px; padding-right: 10px; margin: 6px -10px; }
+.whole .irow { background: none !important; border: none !important; margin: 0; padding-left: 0; padding-right: 0; }
+.whole-added, .irow.added { background: color-mix(in srgb, var(--added-bg) 55%, var(--bg)); border: 1px solid color-mix(in srgb, var(--added) 45%, transparent); }
+.whole-removed, .irow.removed { background: color-mix(in srgb, var(--removed-bg) 55%, var(--bg)); border: 1px dashed var(--removed); }

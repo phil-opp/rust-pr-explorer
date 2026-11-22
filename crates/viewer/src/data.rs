@@ -422,8 +422,8 @@ impl Data {
     pub fn status_html(&self, it: &Item) -> String {
         if it.info.kind == Kind::Mod {
             return match it.status {
-                Status::Added => r#"<span class="st st-added">+ new module</span>"#.into(),
-                Status::Removed => r#"<span class="st st-removed">− removed</span>"#.into(),
+                Status::Added => r#"<span class="st st-added badge">New module</span>"#.into(),
+                Status::Removed => r#"<span class="st st-removed badge">Removed</span>"#.into(),
                 _ => {
                     let n = self.changes_in(&it.info.id, true).len();
                     if n > 0 {
@@ -436,8 +436,8 @@ impl Data {
         }
         let c = &it.changes;
         match it.status {
-            Status::Added => r#"<span class="st st-added">+ added</span>"#.into(),
-            Status::Removed => r#"<span class="st st-removed">− removed</span>"#.into(),
+            Status::Added => r#"<span class="st st-added badge">New</span>"#.into(),
+            Status::Removed => r#"<span class="st st-removed badge">Removed</span>"#.into(),
             // What changed is marked where it changed (signature, docs,
             // body), not summarized here.
             Status::Changed => {
@@ -548,8 +548,9 @@ impl Data {
 
     pub fn sig_segs(&self, it: &Item, scope: &str) -> Vec<Seg> {
         let (bar, class, title) = match it.status {
-            Status::Added => ("m-add", "", "added"),
-            Status::Removed => ("m-del", "", "removed"),
+            // Added and removed items are marked as a whole.
+            Status::Added => ("", "", "added"),
+            Status::Removed => ("", "", "removed"),
             _ if it.changes.signature => ("m-chg", "", "signature changed"),
             _ => ("", "m-ref", "signature unchanged"),
         };
@@ -557,15 +558,9 @@ impl Data {
             r#"<div class="sigbox {class}" title="{title}">{}</div>"#,
             self.sig_inner(it, scope)
         );
-        // For an added or removed item, the full definition is just as new.
-        let whole = if matches!(it.status, Status::Added | Status::Removed) {
-            bar
-        } else {
-            ""
-        };
         vec![
             Seg::new(bar, shown),
-            Seg::new(whole, self.private_def_html(it, scope)),
+            Seg::new("", self.private_def_html(it, scope)),
         ]
     }
 
@@ -617,12 +612,8 @@ impl Data {
             ));
             return segs;
         }
-        // An added or removed item is added or removed as a whole.
-        let bar = match it.status {
-            Status::Added => "m-add",
-            Status::Removed => "m-del",
-            _ => "",
-        };
+        // Added and removed items are marked as a whole, not per part.
+        let bar = "";
         let md = if full {
             docs.as_str()
         } else {
@@ -839,8 +830,11 @@ impl Data {
                 };
                 ("m-chg", format!("<b>{what}</b> {stats} · {where_}"))
             }
-            Status::Added => ("m-add", format!("<b>Source</b> {stats} · {where_}")),
-            Status::Removed => ("m-del", format!("<b>Removed source</b> {stats} · {where_}")),
+            Status::Added => ("", format!("Source · {where_} · {} lines", it.source.len())),
+            Status::Removed => (
+                "",
+                format!("Removed source · {where_} · {} lines", it.source.len()),
+            ),
             _ if it.changes.cosmetic => (
                 "",
                 format!("Source {stats} (formatting, comments or imports only) · {where_}"),

@@ -152,10 +152,24 @@ fn item_with_members(
         return String::new();
     }
     let mut html = item_row(d, it, scope, !changed(it), false, with_module);
+    // An added or removed item, with its members, as one marked group.
+    let whole = matches!(it.status, Status::Added | Status::Removed);
+    let (mut group, mut rest) = (String::new(), String::new());
     for m in shown {
-        html.push_str(&item_row(d, m, scope, !changed(m), true, with_module));
+        let row = item_row(d, m, scope, !changed(m), true, with_module);
+        if whole && m.status == it.status {
+            group.push_str(&row);
+        } else {
+            rest.push_str(&row);
+        }
     }
-    html
+    if whole {
+        html = format!(
+            r#"<div class="whole whole-{}">{html}{group}</div>"#,
+            it.status.css()
+        );
+    }
+    html + &rest
 }
 
 /// Overview: how does the crate's public surface change?
