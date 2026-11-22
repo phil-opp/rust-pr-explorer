@@ -441,3 +441,6 @@ details.private-def .sigbox { margin-top: 4px; }
 /* A new (or removed) member of a changed type stays indented like its siblings. */
 .irow.member.added:not(.grouped), .irow.member.removed:not(.grouped) { margin-left: 14px; margin-right: -10px; }
 .ientry { padding: 16px 0; }
+/* A thin line between the members of one item. */
+.ientry .irow.member + .irow.member { border-top: 1px solid var(--border) !important; padding-top: 14px; margin-top: 0; }
+.ientry .irow.member { padding-bottom: 10px; }
