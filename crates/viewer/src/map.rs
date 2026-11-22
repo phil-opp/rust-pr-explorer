@@ -1,4 +1,4 @@
-//! Flat alternatives to the 3D view of the module structure:
+//! Views of the module structure:
 //!
 //! - the *module map*: the module tree as nested boxes (parent above its
 //!   children), each listing its changed items, exposed ones first, with
@@ -98,7 +98,7 @@ fn shown_items(d: &Data, all: bool) -> Vec<&Item> {
 
 fn chip(d: &Data, it: &Item) -> String {
     format!(
-        r#"<a class="ref mm-chip {}" data-id="{}" data-kind="{}" data-path="{}"><span class="dot {}"></span>{}</a>"#,
+        r#"<a class="ref mm-chip {}" data-id="{}" data-kind="{}" data-path="{}"><span class="dot {}"></span><span class="nm" title="{}">{}</span></a>"#,
         it.status.css(),
         esc(&it.info.id),
         it.info.kind.css(),
@@ -108,6 +108,7 @@ fn chip(d: &Data, it: &Item) -> String {
         } else {
             it.status.css()
         },
+        esc(&d.display_name(it)),
         esc(&d.display_name(it))
     )
 }

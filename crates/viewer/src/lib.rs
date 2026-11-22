@@ -208,8 +208,7 @@ fn install_listeners() {
                 pick_search(app, i);
                 return;
             }
-            let _ =
-                canvas::on_pointer_down(app, &el, &pev) || space::on_pointer_down(app, &el, &pev);
+            let _ = canvas::on_pointer_down(app, &el, &pev);
         });
     });
     dom::listen(&doc, "pointermove", |ev| {
@@ -218,9 +217,6 @@ fn install_listeners() {
         };
         with_app(|app| {
             canvas::on_pointer_move(app, &pev);
-            if app.s.view == View::Space {
-                space::on_pointer_move(app, &pev);
-            }
         });
     });
     dom::listen(&doc, "pointerup", |ev| {
@@ -229,7 +225,6 @@ fn install_listeners() {
         };
         with_app(|app| {
             canvas::on_pointer_up(app, &pev);
-            space::on_pointer_up(app, &pev);
         });
     });
     // Not passive: zooming prevents the page from scrolling.
@@ -240,8 +235,6 @@ fn install_listeners() {
         with_app(|app| {
             if dom::closest(&el, "#viewport").is_some() {
                 canvas::on_wheel(app, &el, &wev);
-            } else if el.id() == "space" {
-                space::on_wheel(app, &wev);
             }
         });
     });
@@ -284,7 +277,7 @@ fn install_listeners() {
                     .is_some_and(|i| i.checked());
                 pages::render_module_page(app);
             } else {
-                space::on_change(app, &el);
+                let _ = space::on_change(app, &el);
             }
         });
     });
@@ -331,8 +324,7 @@ fn install_listeners() {
     dom::listen(&dom::window().into(), "resize", |_| {
         with_app(|app| match app.s.view {
             View::Canvas => canvas::draw_edges(app),
-            View::Space if app.s.space.mode == space::Mode::Planes => space::draw(app),
-            View::Space => map::draw_map_edges(app),
+            View::Space if app.s.space.mode == space::Mode::Map => map::draw_map_edges(app),
             _ => {}
         });
     });

@@ -85,20 +85,6 @@ pub fn toggle_class(el: &Element, class: &str, on: bool) {
     let _ = el.class_list().toggle_with_force(class, on);
 }
 
-/// The value of a CSS custom property on the root element.
-pub fn css_var(name: &str) -> String {
-    let Some(root) = document().document_element() else {
-        return String::new();
-    };
-    window()
-        .get_computed_style(&root)
-        .ok()
-        .flatten()
-        .and_then(|s| s.get_property_value(name).ok())
-        .map(|v| v.trim().to_string())
-        .unwrap_or_default()
-}
-
 /// Runs `f` before the next repaint.
 pub fn raf(f: impl FnOnce() + 'static) {
     let cb = Closure::once_into_js(f);

@@ -474,3 +474,17 @@ fn long_signatures_wrap_like_rustfmt() {
         "pub fn bounded<T>(t: T) -> T\nwhere\n    T: Clone + Send,"
     );
 }
+
+#[test]
+fn long_trait_methods_wrap_like_rustfmt() {
+    let dir = write_crate(&[(
+        "src/lib.rs",
+        "pub struct Key; pub struct Value; pub struct Error;\n\
+         pub trait Visitor { fn visit_pair(&mut self, key: Key, value: Value) -> Result<(), Error>; fn short(&self); }\n",
+    )]);
+    let out = analyze_dirs(dir.path(), dir.path());
+    assert_eq!(
+        out.items["t::Visitor"].info.sig,
+        "pub trait Visitor {\n    fn visit_pair(\n        &mut self,\n        key: Key,\n        value: Value,\n    ) -> Result<(), Error>;\n    fn short(&self);\n}"
+    );
+}

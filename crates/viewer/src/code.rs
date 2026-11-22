@@ -1530,4 +1530,31 @@ mod tests {
             "{html}"
         );
     }
+
+    #[test]
+    fn impl_headers_name_the_self_type() {
+        use crate::data::impl_parts;
+        let some = |a: &str, b: &str| (Some(a.to_string()), Some(b.to_string()));
+        assert_eq!(
+            impl_parts("impl<T> Log for Arc<T>\nwhere\n    T: ?Sized + Log,"),
+            some("Log", "Arc<T>")
+        );
+        assert_eq!(impl_parts("impl<T> Log for &'_ T"), some("Log", "&'_ T"));
+        assert_eq!(
+            impl_parts("impl PartialEq<LevelFilter> for Level"),
+            some("PartialEq<LevelFilter>", "Level")
+        );
+        assert_eq!(
+            impl_parts("unsafe impl Sync for AtomicUsize"),
+            some("Sync", "AtomicUsize")
+        );
+        assert_eq!(
+            impl_parts("impl<'a, K: Source, V> fmt::Debug for (K, V)"),
+            some("Debug", "(K, V)")
+        );
+        assert_eq!(
+            impl_parts("impl<'v> Inner<'v>"),
+            (None, Some("Inner<'v>".to_string()))
+        );
+    }
 }

@@ -5,7 +5,7 @@ Review a Rust pull request as **changed items** (types, traits, functions, metho
 - an **overview** of the public API changes in rustdoc form,
 - **module pages** that keep what a module exposes apart from what it keeps private,
 - a **canvas** where you arrange item cards freely and follow calls, uses and cross links,
-- an optional **3D view** that stacks modules as planes by depth.
+- a **structure view** that shows how the change spreads over the modules, as a module map or a matrix.
 
 Everything is written in Rust, including the page's front end, which is compiled to WebAssembly. By default the analyzed code is never built or run. For the design and the alternatives that were considered, see [docs/design.md](docs/design.md).
 
@@ -79,10 +79,9 @@ Every item shows what rustdoc would show: its definition or signature (private f
 
 ### Structure view
 
-How the change spreads over the modules, in three modes:
+How the change spreads over the modules, in two modes:
 - **Module map** (default): the module tree as boxes, a parent above its children. Each box lists its changed items, exposed ones first and private ones below a dashed line; private modules have a dashed border. One arrow per pair of modules whose items call each other, labeled with the number of calls; hovering a module highlights its arrows. With many arrows they stay faint until hovered. Long lists are cut after 8 items, with a link to the module page.
 - **Matrix**: modules against modules; each cell counts the calls from the row's module into the column's that involve a change. Hovering a cell lists the calls, clicking it opens them on the canvas.
-- **3D planes**: each module is a plane, nested modules below their parents. It can be rotated, tilted, viewed from above, and focused on one module.
 
 "uses" adds type uses to the calls, "all items" includes unchanged items.
 

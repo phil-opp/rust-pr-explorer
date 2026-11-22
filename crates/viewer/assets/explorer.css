@@ -340,9 +340,6 @@ a.ref:hover { text-decoration: underline; }
 .src .ln.add::before { color: var(--added); }
 .src .ln.del::before { color: var(--removed); }
 
-/* 3D */
-#space { position: absolute; top: 40px; left: 0; width: 100%; height: calc(100% - 40px); cursor: grab; background: var(--bg-alt); }
-#space-legend { position: absolute; right: 12px; bottom: 12px; font-size: 12px; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; }
 #space-bar label { display: flex; align-items: center; gap: 4px; }
 
 #tooltip {
@@ -462,11 +459,12 @@ details.private-def .sigbox { margin-top: 4px; }
 /* Module map. */
 #space-alt { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; overflow: auto; background: var(--bg-alt); }
 .mm-wrap { position: relative; display: inline-block; min-width: 100%; padding: 32px 40px 60px; box-sizing: border-box; }
-#mm-edges { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; }
-.mm-tree { display: flex; gap: 48px; justify-content: center; position: relative; }
+#mm-edges { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; z-index: 2; }
+/* Centered when it fits; otherwise it starts at the left edge and scrolls. */
+.mm-tree { display: flex; gap: 48px; justify-content: safe center; position: relative; width: max-content; min-width: 100%; }
 .mm-node { display: flex; flex-direction: column; align-items: center; }
 .mm-kids { display: flex; gap: 40px; margin-top: 56px; align-items: flex-start; }
-.mm-box { background: var(--bg); border: 1.5px solid var(--mod); border-radius: 8px; padding: 8px 10px; min-width: 150px; max-width: 320px; position: relative; z-index: 1; }
+.mm-box { background: var(--bg); border: 1.5px solid var(--mod); border-radius: 8px; padding: 8px 10px; min-width: 150px; max-width: 340px; position: relative; z-index: 1; overflow: hidden; }
 .mm-box.priv { border-style: dashed; }
 .mm-box.added { background: color-mix(in srgb, var(--added-bg) 55%, var(--bg)); }
 .mm-h { display: flex; align-items: center; gap: 6px; font: 600 13px var(--mono); margin-bottom: 6px; }
@@ -474,9 +472,10 @@ details.private-def .sigbox { margin-top: 4px; }
 .mm-items, .mm-private { display: flex; flex-direction: column; gap: 2px; }
 .mm-private { border-top: 1px dashed var(--border); margin-top: 6px; padding-top: 6px; }
 .mm-private .mm-chip { color: var(--private); }
-.mm-chip { display: flex; align-items: center; gap: 6px; font: 12.5px var(--code-font); color: var(--text); text-decoration: none; padding: 1px 4px; border-radius: 3px; white-space: nowrap; }
+.mm-chip { display: flex; align-items: center; gap: 6px; font: 12.5px var(--code-font); color: var(--text); text-decoration: none; padding: 1px 4px; border-radius: 3px; white-space: nowrap; min-width: 0; }
+.mm-chip .nm { overflow: hidden; text-overflow: ellipsis; }
 .mm-chip:hover { background: var(--bg-alt); }
-.mm-chip.removed { text-decoration: line-through; text-decoration-color: var(--removed); }
+.mm-chip.removed .nm { text-decoration: line-through; text-decoration-color: var(--removed); }
 .mm-none { font-size: 12px; color: var(--muted); font-style: italic; }
 .mm-tree-line { fill: none; stroke: var(--border); stroke-width: 1.5; }
 .mm-flow { color: var(--fn); }

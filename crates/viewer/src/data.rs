@@ -360,19 +360,21 @@ impl Data {
         }
         if let Some(parent) = i.parent.as_deref().and_then(|p| self.item(p)) {
             if parent.info.kind == Kind::Impl {
-                let self_name = parent
-                    .info
-                    .self_ty
-                    .as_deref()
-                    .and_then(|t| self.item(t))
-                    .map_or("Self".to_string(), |t| t.info.name.clone());
-                let tr = parent
-                    .info
-                    .trait_ref
-                    .as_ref()
-                    .map(|t| t.path.rsplit("::").next().unwrap_or("").to_string())
-                    .unwrap_or_default();
-                return format!("<{self_name} as {tr}>::{}", i.name);
+                // The self type as written in the impl header, so that
+                // `impl<T> Log for Arc<T>` gives `<Arc<T> as Log>::log`.
+                let (trait_text, self_text) = impl_parts(&parent.info.sig);
+                let self_name = self_text.unwrap_or_else(|| {
+                    parent
+                        .info
+                        .self_ty
+                        .as_deref()
+                        .and_then(|t| self.item(t))
+                        .map_or("Self".to_string(), |t| t.info.name.clone())
+                });
+                return match trait_text {
+                    Some(tr) => format!("<{self_name} as {tr}>::{}", i.name),
+                    None => format!("{self_name}::{}", i.name),
+                };
             }
             return format!("{}::{}", parent.info.name, i.name);
         }
@@ -937,6 +939,64 @@ impl Data {
                 }
             },
         }
+    }
+}
+
+/// The trait and self type of an impl, as written in its header
+/// (`impl<T> Log for Arc<T> where …` → `Some("Log")`, `Some("Arc<T>")`).
+pub fn impl_parts(header: &str) -> (Option<String>, Option<String>) {
+    let line = header.lines().next().unwrap_or("");
+    let line = line.split(" where ").next().unwrap_or(line).trim();
+    let rest = line.strip_prefix("unsafe ").unwrap_or(line);
+    let Some(mut rest) = rest.strip_prefix("impl") else {
+        return (None, None);
+    };
+    // Skip the impl's own generic parameters.
+    if rest.starts_with('<') {
+        let mut depth = 0;
+        for (i, c) in rest.char_indices() {
+            match c {
+                '<' => depth += 1,
+                '>' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        rest = &rest[i + 1..];
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let rest = rest.trim();
+    // ` for ` outside of angle brackets separates trait and self type.
+    let mut depth = 0i32;
+    let mut split = None;
+    for (i, c) in rest.char_indices() {
+        match c {
+            '<' | '(' | '[' => depth += 1,
+            '>' | ')' | ']' => depth -= 1,
+            ' ' if depth == 0 && rest[i..].starts_with(" for ") => {
+                split = Some(i);
+                break;
+            }
+            _ => {}
+        }
+    }
+    let clean = |s: &str| {
+        let s = s.trim().trim_start_matches('!');
+        // Paths are shown by their last segment, like everywhere else.
+        let base = s.split('<').next().unwrap_or(s);
+        let short = base.rsplit("::").next().unwrap_or(base);
+        format!("{short}{}", &s[base.len()..])
+    };
+    match split {
+        Some(i) => (
+            Some(clean(&rest[..i])),
+            Some(rest[i + 5..].trim().to_string()),
+        ),
+        None if rest.is_empty() => (None, None),
+        None => (None, Some(rest.to_string())),
     }
 }
 

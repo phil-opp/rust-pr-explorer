@@ -1307,6 +1307,7 @@ impl Analyzer {
                             sig_col.visit_item_trait_mut(&mut t);
                             let vis = t.vis.clone();
                             let text = unparse(Item::Trait(t)).replace(" {}\n", " { ... }\n");
+                            let text = wrap_trait_methods(&text);
                             (
                                 attrs,
                                 vis,
@@ -2443,6 +2444,41 @@ pub fn wrap_fn_sig(sig: &str) -> String {
     }
     let params: String = params.iter().map(|p| format!("    {p},\n")).collect();
     format!("{head}\n{params}){ret}{where_block}")
+}
+
+/// Lays out the long one-line method signatures of a trait definition
+/// like [`wrap_fn_sig`], indented by the trait's four spaces.
+fn wrap_trait_methods(text: &str) -> String {
+    let mut out = String::new();
+    for line in text.split_inclusive('\n') {
+        let body = line.trim_end_matches('\n');
+        let inner = body.strip_prefix("    ").unwrap_or(body);
+        let (sig, end) = if let Some(s) = inner.strip_suffix(" { ... }") {
+            (s, " { ... }")
+        } else if let Some(s) = inner.strip_suffix(';') {
+            (s, ";")
+        } else {
+            ("", "")
+        };
+        let is_fn = sig.split_whitespace().any(|w| w == "fn");
+        if is_fn && body.starts_with("    ") && body.chars().count() > SIG_WIDTH + 4 {
+            let wrapped = wrap_fn_sig(sig);
+            for (i, l) in wrapped.lines().enumerate() {
+                if i > 0 {
+                    out.push('\n');
+                }
+                out.push_str("    ");
+                out.push_str(l);
+            }
+            out.push_str(end);
+            if line.ends_with('\n') {
+                out.push('\n');
+            }
+        } else {
+            out.push_str(line);
+        }
+    }
+    out
 }
 
 /// Turns `fn foo() {}` into `fn foo()`.
