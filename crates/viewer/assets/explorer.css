@@ -228,14 +228,18 @@ a.ref:hover { text-decoration: underline; }
 .section-label.private { color: var(--private); }
 .section-label.private::after { border-top-style: dashed; }
 .private-zone { border-left: 3px dashed var(--border); padding-left: 10px; margin-left: 2px; }
-.irow { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 8px 0; border-bottom: 1px dotted var(--border); }
-.irow:last-child { border-bottom: none; }
+/* One entry per item (with its members), clearly separated. */
+.ientry { padding: 12px 0; border-bottom: 1px solid var(--border); }
+.ientry:last-child { border-bottom: none; }
+.ientry + .collapsed-note { border-top: 1px solid var(--border); }
+.irow { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 4px 0; }
+.irow + .irow, .whole + .irow { margin-top: 10px; }
 .irow .ihead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .irow .iacts { display: flex; gap: 4px; align-items: start; }
 .irow > .sigbox, .irow > .docs, .irow > details, .irow > .mark, .irow > .docs-acts { grid-column: 1 / -1; }
 .irow .docs { margin: 0; }
 .irow.context { opacity: .75; }
-.irow.member { margin-left: 26px; }
+.irow.member { margin-left: 14px; padding-left: 14px; border-left: 2px solid var(--border); }
 .irow.removed .sigbox .sig { text-decoration: line-through; text-decoration-color: var(--removed); }
 .collapsed-note { color: var(--muted); font-size: 13px; padding: 6px 0; }
 .empty-state { color: var(--muted); padding: 20px 0; }
@@ -425,7 +429,15 @@ details.private-def .sigbox { margin-top: 4px; }
 .st-removed.badge { background: var(--removed); color: var(--bg); }
 .card.cs-added { background: color-mix(in srgb, var(--added-bg) 55%, var(--bg)); border: 1px solid color-mix(in srgb, var(--added) 45%, transparent); border-top: 4px solid var(--added); }
 .card.cs-removed { background: color-mix(in srgb, var(--removed-bg) 55%, var(--bg)); border: 1px dashed var(--removed); border-top: 4px dashed var(--removed); }
-.whole, .irow.added, .irow.removed { border-radius: 6px; padding-left: 10px; padding-right: 10px; margin: 6px -10px; }
-.whole .irow { background: none !important; border: none !important; margin: 0; padding-left: 0; padding-right: 0; }
+.whole, .irow.added, .irow.removed { border-radius: 6px; padding: 8px 10px; margin: 0 -10px; }
+.modbox.whole-added > .modbox-b, .modbox.whole-removed > .modbox-b { background: inherit; }
+.modbox.whole-added { background: color-mix(in srgb, var(--added-bg) 55%, var(--bg)); border: 1px solid color-mix(in srgb, var(--added) 45%, transparent); }
+.modbox.whole-removed { background: color-mix(in srgb, var(--removed-bg) 55%, var(--bg)); border: 1px dashed var(--removed); }
+.whole .irow, .irow.grouped { background: none !important; border-top: none !important; border-right: none !important; border-bottom: none !important; border-radius: 0; margin-left: 0; margin-right: 0; padding: 4px 0; }
+.whole .irow:not(.member), .irow.grouped:not(.member) { border-left: none !important; }
+.whole .irow.member, .irow.grouped.member { margin-left: 14px; padding-left: 14px; }
 .whole-added, .irow.added { background: color-mix(in srgb, var(--added-bg) 55%, var(--bg)); border: 1px solid color-mix(in srgb, var(--added) 45%, transparent); }
 .whole-removed, .irow.removed { background: color-mix(in srgb, var(--removed-bg) 55%, var(--bg)); border: 1px dashed var(--removed); }
+/* A new (or removed) member of a changed type stays indented like its siblings. */
+.irow.member.added:not(.grouped), .irow.member.removed:not(.grouped) { margin-left: 14px; margin-right: -10px; }
+.ientry { padding: 16px 0; }

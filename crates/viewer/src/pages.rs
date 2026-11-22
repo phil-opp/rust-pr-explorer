@@ -88,6 +88,9 @@ fn item_row(
     context: bool,
     member: bool,
     with_module: bool,
+    // Whether this row says "new"/"removed"; not when a group around it
+    // already does.
+    badge: bool,
 ) -> String {
     // In the public API, re-exported items appear under their public name.
     let title = match d.public_path(it) {
@@ -107,18 +110,23 @@ fn item_row(
     };
     let body = d.item_body_html(it, scope, false, src);
     format!(
-        r#"<div class="irow {} {} {}" data-id="{}">
+        r#"<div class="irow {} {} {} {}" data-id="{}">
         <div class="ihead"><span class="kind">{}</span>{} {} {}</div>
         <div class="iacts"><button data-open="{}" title="Open on the canvas">Open ▸</button></div>
         {body}</div>"#,
         it.status.css(),
         if context { "context" } else { "" },
         if member { "member" } else { "" },
+        if badge { "" } else { "grouped" },
         esc(&it.info.id),
         it.info.kind.label(),
         title,
         d.vis_html(it),
-        d.status_html(it),
+        if badge || !matches!(it.status, Status::Added | Status::Removed) {
+            d.status_html(it)
+        } else {
+            String::new()
+        },
         esc(&it.info.id),
     )
 }
@@ -131,6 +139,9 @@ fn item_with_members(
     scope: &str,
     filter: &dyn Fn(&Item) -> bool,
     with_module: bool,
+    // The status of the group the item is listed in, if that group (a new
+    // or removed module) is already marked as a whole.
+    group: Option<Status>,
 ) -> String {
     let mut shown: Vec<&Item> = Vec::new();
     if it.info.kind != Kind::Mod {
@@ -151,25 +162,45 @@ fn item_with_members(
     if !filter(it) && shown.is_empty() {
         return String::new();
     }
-    let mut html = item_row(d, it, scope, !changed(it), false, with_module);
-    // An added or removed item, with its members, as one marked group.
+    let marked_above = group == Some(it.status);
+    let mut html = item_row(
+        d,
+        it,
+        scope,
+        !changed(it),
+        false,
+        with_module,
+        !marked_above,
+    );
+    // An added or removed item, with its members, as one marked group:
+    // the item says "new" once, its members don't repeat it.
     let whole = matches!(it.status, Status::Added | Status::Removed);
-    let (mut group, mut rest) = (String::new(), String::new());
+    let (mut inner, mut rest) = (String::new(), String::new());
     for m in shown {
-        let row = item_row(d, m, scope, !changed(m), true, with_module);
-        if whole && m.status == it.status {
-            group.push_str(&row);
+        let same = whole && m.status == it.status;
+        let badge = !same && group != Some(m.status);
+        let row = item_row(d, m, scope, !changed(m), true, with_module, badge);
+        if same {
+            inner.push_str(&row);
         } else {
             rest.push_str(&row);
         }
     }
-    if whole {
+    if whole && !marked_above {
         html = format!(
-            r#"<div class="whole whole-{}">{html}{group}</div>"#,
+            r#"<div class="whole whole-{}">{html}{inner}</div>"#,
             it.status.css()
         );
+    } else {
+        html.push_str(&inner);
     }
-    html + &rest
+    // One entry per item, its members included.
+    format!(r#"<div class="ientry">{html}{rest}</div>"#)
+}
+
+/// The status a module marks as a whole (new or removed), if any.
+fn group_status(module: &Item) -> Option<Status> {
+    matches!(module.status, Status::Added | Status::Removed).then_some(module.status)
 }
 
 /// Overview: how does the crate's public surface change?
@@ -201,7 +232,7 @@ pub fn render_overview(app: &App) {
         listed.sort_by(|a, b| kind_order(a, b));
         let entries: String = listed
             .iter()
-            .map(|c| item_with_members(d, c, OUTSIDE, is_pub, true))
+            .map(|c| item_with_members(d, c, OUTSIDE, is_pub, true, group_status(module)))
             .collect();
         let mut kids = d.mod_children_items(m);
         kids.sort_by(|a, b| kind_order(a, b));
@@ -214,8 +245,9 @@ pub fn render_overview(app: &App) {
             return String::new();
         }
         format!(
-            r#"<div class="modbox"><div class="modbox-h"><span class="kind">{}</span>{} {}<span style="flex:1"></span><a data-mod="{}">module page ›</a></div>
+            r#"<div class="modbox {}"><div class="modbox-h"><span class="kind">{}</span>{} {}<span style="flex:1"></span><a data-mod="{}">module page ›</a></div>
             <div class="modbox-b">{entries}{subs}</div></div>"#,
+            group_status(module).map_or(String::new(), |s| format!("whole-{}", s.css())),
             if d.is_root(module) { "crate" } else { "mod" },
             d.title_html(module, false),
             d.status_html(module),
@@ -296,7 +328,11 @@ pub fn render_module_page(app: &App) {
         let hidden = total - shown.len();
         let mut html: String = shown
             .iter()
-            .map(|it| item_with_members(d, it, m, &filter, false))
+            .map(|it| {
+                // Items of a new module: the module says "new" once.
+                let group = d.item(&it.info.module).and_then(group_status);
+                item_with_members(d, it, m, &filter, false, group)
+            })
             .collect();
         if hidden > 0 {
             html.push_str(&format!(
@@ -361,8 +397,9 @@ pub fn render_module_page(app: &App) {
             ""
         };
         format!(
-            r#"<div class="modbox"><div class="modbox-h"><span class="kind">mod</span>{} {} {}<span style="flex:1"></span><a data-mod="{}">open ›</a></div>
+            r#"<div class="modbox {}"><div class="modbox-h"><span class="kind">mod</span>{} {} {}<span style="flex:1"></span><a data-mod="{}">open ›</a></div>
             <div class="modbox-b">{body}{note}{empty}</div></div>"#,
+            group_status(s).map_or(String::new(), |st| format!("whole-{}", st.css())),
             d.title_html(s, false),
             d.vis_html(s),
             d.status_html(s),
