@@ -1451,4 +1451,32 @@ mod tests {
             "{html}"
         );
     }
+
+    #[test]
+    fn private_fields_are_expandable_from_outside() {
+        use model::{Item, Status};
+        let mut out = empty().out;
+        let mut it = Item {
+            status: Status::Unchanged,
+            ..Default::default()
+        };
+        it.info.id = "c::m::S".into();
+        it.info.kind = model::Kind::Struct;
+        it.info.module = "c::m".into();
+        it.info.sig = "pub struct S {\n    secret: u8,\n}".into();
+        it.info.sig_public = Some("pub struct S {\n    /* private fields */\n}".into());
+        out.items.insert(it.info.id.clone(), it);
+        let d = Data::new(out);
+        let it = d.item("c::m::S").unwrap();
+        let outside = d.sig_html(it, "c");
+        assert!(outside.contains("private fields */"), "{outside}");
+        assert!(
+            outside.contains(r#"<details class="private-def">"#),
+            "{outside}"
+        );
+        assert!(outside.contains("secret"), "{outside}");
+        // Inside the module everything is shown already.
+        let inside = d.sig_html(it, "c::m");
+        assert!(!inside.contains("private-def"), "{inside}");
+    }
 }

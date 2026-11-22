@@ -527,9 +527,33 @@ impl Data {
             _ if it.changes.signature => ("m-chg", "signature changed"),
             _ => ("m-ref", "signature unchanged"),
         };
-        format!(
+        let shown = format!(
             r#"<div class="sigbox {class}" title="{title}">{}</div>"#,
             self.sig_inner(it, scope)
+        );
+        shown + &self.private_def_html(it, scope)
+    }
+
+    /// Seen from outside its module, a type's private fields are hidden.
+    /// This offers the full definition, as seen from inside, as an
+    /// expandable section; with a diff if it changed.
+    fn private_def_html(&self, it: &Item, scope: &str) -> String {
+        let has_private = it.info.sig_public.is_some() || it.old_sig_public.is_some();
+        if !has_private || within(scope, self.mod_of(it)) {
+            return String::new();
+        }
+        // The full text changed (not only where names point).
+        let changed = it.status == Status::Changed && it.changes.signature && it.old_sig.is_some();
+        let class = if changed { "m-chg" } else { "m-ref" };
+        format!(
+            r#"<details class="private-def"><summary>{}</summary><div class="sigbox {class}">{}</div></details>"#,
+            if changed {
+                "<b>Full definition changed</b>, including private fields"
+            } else {
+                "Full definition, including private fields"
+            },
+            // As seen from the defining module: every field.
+            self.sig_inner(it, self.mod_of(it))
         )
     }
 
@@ -779,9 +803,9 @@ impl Data {
             {
                 crate::code::structured_diff_html(self, diff, refs, at)
             }
-            Some(_) if public_view && has_public => {
-                plain("Only private parts of the definition changed.")
-            }
+            Some(_) if public_view && has_public => plain(
+                "Only private parts of the definition changed; expand the full definition below.",
+            ),
             Some(_) => plain("The signature changed in a way the diff can't show."),
             // The analysis could not parse the signatures: token diff.
             None => match &it.old_sig {
@@ -792,7 +816,9 @@ impl Data {
                         old_full
                     };
                     if old == new {
-                        plain("Only private parts of the definition changed.")
+                        plain(
+                            "Only private parts of the definition changed; expand the full definition below.",
+                        )
                     } else {
                         format!(
                             r#"<div class="sig-block"><pre class="sig sig-diff">{}</pre></div>"#,

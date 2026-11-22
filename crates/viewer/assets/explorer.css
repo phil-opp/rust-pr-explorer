@@ -158,10 +158,10 @@ code { font-size: .92em; }
 /* Change markers: a bar on the left of what changed. */
 .sigbox, .dblk, details.src { border-left: 3px solid transparent; padding-left: 7px; margin-left: -10px; }
 /* Each marker differs in line style too, not only in color:
-   added = solid, removed = dashed, changed = double. */
+   added = solid, removed = dashed, changed = dotted. */
 .m-add { border-left: 3px solid var(--added) !important; }
 .m-del { border-left: 3px dashed var(--removed) !important; }
-.m-chg { border-left: 5px double var(--changed) !important; padding-left: 5px !important; }
+.m-chg { border-left: 3px dotted var(--changed) !important; }
 .mk { font-family: var(--mono); font-weight: 700; }
 .exports .dblk { font-size: 13px; margin-top: 2px; margin-bottom: 2px; }
 .exports .m-del s { text-decoration-color: var(--removed); }
@@ -274,7 +274,7 @@ a.ref:hover { text-decoration: underline; }
   border-radius: 8px; box-shadow: var(--shadow); cursor: default;
 }
 .card.cs-added { border-top: 4px solid var(--added); }
-.card.cs-changed { border-top: 6px double var(--changed); }
+.card.cs-changed { border-top: 4px dotted var(--changed); }
 .card.cs-removed { border-top: 4px dashed var(--removed); }
 .card.cs-removed .card-h .title-name { text-decoration: line-through; text-decoration-color: var(--removed); }
 .card.cs-unchanged { border-top: 4px solid var(--border); opacity: .93; }
@@ -404,3 +404,8 @@ button.mini { font: inherit; font-size: 12px; padding: 1px 8px; }
 .cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px; }
 .cmp-h { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding-bottom: 6px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
 .cmp-cell { min-width: 0; padding-left: 10px; }
+
+/* Full definition with private fields, behind a toggle. */
+details.private-def > summary { cursor: pointer; font-size: 12.5px; color: var(--muted); margin: 2px 0; }
+details.private-def > summary b { color: var(--changed); font-weight: 600; }
+details.private-def .sigbox { margin-top: 4px; }
