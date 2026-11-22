@@ -163,7 +163,7 @@ fn item_with_members(
         return String::new();
     }
     let marked_above = group == Some(it.status);
-    let mut html = item_row(
+    let html = item_row(
         d,
         it,
         scope,
@@ -203,16 +203,14 @@ fn item_with_members(
             rest.push_str(&row);
         }
     }
-    if whole && !marked_above {
-        html = format!(
-            r#"<div class="whole whole-{}">{html}{inner}</div>"#,
-            it.status.css()
-        );
+    // One card per item, its members included; a new or removed item's
+    // card is marked as a whole.
+    let class = if whole && !marked_above {
+        format!("whole whole-{}", it.status.css())
     } else {
-        html.push_str(&inner);
-    }
-    // One entry per item, its members included.
-    format!(r#"<div class="ientry">{html}{rest}</div>"#)
+        String::new()
+    };
+    format!(r#"<div class="ientry {class}">{html}{inner}{rest}</div>"#)
 }
 
 /// A trait impl of a listed type, as one line.

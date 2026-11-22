@@ -229,9 +229,8 @@ a.ref:hover { text-decoration: underline; }
 .section-label.private::after { border-top-style: dashed; }
 .private-zone { border-left: 3px dashed var(--border); padding-left: 10px; margin-left: 2px; }
 /* One entry per item (with its members), clearly separated. */
-.ientry { padding: 12px 0; border-bottom: 1px solid var(--border); }
-.ientry:last-child { border-bottom: none; }
-.ientry + .collapsed-note { border-top: 1px solid var(--border); }
+/* One card per listed item (with its members as nested cards). */
+.ientry { border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 12px 0; background: var(--bg); }
 .irow { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; padding: 4px 0; }
 .irow + .irow, .whole + .irow { margin-top: 10px; }
 .irow .ihead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
@@ -443,7 +442,7 @@ details.private-def .sigbox { margin-top: 4px; }
 .whole-removed, .irow.removed { background: color-mix(in srgb, var(--removed-bg) 55%, var(--bg)); border: 1px dashed var(--removed); }
 /* A new (or removed) member of a changed type stays indented like its siblings. */
 .irow.member.added:not(.grouped), .irow.member.removed:not(.grouped) { margin-left: 18px; margin-right: 0; padding: 10px 12px; }
-.ientry { padding: 16px 0; }
+.ientry.whole { margin: 12px 0; padding: 12px 14px; border-radius: 8px; }
 /* A thin line between the members of one item. */
 
 

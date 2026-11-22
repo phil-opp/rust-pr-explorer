@@ -527,7 +527,8 @@ pub fn draw(app: &mut App) {
             let sign = match it.status {
                 Status::Added => "+ ",
                 Status::Removed => "− ",
-                Status::Changed => "~ ",
+                // Changed items are the norm here: no sign.
+                Status::Changed => "",
                 Status::Unchanged => "",
             };
             let label = format!("{sign}{}", d.display_name(it));
@@ -582,7 +583,7 @@ fn render_bar(app: &App) {
     );
     dom::set_html(
         "space-legend",
-        r#"+ added &nbsp; ~ changed &nbsp; − removed<br>● exposed item &nbsp; ○ private item &nbsp; <span style="color:var(--fn)">━</span> call &nbsp; <span style="color:var(--type)">┅</span> use<br>Edges between planes cross a module boundary and land on exposed items;<br>grey ones reach a private item of an ancestor module."#,
+        r#"+ added &nbsp; − removed &nbsp; (no sign: changed; grey: unchanged)<br>● exposed item &nbsp; ○ private item &nbsp; <span style="color:var(--fn)">━</span> call &nbsp; <span style="color:var(--type)">┅</span> use<br>Edges between planes cross a module boundary and land on exposed items;<br>grey ones reach a private item of an ancestor module."#,
     );
 }
 
