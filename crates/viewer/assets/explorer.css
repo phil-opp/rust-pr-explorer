@@ -309,3 +309,9 @@ a.ref:hover { text-decoration: underline; }
 #tooltip pre { margin: 4px 0 0; font-size: 12px; white-space: pre-wrap; color: var(--muted); }
 #toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); padding: 6px 14px; border-radius: 6px; font-size: 13px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 200; }
 #toast.show { opacity: .92; }
+
+/* Signature diffs */
+.sig-diff del.sd { background: color-mix(in srgb, var(--removed) 18%, transparent); color: var(--removed); text-decoration: line-through; text-decoration-color: var(--removed); border-radius: 2px; }
+.sig-diff del.sd * { color: inherit; }
+.sig-diff ins.sd { background: color-mix(in srgb, var(--added) 22%, transparent); text-decoration: none; border-radius: 2px; box-shadow: inset 0 -1.5px 0 var(--added); }
+.sig-note { font-size: 12px; color: var(--muted); }

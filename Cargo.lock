@@ -2539,6 +2539,7 @@ dependencies = [
  "model",
  "pulldown-cmark 0.13.6",
  "serde_json",
+ "similar",
  "wasm-bindgen",
  "web-sys",
 ]

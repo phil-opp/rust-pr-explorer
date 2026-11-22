@@ -7,7 +7,7 @@ Review a Rust pull request as **changed items** (types, traits, functions, metho
 - a **canvas** where you arrange item cards freely and follow calls, uses and cross links,
 - an optional **3D view** that stacks modules as planes by depth.
 
-Everything is written in Rust, including the page's front end, which is compiled to WebAssembly. The analyzed code is never built or run. For the design and the alternatives that were considered, see [docs/design.md](docs/design.md).
+Everything is written in Rust, including the page's front end, which is compiled to WebAssembly. By default the analyzed code is never built or run. For the design and the alternatives that were considered, see [docs/design.md](docs/design.md).
 
 ## Usage
 
@@ -32,6 +32,8 @@ cargo build --release
 
 All commands write `pr-explorer.html` (change it with `-o`). Open that file in a browser. `--json analysis.json` also writes the raw analysis. `--syntax-only` skips the rust-analyzer step, which makes the run faster but turns many method calls into guesses (see below).
 
+In a sandboxed environment, `--trust-project-code` (or `RUST_PR_EXPLORER_TRUST_PROJECT_CODE=1`) lets rust-analyzer run the project's build scripts and procedural macros. It then also resolves calls involving generated code, such as types from `include!(concat!(env!("OUT_DIR"), …))` or items produced by proc macros. See [Safety](#safety).
+
 For `pr`, the repository is cloned without file contents (`--filter=blob:none`), and only the two revisions being compared are checked out. Without `--base`, the base is the merge base of the PR head and the default branch. For a PR that was already merged with a merge commit, the base is the state just before that merge.
 
 The demo in `fixtures/demo` is a small calculator crate. Its "PR" adds variables (a new `env` module, a changed `evaluate` signature, new error variants), moves a helper between modules, and changes some import styles and formatting. That last part does not show up as a change.
@@ -46,7 +48,7 @@ Lists only the public items that were added, changed or removed, nested by modul
 
 Every item shows what rustdoc would show: its definition or signature (private fields hidden when looking from outside the module), its docs, and its place in the module tree.
 
-- **Change markers**: added, removed, or changed. A changed item also says whether its *signature*, *body* or *docs* changed. Items moved to another module are marked as *moved*. If only formatting, comments or import style changed, the item is marked *formatting only* and counts as unchanged.
+- **Change markers**: added, removed, or changed. A changed item also says whether its *signature*, *body* or *docs* changed. A changed signature is shown as a token-level diff against the base version: removed parts struck through in red, added parts highlighted in green. Seen from outside the defining module, the diff uses the public form of the definition, and a change to private fields only is noted as such. Items moved to another module are marked as *moved*. If only formatting, comments or import style changed, the item is marked *formatting only* and counts as unchanged.
 - **Normalized names**: paths are shortened to what a reader needs (`crate::ast::Expr` → `Expr`). Every name links to its item, and hovering a name shows its fully qualified path.
 - **Canvas awareness**: a name whose item is already on the canvas is highlighted, and hovering it outlines that card.
 - **Source on demand**: each card has a collapsible source view, shown as a diff against the base version when the item changed.
@@ -96,9 +98,11 @@ The workspace has three crates:
 
 ## Safety
 
-A pull request is untrusted code. The tool never compiles or runs it: no `cargo build`, no build scripts, no procedural macros. rust-analyzer only reads the sources, and it calls `cargo metadata`, which may download dependency sources but doesn't build them.
+A pull request is untrusted code. By default the tool never compiles or runs it: no `cargo build`, no build scripts, no procedural macros. rust-analyzer only reads the sources, and it calls `cargo metadata`, which may download dependency sources but doesn't build them.
 
 `cargo metadata` and rustup read configuration from the source tree, and that configuration could name a program to run. Before analysis, every `.cargo/config(.toml)` and `rust-toolchain(.toml)` is therefore deleted from the temporary copies. Symlinks are deleted too, so that no file outside the tree ends up in the page.
+
+With `--trust-project-code`, rust-analyzer runs build scripts (via `cargo check`) and expands procedural macros with the toolchain's proc-macro server, and the project's `.cargo/config.toml` and `rust-toolchain.toml` are kept. This executes code from the pull request, so use it only in a sandbox (a container or VM without credentials). Symlinks are still removed.
 
 The page renders doc comments as Markdown with raw HTML shown as text, so the analyzed code cannot inject markup or script.
 
@@ -108,7 +112,7 @@ This is a prototype.
 
 - Names in paths are resolved syntactically.
 - Method calls are type-checked by rust-analyzer, except calls inside `format_args!`-style macro arguments, and except when rust-analyzer can't load the workspace. Those cases, and `--syntax-only` runs, fall back to guessing the target from a method name that is unique in the crate. Guesses are marked as *inferred* and drawn dashed.
-- Code generated by procedural macros (including derives) and by build scripts is not seen. Items behind `#[cfg(test)]` and `#[test]` functions are skipped. Other `cfg` attributes are ignored, so code behind every `cfg` is analyzed.
+- The syntactic pass never sees code generated by procedural macros (including derives) or build scripts. rust-analyzer sees it only with `--trust-project-code`. Items behind `#[cfg(test)]` and `#[test]` functions are skipped. Other `cfg` attributes are ignored, so code behind every `cfg` is analyzed.
 - Items of external crates are not analyzed. Their names show their full path on hover but don't link anywhere.
 - Re-exports mark the target item as public, but the item is still shown at its definition path.
 - Moves are detected only when exactly one item of that kind and name disappears in one place and appears in another.

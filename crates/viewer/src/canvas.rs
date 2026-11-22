@@ -526,18 +526,7 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     let sig = if it.info.kind == Kind::Mod {
         String::new()
     } else {
-        format!(
-            r#"<pre class="sig">{}</pre>"#,
-            code_html(d, d.sig_for(it, scope), &it.info.sig_refs)
-        )
-    };
-    let old_sig = match (&it.old_sig, it.changes.signature) {
-        (Some(old), true) => format!(
-            r#"<div class="sig-old">previous signature:<pre class="sig">{}</pre></div>"#,
-            code_html(d, old, &BTreeMap::new())
-        ),
-        (None, true) => r#"<div class="sig-old">Same text, but names in the signature now refer to different items.</div>"#.into(),
-        _ => String::new(),
+        d.sig_html(it, scope)
     };
     let docs = if it.info.docs.is_empty() {
         r#"<div class="docs empty">No documentation.</div>"#.to_string()
@@ -694,7 +683,7 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         {tabs}
         <div class="card-h"><span class="kind">{}</span>{} {}<span class="grow"></span>{}<span class="x" data-close="{}" title="Close">×</span></div>
         <div class="card-loc">{}</div>
-        <div class="card-b">{impl_header}{sig}{old_sig}{docs}{old_docs}{members}{}{}
+        <div class="card-b">{impl_header}{sig}{docs}{old_docs}{members}{}{}
           <div class="card-acts">{acts}</div>{src}</div></div>"#,
         it.status.css(),
         g.gid,

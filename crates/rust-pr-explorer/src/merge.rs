@@ -26,6 +26,7 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
                 status: Status::Added,
                 changes: Changes::default(),
                 old_sig: None,
+                old_sig_public: None,
                 old_docs: None,
             },
         };
@@ -40,6 +41,7 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
                 status: Status::Removed,
                 changes: Changes::default(),
                 old_sig: None,
+                old_sig_public: None,
                 old_docs: None,
             },
         );
@@ -92,6 +94,9 @@ fn compare(b: ItemData, h: ItemData, moved_from: Option<String>) -> Item {
             .collect()
     };
     Item {
+        old_sig_public: (b.info.sig != h.info.sig)
+            .then(|| b.info.sig_public.clone())
+            .flatten(),
         old_sig: (b.info.sig != h.info.sig).then(|| b.info.sig.clone()),
         old_docs: docs.then(|| b.info.docs.clone()),
         source,

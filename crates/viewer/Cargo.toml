@@ -37,6 +37,7 @@ web-sys = { version = "0.3", features = [
   "WheelEvent",
   "Window",
 ] }
+similar = { version = "3.2.1", default-features = false, features = ["std"] }
 
 [lints]
 workspace = true

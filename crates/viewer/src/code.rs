@@ -261,6 +261,77 @@ fn path_html(d: &Data, path: &str, refs: &BTreeMap<String, Ref>) -> String {
     esc(path)
 }
 
+/// Splits code into identifiers, whitespace runs and single other
+/// characters: the units a signature diff works on.
+fn diff_tokens(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let mut chars = s.char_indices().peekable();
+    while let Some((i, c)) = chars.next() {
+        let same = |n: char| {
+            (c.is_alphanumeric() || c == '_') && (n.is_alphanumeric() || n == '_')
+                || c.is_whitespace() && n.is_whitespace()
+        };
+        match chars.peek() {
+            Some(&(_, n)) if same(n) => {}
+            _ => {
+                let end = chars.peek().map_or(s.len(), |&(j, _)| j);
+                out.push(&s[start..end]);
+                start = end;
+            }
+        }
+        let _ = i;
+    }
+    out
+}
+
+/// A signature as a token-level diff against its previous version: removed
+/// parts struck through, added parts highlighted. Names in the new version
+/// stay cross links.
+pub fn sig_diff_html(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Ref>) -> String {
+    use similar::{Algorithm, DiffOp, capture_diff_slices};
+    let (a, b) = (diff_tokens(old), diff_tokens(new));
+    let none = BTreeMap::new();
+    let mut out = String::new();
+    let del = |out: &mut String, from: usize, len: usize| {
+        let text = a[from..from + len].concat();
+        out.push_str(&format!(
+            r#"<del class="sd">{}</del>"#,
+            code_html(d, &text, &none)
+        ));
+    };
+    let ins = |out: &mut String, from: usize, len: usize| {
+        let text = b[from..from + len].concat();
+        out.push_str(&format!(
+            r#"<ins class="sd">{}</ins>"#,
+            code_html(d, &text, refs)
+        ));
+    };
+    for op in capture_diff_slices(Algorithm::Myers, &a, &b) {
+        match op {
+            DiffOp::Equal { new_index, len, .. } => {
+                out.push_str(&code_html(d, &b[new_index..new_index + len].concat(), refs))
+            }
+            DiffOp::Delete {
+                old_index, old_len, ..
+            } => del(&mut out, old_index, old_len),
+            DiffOp::Insert {
+                new_index, new_len, ..
+            } => ins(&mut out, new_index, new_len),
+            DiffOp::Replace {
+                old_index,
+                old_len,
+                new_index,
+                new_len,
+            } => {
+                del(&mut out, old_index, old_len);
+                ins(&mut out, new_index, new_len);
+            }
+        }
+    }
+    out
+}
+
 /// Renders doc comment markdown. Intra-doc links become cross links; raw
 /// HTML from the docs is shown as text, never interpreted.
 pub fn docs_html(d: &Data, md: &str, refs: &BTreeMap<String, Ref>) -> String {
@@ -448,6 +519,29 @@ mod tests {
             "{html}"
         );
         assert!(html.contains(r#"<span class="cm">// x</span>"#), "{html}");
+    }
+
+    #[test]
+    fn signature_diff() {
+        let d = empty();
+        let html = sig_diff_html(
+            &d,
+            "pub fn calc(input: &str) -> f64",
+            "pub fn calc(input: &str, env: &Env) -> Result<f64>",
+            &BTreeMap::new(),
+        );
+        assert!(
+            html.contains(r#"<ins class="sd">, env: &amp;Env</ins>"#),
+            "{html}"
+        );
+        let replaced = sig_diff_html(&d, "fn f(x: u8)", "fn f(x: u16)", &BTreeMap::new());
+        assert!(
+            replaced.contains(r#"<del class="sd">u8</del><ins class="sd">u16</ins>"#),
+            "{replaced}"
+        );
+        assert!(html.contains("Result"), "{html}");
+        // Unchanged text is not marked.
+        assert!(html.starts_with(r#"<span class="kw">pub</span>"#), "{html}");
     }
 
     #[test]

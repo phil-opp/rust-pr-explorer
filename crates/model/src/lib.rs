@@ -213,6 +213,9 @@ pub struct Item {
     pub changes: Changes,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_sig: Option<String>,
+    /// Base version of `sig_public`, when `old_sig` is set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_sig_public: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_docs: Option<String>,
     pub source: Vec<SourceLine>,

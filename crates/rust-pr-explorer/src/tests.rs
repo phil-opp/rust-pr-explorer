@@ -2,6 +2,7 @@
 
 use crate::analyze::Analyzer;
 use crate::merge;
+use crate::source::Trust;
 use model::{Kind, Meta, Output, Status};
 use std::path::Path;
 
@@ -214,7 +215,9 @@ fn glob_imports_super_and_nested_files() {
 #[cfg(feature = "semantic")]
 #[test]
 fn semantic_calls() {
-    let checkout = crate::source::Checkout::from_dirs(&fixture("base"), &fixture("head")).unwrap();
+    let checkout =
+        crate::source::Checkout::from_dirs(&fixture("base"), &fixture("head"), Trust::Untrusted)
+            .unwrap();
     let root = &checkout.head_dir;
     let mut analysis = Analyzer::run(root, &crate::source::find_crates(root));
     let calls = |a: &crate::analyze::Analysis, id: &str| -> Vec<(String, bool)> {
@@ -233,7 +236,13 @@ fn semantic_calls() {
             ("tinycalc::parser::Parser::parse_expr".to_string(), true),
         ]
     );
-    let stats = crate::semantic::refine(root, std::slice::from_ref(root), &mut analysis).unwrap();
+    let stats = crate::semantic::refine(
+        root,
+        std::slice::from_ref(root),
+        Trust::Untrusted,
+        &mut analysis,
+    )
+    .unwrap();
     assert!(stats.functions > 10, "{stats:?}");
     assert_eq!(
         calls(&analysis, "tinycalc::parser::parse"),
@@ -264,7 +273,8 @@ fn checkouts_drop_tool_configuration_and_symlinks() {
     ]);
     #[cfg(unix)]
     std::os::unix::fs::symlink("/etc/hostname", dir.path().join("src/leak.rs")).unwrap();
-    let checkout = crate::source::Checkout::from_dirs(dir.path(), dir.path()).unwrap();
+    let checkout =
+        crate::source::Checkout::from_dirs(dir.path(), dir.path(), Trust::Untrusted).unwrap();
     for side in [&checkout.base_dir, &checkout.head_dir] {
         assert!(side.join("src/lib.rs").is_file());
         assert!(!side.join(".cargo/config.toml").exists());
@@ -272,6 +282,13 @@ fn checkouts_drop_tool_configuration_and_symlinks() {
         assert!(!side.join("rust-toolchain.toml").exists());
         assert!(!side.join("src/leak.rs").exists());
     }
+    // In a trusted (sandboxed) environment the configuration is kept, but
+    // symlinks are still dropped.
+    let trusted =
+        crate::source::Checkout::from_dirs(dir.path(), dir.path(), Trust::Trusted).unwrap();
+    assert!(trusted.head_dir.join(".cargo/config.toml").is_file());
+    assert!(trusted.head_dir.join("rust-toolchain.toml").is_file());
+    assert!(!trusted.head_dir.join("src/leak.rs").exists());
     // The originals are untouched.
     assert!(dir.path().join(".cargo/config.toml").is_file());
     assert!(dir.path().join("rust-toolchain.toml").is_file());

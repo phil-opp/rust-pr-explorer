@@ -68,7 +68,7 @@ Costs and risks:
 
 ## Safety
 
-The analyzed code is never compiled or executed. Two tools do run on the checkout: `cargo metadata`, which rust-analyzer uses to load the workspace, and `rustc --print …` for the sysroot. Both read configuration from the source tree, which a hostile PR could use to run its own programs:
+By default the analyzed code is never compiled or executed. Two tools do run on the checkout: `cargo metadata`, which rust-analyzer uses to load the workspace, and `rustc --print …` for the sysroot. Both read configuration from the source tree, which a hostile PR could use to run its own programs:
 - `.cargo/config.toml` can set `build.rustc` or `build.rustc-wrapper`.
 - `rust-toolchain.toml` can point at a custom toolchain directory.
 
@@ -78,6 +78,15 @@ The tool therefore analyzes only temporary copies, and before analysis it delete
 - every symlink, so that no file outside the tree is read and embedded in the page
 
 `cargo metadata` may download dependency sources from the registry, but it does not build them.
+
+### Trusted mode
+
+In a sandboxed environment (a throwaway container or VM without credentials), running the project's code is acceptable. `--trust-project-code`, or `RUST_PR_EXPLORER_TRUST_PROJECT_CODE=1` for CI and container setups, then:
+- runs build scripts (rust-analyzer's `cargo check` step), so code included from `OUT_DIR` is analyzed;
+- expands procedural macros with the toolchain's `rust-analyzer-proc-macro-srv`;
+- keeps `.cargo/config.toml` and `rust-toolchain.toml`, which builds may need.
+
+Symlinks are still removed, because removing them protects the page's contents, not the machine. Example: with a type defined only in build-script output, `make().hello()` stays unresolved in the default mode but resolves to the right method in trusted mode. The page states which mode was used.
 
 In the page, doc comments are rendered with `pulldown-cmark`, with all raw HTML turned into text. Links only point to analyzed items or to `http(s)` URLs. The embedded JSON has `</` escaped. The analyzed code cannot inject markup or script into the page.
 
@@ -118,13 +127,9 @@ Running the `rust-analyzer` binary and talking LSP (`callHierarchy/outgoingCalls
 
 The library gives direct, synchronous access and makes the safe configuration explicit in code.
 
-### rust-analyzer with build scripts and proc macros — not implemented
+### rust-analyzer with build scripts and proc macros — implemented as an opt-in
 
-Running them would let rust-analyzer see:
-- code included from `OUT_DIR` (generated bindings)
-- items produced by proc-macro attributes and derives
-
-That is a real gap for crates that rely on them. It means executing project code, so it should only exist as an explicit opt-in such as `--trust-build-scripts`, or inside a sandbox.
+Running them lets rust-analyzer see code included from `OUT_DIR` and items produced by proc macros. Because it executes project code, it is off by default and enabled with `--trust-project-code`; see [Trusted mode](#trusted-mode). The syntactic item model still doesn't include generated items, so they show up as call targets only if they are defined in the analyzed source.
 
 ### rust-analyzer as the only item model — not implemented
 
@@ -148,7 +153,7 @@ The tool calls the `git` binary to clone, fetch pull request refs, compute merge
 
 ## Next steps
 
-- Opt-in rustdoc JSON or proc-macro expansion, inside a sandbox.
+- Opt-in rustdoc JSON in trusted mode, for an exact public API.
 - Public-API computation via rust-analyzer's `hir` (exact re-exports, `doc(hidden)`).
 - docs.rs links for external names.
 - Fetch PR metadata (title, description) through the GitHub API when a token is available.

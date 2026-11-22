@@ -1,7 +1,7 @@
 //! The sidebar, the overview and the module pages.
 
 use crate::App;
-use crate::code::{code_html, docs_html, esc, first_paragraph};
+use crate::code::{docs_html, esc, first_paragraph};
 use crate::data::{Data, changed, kind_order};
 use crate::dom;
 use model::{Item, Kind, Status};
@@ -91,10 +91,7 @@ fn item_row(
     let sig = if it.info.kind == Kind::Mod {
         String::new()
     } else {
-        format!(
-            r#"<pre class="sig">{}</pre>"#,
-            code_html(d, d.sig_for(it, scope), &it.info.sig_refs)
-        )
+        d.sig_html(it, scope)
     };
     let first = first_paragraph(&it.info.docs);
     let docs = if first.is_empty() {

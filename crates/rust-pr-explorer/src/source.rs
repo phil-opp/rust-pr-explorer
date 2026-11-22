@@ -5,6 +5,17 @@ use anyhow::{Context, Result, bail};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Whether the analyzed project's own code may be executed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Trust {
+    /// Never run project code; strip configuration that could make tools
+    /// run a program chosen by the project.
+    Untrusted,
+    /// The environment is sandboxed: build scripts and procedural macros may
+    /// run, and the project's cargo and toolchain configuration is kept.
+    Trusted,
+}
+
 /// A crate found in a source tree.
 #[derive(Debug, Clone)]
 pub struct CrateSrc {
@@ -32,7 +43,7 @@ pub struct Checkout {
 impl Checkout {
     /// Copies two directories, so that tools run on them (`cargo metadata`
     /// writes a `Cargo.lock`) never touch the originals.
-    pub fn from_dirs(base: &Path, head: &Path) -> Result<Self> {
+    pub fn from_dirs(base: &Path, head: &Path, trust: Trust) -> Result<Self> {
         for dir in [base, head] {
             if !dir.is_dir() {
                 bail!("`{}` is not a directory", dir.display());
@@ -43,8 +54,8 @@ impl Checkout {
         let head_dir = temp.path().join("head");
         copy_tree(base, &base_dir)?;
         copy_tree(head, &head_dir)?;
-        sanitize(&base_dir)?;
-        sanitize(&head_dir)?;
+        sanitize(&base_dir, trust)?;
+        sanitize(&head_dir, trust)?;
         Ok(Checkout {
             base_dir,
             head_dir,
@@ -57,7 +68,7 @@ impl Checkout {
     }
 
     /// Exports two revisions of a local git repository.
-    pub fn from_git(repo: &Path, base: &str, head: &str) -> Result<Self> {
+    pub fn from_git(repo: &Path, base: &str, head: &str, trust: Trust) -> Result<Self> {
         let temp = tempfile::tempdir()?;
         let base_rev = rev_parse(repo, base)?;
         let head_rev = rev_parse(repo, head)?;
@@ -65,8 +76,8 @@ impl Checkout {
         let head_dir = temp.path().join("head");
         export_rev(repo, &base_rev, &base_dir)?;
         export_rev(repo, &head_rev, &head_dir)?;
-        sanitize(&base_dir)?;
-        sanitize(&head_dir)?;
+        sanitize(&base_dir, trust)?;
+        sanitize(&head_dir, trust)?;
         Ok(Checkout {
             base_dir,
             head_dir,
@@ -80,7 +91,7 @@ impl Checkout {
 
     /// Fetches a GitHub pull request. The base is the merge base of the PR
     /// head and the repository's default branch, unless `base` is given.
-    pub fn from_github_pr(spec: &str, base: Option<&str>) -> Result<Self> {
+    pub fn from_github_pr(spec: &str, base: Option<&str>, trust: Trust) -> Result<Self> {
         let (owner, repo, number) = parse_pr_spec(spec)?;
         let url = format!("https://github.com/{owner}/{repo}.git");
         let temp = tempfile::tempdir()?;
@@ -162,8 +173,8 @@ impl Checkout {
                 ],
             )?;
         }
-        sanitize(&base_dir)?;
-        sanitize(&head_dir)?;
+        sanitize(&base_dir, trust)?;
+        sanitize(&head_dir, trust)?;
         Ok(Checkout {
             base_dir,
             head_dir,
@@ -256,12 +267,13 @@ fn export_rev(repo: &Path, rev: &str, dest: &Path) -> Result<()> {
 
 /// Removes what could make tools run code chosen by the analyzed project.
 ///
-/// Analysis never builds the code, but `cargo metadata` and rustup read
-/// configuration from the source tree: `.cargo/config.toml` can name a
-/// `rustc` (wrapper) to run and `rust-toolchain.toml` a toolchain directory.
-/// Symlinks are removed too, so that no file outside the tree is read and
-/// embedded in the page. Only ever called on temporary copies.
-fn sanitize(dir: &Path) -> Result<()> {
+/// Without trust, analysis never builds the code, but `cargo metadata` and
+/// rustup read configuration from the source tree: `.cargo/config.toml` can
+/// name a `rustc` (wrapper) to run and `rust-toolchain.toml` a toolchain
+/// directory. Those files are removed unless the project is trusted.
+/// Symlinks are always removed, so that no file outside the tree is read
+/// and embedded in the page. Only ever called on temporary copies.
+fn sanitize(dir: &Path, trust: Trust) -> Result<()> {
     for entry in std::fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
@@ -270,7 +282,7 @@ fn sanitize(dir: &Path) -> Result<()> {
         if file_type.is_symlink() {
             std::fs::remove_file(&path)?;
         } else if file_type.is_dir() {
-            if name == ".cargo" {
+            if name == ".cargo" && trust == Trust::Untrusted {
                 for config in ["config", "config.toml"] {
                     let config = path.join(config);
                     if config.exists() {
@@ -278,11 +290,13 @@ fn sanitize(dir: &Path) -> Result<()> {
                     }
                 }
             }
-            sanitize(&path)?;
-        } else if matches!(
-            name.to_str(),
-            Some("rust-toolchain" | "rust-toolchain.toml")
-        ) {
+            sanitize(&path, trust)?;
+        } else if trust == Trust::Untrusted
+            && matches!(
+                name.to_str(),
+                Some("rust-toolchain" | "rust-toolchain.toml")
+            )
+        {
             std::fs::remove_file(&path)?;
         }
     }

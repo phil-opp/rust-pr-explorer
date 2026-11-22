@@ -323,11 +323,11 @@ impl Data {
                 .map(|(_, w)| *w)
                 .collect();
                 let mut s = format!(
-                    r#"<span class="st st-changed">~ {}</span>"#,
+                    r#"<span class="st st-changed">{}</span>"#,
                     if what.is_empty() {
                         "changed".to_string()
                     } else {
-                        what.join(", ")
+                        format!("changed: {}", what.join(", "))
                     }
                 );
                 if let Some(from) = &c.moved_from {
@@ -385,6 +385,41 @@ impl Data {
             Some(public) if !within(scope, self.mod_of(it)) => public,
             _ => &it.info.sig,
         }
+    }
+}
+
+impl Data {
+    /// The signature block of an item seen from `scope`. A changed
+    /// signature is shown as a diff against the base version.
+    pub fn sig_html(&self, it: &Item, scope: &str) -> String {
+        use crate::code::{code_html, sig_diff_html};
+        let new = self.sig_for(it, scope);
+        let refs = &it.info.sig_refs;
+        if !it.changes.signature {
+            return format!(r#"<pre class="sig">{}</pre>"#, code_html(self, new, refs));
+        }
+        let Some(old_full) = &it.old_sig else {
+            return format!(
+                r#"<pre class="sig">{}</pre><div class="sig-note">Same text, but names in the signature now refer to different items.</div>"#,
+                code_html(self, new, refs)
+            );
+        };
+        let public_view = !within(scope, self.mod_of(it));
+        let old = if public_view {
+            it.old_sig_public.as_deref().unwrap_or(old_full)
+        } else {
+            old_full
+        };
+        if old == new {
+            return format!(
+                r#"<pre class="sig">{}</pre><div class="sig-note">Only private parts of the definition changed.</div>"#,
+                code_html(self, new, refs)
+            );
+        }
+        format!(
+            r#"<pre class="sig sig-diff">{}</pre>"#,
+            sig_diff_html(self, old, new, refs)
+        )
     }
 }
 

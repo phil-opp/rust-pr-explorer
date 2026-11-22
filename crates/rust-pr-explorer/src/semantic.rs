@@ -5,11 +5,14 @@
 //! rust-analyzer's type inference answers "what does this function call?"
 //! for every function, and its answers replace the guesses.
 //!
-//! No code from the analyzed project is executed: build scripts are not
-//! run and procedural macros are not expanded. Only `cargo metadata` is
-//! invoked, which may download (but never builds) dependency sources.
+//! By default no code from the analyzed project is executed: build scripts
+//! are not run and procedural macros are not expanded. Only `cargo metadata`
+//! is invoked, which may download (but never builds) dependency sources.
+//! With [`Trust::Trusted`] (for sandboxed environments), build scripts run
+//! and proc macros are expanded, so rust-analyzer also sees generated code.
 
 use crate::analyze::{Analysis, LineCol};
+use crate::source::Trust;
 use anyhow::{Context, Result};
 use model::{Call, Ref};
 use ra_ap_ide::{AnalysisHost, CallHierarchyConfig, FilePosition, TextSize};
@@ -36,7 +39,12 @@ pub struct Stats {
 ///
 /// `manifest_dirs` are the directories whose `Cargo.toml` should be
 /// loaded; each is loaded as a cargo workspace.
-pub fn refine(root: &Path, manifest_dirs: &[PathBuf], analysis: &mut Analysis) -> Result<Stats> {
+pub fn refine(
+    root: &Path,
+    manifest_dirs: &[PathBuf],
+    trust: Trust,
+    analysis: &mut Analysis,
+) -> Result<Stats> {
     let root = std::fs::canonicalize(root)?;
     let mut stats = Stats::default();
     let mut texts = Texts::default();
@@ -50,7 +58,8 @@ pub fn refine(root: &Path, manifest_dirs: &[PathBuf], analysis: &mut Analysis) -
     let mut done: BTreeSet<String> = BTreeSet::new();
     for dir in manifest_dirs {
         let dir = std::fs::canonicalize(dir)?;
-        let (host, vfs) = load(&dir).with_context(|| format!("loading {}", dir.display()))?;
+        let (host, vfs) =
+            load(&dir, trust).with_context(|| format!("loading {}", dir.display()))?;
         let ra = host.analysis();
         let config = CallHierarchyConfig {
             exclude_tests: true,
@@ -186,7 +195,7 @@ fn apply(
     item.info.calls = calls;
 }
 
-fn load(dir: &Path) -> Result<(AnalysisHost, Vfs)> {
+fn load(dir: &Path, trust: Trust) -> Result<(AnalysisHost, Vfs)> {
     let cargo = CargoConfig {
         sysroot: Some(RustLibSource::Discover),
         // The syntactic analysis sees code behind every `cfg(feature)`;
@@ -194,13 +203,19 @@ fn load(dir: &Path) -> Result<(AnalysisHost, Vfs)> {
         features: CargoFeatures::All,
         ..Default::default()
     };
+    let trusted = trust == Trust::Trusted;
     let load = LoadCargoConfig {
-        // Never run build scripts or proc macros of the analyzed code.
-        load_out_dirs_from_check: false,
-        with_proc_macro_server: ProcMacroServerChoice::None,
+        // Build scripts and proc macros are the project's own code: run
+        // them only when the environment is trusted (sandboxed).
+        load_out_dirs_from_check: trusted,
+        with_proc_macro_server: if trusted {
+            ProcMacroServerChoice::Sysroot
+        } else {
+            ProcMacroServerChoice::None
+        },
         prefill_caches: false,
         num_worker_threads: std::thread::available_parallelism().map_or(1, |n| n.get()),
-        proc_macro_processes: 0,
+        proc_macro_processes: usize::from(trusted),
     };
     let (db, vfs, _) = load_workspace_at(dir, &cargo, &load, &|_| {})?;
     Ok((AnalysisHost::with_database(db), vfs))
