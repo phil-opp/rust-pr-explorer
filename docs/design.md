@@ -14,12 +14,19 @@ This document records how the Rust PR Explorer prototype gets its information an
 ```text
 crates/model             data types shared by analysis and viewer (serde)
 crates/rust-pr-explorer  CLI: get sources, analyze, compare, write the page
-  src/source.rs          git clone/archive or directory copy; finds crates
+  src/source.rs          git worktrees or directory copies; finds crates and targets
   src/analyze.rs         syntactic analysis with syn (items, names, edges)
   src/semantic.rs        call resolution with rust-analyzer (feature "semantic")
-  src/merge.rs           base/head comparison
+  src/merge.rs           base/head comparison, moves
+  src/sigdiff.rs         structured signature diffs
+  src/files.rs           every changed file: line diffs, Cargo.toml entries
+  src/python.rs          Python files compared by function and class
   build.rs               compiles crates/viewer to wasm, runs wasm-bindgen
 crates/viewer            the page's front end (wasm, web-sys, pulldown-cmark)
+  src/pages.rs           overview and module pages
+  src/canvas.rs          canvas of cards
+  src/map.rs, route.rs   structure view (module map, matrix) and arrow routing
+  src/files.rs           other changed files (Markdown sections, Python, manifests)
 ```
 
 The CLI's build script runs a nested `cargo build` of the viewer for `wasm32-unknown-unknown`, in its own target directory. It then generates the JavaScript bindings with `wasm-bindgen-cli-support`, used as a library. `main.rs` embeds both outputs with `include_bytes!`. A plain `cargo build` therefore produces a complete tool; the only extra requirement is the wasm target (`rustup target add wasm32-unknown-unknown`).
@@ -92,6 +99,10 @@ The tool therefore analyzes only temporary copies, and before analysis it delete
 
 `cargo metadata` may download dependency sources from the registry, but it does not build them.
 
+The list of changed files is taken before these deletions, so they are still shown. In `git` mode the revisions are checked out as worktrees of a temporary `--shared` clone, not with `git archive`, which would apply the commit's own `export-ignore` attributes and let a PR hide files.
+
+Paths the project chooses are confined to the checkout: `#[path]` attributes and the target paths in `Cargo.toml` (`[lib] path`, `[[bin]] path`, `package.build`) are canonicalized, and files outside the checkout are not read (a warning on the page says so); a file is loaded at most once, so `#[path]` cycles end. Items outside the analyzed crates are described only if rust-analyzer found them in the checkout, the toolchain's sources or Cargo's registry and git directories, so a path dependency pointing elsewhere on the machine is not described either.
+
 ### Trusted mode
 
 In a sandboxed environment (a throwaway container or VM without credentials), running the project's code is acceptable. `--trust-project-code`, or `RUST_PR_EXPLORER_TRUST_PROJECT_CODE=1` for CI and container setups, then:
@@ -101,7 +112,7 @@ In a sandboxed environment (a throwaway container or VM without credentials), ru
 
 Symlinks are still removed, because removing them protects the page's contents, not the machine. Example: with a type defined only in build-script output, `make().hello()` stays unresolved in the default mode but resolves to the right method in trusted mode. The page states which mode was used.
 
-In the page, doc comments are rendered with `pulldown-cmark`, with all raw HTML turned into text. Links only point to analyzed items or to `http(s)` URLs. The embedded JSON has `</` escaped. The analyzed code cannot inject markup or script into the page.
+In the page, doc comments are rendered with `pulldown-cmark`, with all raw HTML turned into text. Links only point to analyzed items or to `http(s)` URLs, including documentation links of dependencies, which come from their `html_root_url`. The embedded JSON has every `<` escaped, so nothing in it can end or change its `<script>` element. The analyzed code cannot inject markup or script into the page.
 
 ## Alternatives considered
 

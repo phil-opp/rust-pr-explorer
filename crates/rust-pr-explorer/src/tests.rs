@@ -130,7 +130,14 @@ fn shadowing_and_name_spaces() {
     let out = analyze_dirs(dir.path(), dir.path());
     let f = &out.items["t::f"].info;
     // `helper()` is the function, not the module of the same name.
-    assert!(f.calls.iter().any(|c| c.to == "t::helper"));
+    // Both are kept; the function, defined second, is tagged with its
+    // kind.
+    assert!(
+        f.calls.iter().any(|c| c.to == "t::helper [fn]"),
+        "{:?}",
+        f.calls
+    );
+    assert!(out.items.contains_key("t::helper"));
     // `T` is the generic parameter, not the struct; `x` is the local.
     assert!(!f.sig_refs.contains_key("T"));
     assert!(!f.uses.iter().any(|u| u.to == "t::T"));
@@ -440,7 +447,8 @@ fn checkouts_drop_tool_configuration_and_symlinks() {
         assert!(!side.join(".cargo/config.toml").exists());
         assert!(!side.join("sub/.cargo/config").exists());
         assert!(!side.join("rust-toolchain.toml").exists());
-        assert!(!side.join("src/leak.rs").exists());
+        // `exists()` would follow the link.
+        assert!(std::fs::symlink_metadata(side.join("src/leak.rs")).is_err());
     }
     // In a trusted (sandboxed) environment the configuration is kept, but
     // symlinks are still dropped.
@@ -448,7 +456,7 @@ fn checkouts_drop_tool_configuration_and_symlinks() {
         crate::source::Checkout::from_dirs(dir.path(), dir.path(), Trust::Trusted).unwrap();
     assert!(trusted.head_dir.join(".cargo/config.toml").is_file());
     assert!(trusted.head_dir.join("rust-toolchain.toml").is_file());
-    assert!(!trusted.head_dir.join("src/leak.rs").exists());
+    assert!(std::fs::symlink_metadata(trusted.head_dir.join("src/leak.rs")).is_err());
     // The originals are untouched.
     assert!(dir.path().join(".cargo/config.toml").is_file());
     assert!(dir.path().join("rust-toolchain.toml").is_file());
@@ -530,4 +538,308 @@ fn binaries_tests_and_build_scripts_are_analyzed() {
     let works = &out.items["test:it::works"].info;
     let calls: Vec<&str> = works.calls.iter().map(|c| c.to.as_str()).collect();
     assert_eq!(calls, ["t::api", "test:it::setup"]);
+}
+
+#[test]
+fn traits_with_associated_types() {
+    let base = write_crate(&[("src/lib.rs", "pub trait Shape { type Unit; }\n")]);
+    let head = write_crate(&[("src/lib.rs", "pub trait Shape { type Unit: Copy; }\n")]);
+    let out = analyze_dirs(base.path(), head.path());
+    let unit = &out.items["t::Shape::Unit"];
+    assert_eq!(unit.info.sig, "type Unit: Copy;");
+    assert_eq!(unit.status, Status::Changed);
+}
+
+#[test]
+fn files_outside_the_checkout_are_not_read() {
+    let outside = tempfile::tempdir().unwrap();
+    let secret = outside.path().join("secret.rs");
+    std::fs::write(&secret, "pub fn leaked() {}\n").unwrap();
+    let dir = write_crate(&[
+        (
+            "src/lib.rs",
+            &format!(
+                "#[path = \"{}\"]\npub mod m;\n#[path = \"lib.rs\"]\npub mod again;\npub fn ok() {{}}\n",
+                secret.display()
+            ),
+        ),
+        ("src/bin/b.rs", "fn main() {}\n"),
+    ]);
+    // A manifest target pointing outside, too.
+    let manifest = dir.path().join("Cargo.toml");
+    let text = std::fs::read_to_string(&manifest).unwrap();
+    std::fs::write(
+        &manifest,
+        format!(
+            "{text}[[bin]]\nname = \"x\"\npath = \"{}\"\n",
+            secret.display()
+        ),
+    )
+    .unwrap();
+    let crates = crate::source::find_crates(dir.path());
+    let analysis = Analyzer::run(dir.path(), &crates);
+    assert!(analysis.items.contains_key("t::ok"));
+    assert!(
+        analysis.items.keys().all(|id| !id.contains("leaked")),
+        "{:?}",
+        analysis.items.keys()
+    );
+    let warnings = analysis.warnings.join("\n");
+    assert!(warnings.contains("outside the checkout"), "{warnings}");
+    // `#[path = "lib.rs"]` inside lib.rs: refused, no endless recursion.
+    assert!(warnings.contains("already loaded"), "{warnings}");
+}
+
+#[test]
+fn embedded_data_cannot_end_its_script_element() {
+    let json = serde_json::to_string("Strips `<!--<script>` prefixes. </script>").unwrap();
+    let page = crate::render_page("t", &json);
+    let start = page
+        .find(r#"<script id="data" type="application/json">"#)
+        .unwrap();
+    let end = start + page[start..].find("</script>").unwrap();
+    let data = &page[start..end];
+    assert!(!data[1..].contains('<'), "{data}");
+    // Still the same JSON.
+    let inner = &data[data.find('>').unwrap() + 1..];
+    assert_eq!(
+        serde_json::from_str::<String>(inner).unwrap(),
+        "Strips `<!--<script>` prefixes. </script>"
+    );
+}
+
+/// In `git` mode, files come from a worktree: symlinks committed to the
+/// repository are removed from the copies (not just never copied), and
+/// `export-ignore` can't hide files. Everything removed is still listed.
+#[cfg(unix)]
+#[test]
+fn git_checkouts_list_and_remove_what_they_must() {
+    let dir = write_crate(&[("src/lib.rs", "pub fn f() {}\n")]);
+    let git = |args: &[&str]| {
+        let out = std::process::Command::new("git")
+            .arg("-C")
+            .arg(dir.path())
+            .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    git(&["init", "-q", "-b", "main"]);
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "base"]);
+    std::fs::write(
+        dir.path().join("src/lib.rs"),
+        "mod hidden;\npub fn f() {}\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("src/hidden.rs"), "pub fn h() {}\n").unwrap();
+    std::fs::write(
+        dir.path().join(".gitattributes"),
+        "src/hidden.rs export-ignore\n.gitattributes export-ignore\n",
+    )
+    .unwrap();
+    std::fs::create_dir(dir.path().join(".cargo")).unwrap();
+    std::fs::write(
+        dir.path().join(".cargo/config.toml"),
+        "[build]\nrustc-wrapper = \"x\"\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("rust-toolchain.toml"), "[toolchain]\n").unwrap();
+    std::os::unix::fs::symlink("/etc/hostname", dir.path().join("src/leak.rs")).unwrap();
+    git(&["add", "."]);
+    git(&["commit", "-q", "-m", "head"]);
+    let checkout =
+        crate::source::Checkout::from_git(dir.path(), "HEAD~1", "HEAD", Trust::Untrusted).unwrap();
+    let head = &checkout.head_dir;
+    assert!(head.join("src/hidden.rs").is_file());
+    assert!(std::fs::symlink_metadata(head.join("src/leak.rs")).is_err());
+    assert!(!head.join(".cargo/config.toml").exists());
+    assert!(!head.join("rust-toolchain.toml").exists());
+    let listed: Vec<(&str, &str)> = checkout
+        .files
+        .iter()
+        .map(|f| (f.path.as_str(), f.lang.as_str()))
+        .collect();
+    for expected in [
+        (".cargo/config.toml", "toml"),
+        ("rust-toolchain.toml", "toml"),
+        ("src/hidden.rs", "rust"),
+        ("src/leak.rs", "symlink"),
+    ] {
+        assert!(listed.contains(&expected), "{expected:?} in {listed:?}");
+    }
+    // The symlink is listed by its target, never followed.
+    let leak = checkout
+        .files
+        .iter()
+        .find(|f| f.path == "src/leak.rs")
+        .unwrap();
+    assert_eq!(leak.hunks[1].1, "symbolic link to /etc/hostname");
+}
+
+#[test]
+fn variants_of_one_path_are_all_kept() {
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "pub struct W<T>(T);\npub trait Show { fn show(&self) -> u8; }\n\
+         #[cfg(unix)]\npub fn sep() -> char { '/' }\n#[cfg(windows)]\npub fn sep() -> char { '\\\\' }\n\
+         impl Show for W<u8> { fn show(&self) -> u8 { 1 } }\nimpl Show for W<u16> { fn show(&self) -> u8 { 2 } }\n",
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        "pub struct W<T>(T);\npub trait Show { fn show(&self) -> u8; }\n\
+         #[cfg(unix)]\npub fn sep() -> char { '/' }\n#[cfg(windows)]\npub fn sep() -> char { '|' }\n\
+         impl Show for W<u8> { fn show(&self) -> u8 { 1 } }\nimpl Show for W<u16> { fn show(&self) -> u8 { 3 } }\n",
+    )]);
+    let out = analyze_dirs(base.path(), head.path());
+    let changed: Vec<&str> = out
+        .items
+        .values()
+        .filter(|i| i.status == Status::Changed && i.info.kind != Kind::Mod)
+        .map(|i| i.info.id.as_str())
+        .collect();
+    assert_eq!(
+        changed,
+        [
+            "t::W::<impl Show for W<u16>>::show",
+            "t::sep [cfg(windows)]"
+        ]
+    );
+}
+
+#[test]
+fn ambiguous_associated_functions_are_not_resolved() {
+    let dir = write_crate(&[(
+        "src/lib.rs",
+        "pub struct S;\nimpl From<u8> for S { fn from(_: u8) -> S { S } }\n\
+         impl From<String> for S { fn from(_: String) -> S { S } }\n\
+         pub fn make(s: String) -> S { S::from(s) }\n",
+    )]);
+    let out = analyze_dirs(dir.path(), dir.path());
+    let make = &out.items["t::make"].info;
+    assert!(make.calls.is_empty(), "{:?}", make.calls);
+    assert_eq!(make.unresolved_calls, 1);
+}
+
+#[test]
+fn glob_reexports_forward_reexports() {
+    let dir = write_crate(&[
+        ("src/lib.rs", "mod imp;\npub use imp::*;\n"),
+        ("src/imp/mod.rs", "mod a;\npub use a::Foo;\n"),
+        ("src/imp/a.rs", "pub struct Foo { pub x: u8 }\n"),
+    ]);
+    let out = analyze_dirs(dir.path(), dir.path());
+    let foo = &out.items["t::imp::a::Foo"].info;
+    assert!(foo.public);
+    assert!(
+        foo.public_paths.contains(&"t::Foo".to_string()),
+        "{:?}",
+        foo.public_paths
+    );
+}
+
+#[test]
+fn swapping_targets_with_the_same_name_is_a_change() {
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "use std::{fmt, io};\npub mod a { pub fn run() {} }\npub mod b { pub fn run() {} }\n\
+         pub fn f(_a: io::Error, _b: fmt::Error) {}\npub fn g() { a::run(); a::run(); b::run(); }\n",
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        "use std::{fmt, io};\npub mod a { pub fn run() {} }\npub mod b { pub fn run() {} }\n\
+         pub fn f(_a: fmt::Error, _b: io::Error) {}\npub fn g() { a::run(); b::run(); b::run(); }\n",
+    )]);
+    let out = analyze_dirs(base.path(), head.path());
+    let f = &out.items["t::f"];
+    assert_eq!(f.status, Status::Changed);
+    assert!(f.changes.signature && !f.changes.cosmetic);
+    let g = &out.items["t::g"];
+    assert!(g.changes.body && !g.changes.cosmetic);
+}
+
+#[test]
+fn renamed_modules_keep_their_items() {
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "pub mod old {\n    pub struct S { pub t: T }\n    pub struct T;\n    impl S { pub fn new() -> Self { make() } }\n    fn make() -> S { S { t: T } }\n}\n",
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        "pub mod new {\n    pub struct S { pub t: T }\n    pub struct T;\n    impl S { pub fn new() -> Self { make() } }\n    fn make() -> S { S { t: T } }\n}\n",
+    )]);
+    let out = analyze_dirs(base.path(), head.path());
+    for id in ["t::new::S", "t::new::T", "t::new::S::new", "t::new::make"] {
+        let it = &out.items[id];
+        assert_eq!(
+            it.changes.moved_from.as_deref(),
+            Some(id.replacen("::new::", "::old::", 1).as_str()),
+            "{id}"
+        );
+    }
+    assert!(
+        !out.items
+            .values()
+            .any(|i| i.status == Status::Removed && i.info.kind != Kind::Mod)
+    );
+}
+
+#[test]
+fn changes_outside_items_are_counted() {
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "use std::cell::Cell;\n\nthread_local! { static N: Cell<u8> = Cell::new(0); }\n\nextern \"C\" {\n    fn abs(x: i32) -> i32;\n}\n\npub fn f() -> u8 {\n    1\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() { assert_eq!(super::f(), 1); }\n}\n",
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        "use std::cell::Cell;\n\nthread_local! { static N: Cell<u16> = Cell::new(0); }\n\nextern \"C\" {\n    fn abs(x: i64) -> i64;\n}\n\npub fn f() -> u8 {\n    2\n}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() { assert_eq!(super::f(), 2); }\n}\n",
+    )]);
+    let checkout =
+        crate::source::Checkout::from_dirs(base.path(), head.path(), Trust::Untrusted).unwrap();
+    let out = crate::analyze_checkout(&checkout, false, Trust::Untrusted);
+    let lib = out.files.iter().find(|f| f.path == "src/lib.rs").unwrap();
+    assert!(lib.analyzed);
+    // `thread_local!`, the extern fn and the test assertion: 3 lines on
+    // each side. The change in `f` is inside an item.
+    assert_eq!(lib.outside_items, 6);
+    // The demo's changes are all inside items or imports.
+    let demo =
+        crate::source::Checkout::from_dirs(&fixture("base"), &fixture("head"), Trust::Untrusted)
+            .unwrap();
+    let out = crate::analyze_checkout(&demo, false, Trust::Untrusted);
+    for f in out.files.iter().filter(|f| f.analyzed) {
+        assert_eq!(f.outside_items, 0, "{}: {:#?}", f.path, f.hunks);
+    }
+}
+
+#[test]
+fn mutual_glob_imports_stay_fast() {
+    let n = 10;
+    let mut files: Vec<(String, String)> = vec![(
+        "src/lib.rs".into(),
+        (0..n)
+            .map(|i| format!("mod m{i};\npub use m{i}::*;\n"))
+            .collect(),
+    )];
+    for i in 0..n {
+        files.push((
+            format!("src/m{i}.rs"),
+            format!("use super::*;\npub fn a{i}() {{ b{i}(); x(); }}\npub fn b{i}() {{ Vec::<u8>::new(); }}\n"),
+        ));
+    }
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let dir = write_crate(&refs);
+    let start = std::time::Instant::now();
+    let out = analyze_dirs(dir.path(), dir.path());
+    assert!(start.elapsed().as_secs() < 5, "{:?}", start.elapsed());
+    let a = &out.items["t::m3::a3"].info;
+    assert!(a.calls.iter().any(|c| c.to == "t::m3::b3"));
 }

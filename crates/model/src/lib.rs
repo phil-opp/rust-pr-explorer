@@ -311,6 +311,9 @@ pub struct Item {
     /// The first line of the base version, for side-by-side diffs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_line: Option<usize>,
+    /// The base version's file, when it differs (a moved item).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_file: Option<String>,
     pub source: Vec<SourceLine>,
 }
 
@@ -396,6 +399,11 @@ pub struct ChangedFile {
     /// Part of the Rust analysis (shown as items, not as a file).
     #[serde(default)]
     pub analyzed: bool,
+    /// For an analyzed file: changed lines outside every item (unnamed
+    /// macro invocations, `extern` blocks, test code, …), which the items
+    /// don't show.
+    #[serde(default)]
+    pub outside_items: u32,
     /// Why the file counts as generated or vendored, if it does.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generated: Option<String>,

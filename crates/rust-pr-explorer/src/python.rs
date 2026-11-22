@@ -16,17 +16,20 @@ struct Logical {
     start: usize,
     end: usize,
     indent: usize,
-    /// Its text without comments, whitespace runs outside strings
-    /// collapsed to one space.
+    /// Its tokens, for comparing: no comments, and whitespace kept only
+    /// between two words (`a,b` and `a, b` are equal).
     norm: String,
     /// Byte offset in `norm` of the first `:` outside brackets, if any.
     colon: Option<usize>,
+    /// The same for display: whitespace runs collapsed to one space.
+    text: String,
+    text_colon: Option<usize>,
 }
 
 /// Splits source into logical lines. Lines that hold only comments or
 /// whitespace are not logical lines.
-fn logical_lines(text: &str) -> Vec<Logical> {
-    let lines: Vec<&str> = text.split('\n').collect();
+fn logical_lines(source: &str) -> Vec<Logical> {
+    let lines: Vec<&str> = source.split('\n').collect();
     let mut out = Vec::new();
     // Tokenizer state across physical lines.
     let mut depth: i32 = 0;
@@ -53,18 +56,41 @@ fn logical_lines(text: &str) -> Vec<Logical> {
                 indent,
                 norm: String::new(),
                 colon: None,
+                text: String::new(),
+                text_colon: None,
             });
         }
         let Some(l) = cur.as_mut() else { continue };
         l.end = n;
+        // Whitespace seen before the next token (a line break inside
+        // brackets counts).
         let mut space = !l.norm.is_empty();
         let mut continued = false;
+        // Adds a token character, with the whitespace before it.
+        fn token(l: &mut Logical, space: &mut bool, c: char) {
+            if *space {
+                if !l.text.is_empty() && !l.text.ends_with(' ') {
+                    l.text.push(' ');
+                }
+                if ends_with_word(&l.norm)
+                    && (c.is_alphanumeric() || c == '_' || c == '"' || c == '\'')
+                {
+                    l.norm.push(' ');
+                }
+            }
+            *space = false;
+            l.norm.push(c);
+            l.text.push(c);
+        }
         while i < chars.len() {
             let c = chars[i];
             if let Some((q, triple)) = string {
+                // Inside a string everything counts, as written.
                 l.norm.push(c);
+                l.text.push(c);
                 if c == '\\' && i + 1 < chars.len() {
                     l.norm.push(chars[i + 1]);
+                    l.text.push(chars[i + 1]);
                     i += 2;
                     continue;
                 }
@@ -72,8 +98,10 @@ fn logical_lines(text: &str) -> Vec<Logical> {
                     if !triple {
                         string = None;
                     } else if i + 2 < chars.len() && chars[i + 1] == q && chars[i + 2] == q {
-                        l.norm.push(q);
-                        l.norm.push(q);
+                        for _ in 0..2 {
+                            l.norm.push(q);
+                            l.text.push(q);
+                        }
                         i += 2;
                         string = None;
                     }
@@ -90,31 +118,31 @@ fn logical_lines(text: &str) -> Vec<Logical> {
                 }
                 '\'' | '"' => {
                     let triple = i + 2 < chars.len() && chars[i + 1] == c && chars[i + 2] == c;
-                    if space && !l.norm.is_empty() && !l.norm.ends_with(' ') {
-                        l.norm.push(' ');
-                    }
-                    space = false;
-                    l.norm.push(c);
+                    token(l, &mut space, c);
                     if triple {
-                        l.norm.push(c);
-                        l.norm.push(c);
+                        for _ in 0..2 {
+                            l.norm.push(c);
+                            l.text.push(c);
+                        }
                         i += 2;
                     }
                     string = Some((c, triple));
                 }
                 ' ' | '\t' => space = true,
                 _ => {
-                    if space && !l.norm.is_empty() && !l.norm.ends_with(' ') {
-                        l.norm.push(' ');
-                    }
-                    space = false;
                     match c {
                         '(' | '[' | '{' => depth += 1,
                         ')' | ']' | '}' => depth = (depth - 1).max(0),
-                        ':' if depth == 0 && l.colon.is_none() => l.colon = Some(l.norm.len()),
+                        ':' if depth == 0 && l.colon.is_none() => {
+                            token(l, &mut space, c);
+                            l.colon = Some(l.norm.len() - 1);
+                            l.text_colon = Some(l.text.len() - 1);
+                            i += 1;
+                            continue;
+                        }
                         _ => {}
                     }
-                    l.norm.push(c);
+                    token(l, &mut space, c);
                 }
             }
             i += 1;
@@ -127,20 +155,22 @@ fn logical_lines(text: &str) -> Vec<Logical> {
         if open {
             if string.is_some() {
                 l.norm.push('\n');
-            } else {
-                l.norm.push(' ');
+                l.text.push('\n');
             }
         } else {
-            let mut done = cur.take().unwrap();
-            done.norm = done.norm.trim().to_string();
-            out.push(done);
+            out.push(cur.take().unwrap());
         }
     }
-    if let Some(mut l) = cur {
-        l.norm = l.norm.trim().to_string();
+    if let Some(l) = cur {
         out.push(l);
     }
     out
+}
+
+fn ends_with_word(s: &str) -> bool {
+    s.chars()
+        .last()
+        .is_some_and(|c| c.is_alphanumeric() || c == '_')
 }
 
 /// A function or class with its extent.
@@ -152,6 +182,8 @@ struct Def {
     kind: String,
     /// Header with decorators, normalized.
     sig: String,
+    /// The header's tokens, for comparing.
+    sig_norm: String,
     /// The docstring literal, if any.
     doc: Option<String>,
     /// Own logical lines (nested definitions left out), with their
@@ -207,13 +239,16 @@ fn outline(text: &str) -> (Vec<Def>, String) {
         }
         if let Some((kind, name)) = header(&l.norm) {
             let colon = l.colon.unwrap_or(l.norm.len());
-            let head = &l.norm[..colon];
-            let sig = decorators
-                .iter()
-                .map(|d| d.norm.clone())
-                .chain([head.to_string()])
-                .collect::<Vec<_>>()
-                .join("\n");
+            let header_of = |text: &str, end: Option<usize>, ds: &dyn Fn(&Logical) -> String| {
+                decorators
+                    .iter()
+                    .map(|d| ds(d))
+                    .chain([text[..end.unwrap_or(text.len())].to_string()])
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            };
+            let sig = header_of(&l.text, l.text_colon, &|d| d.text.clone());
+            let sig_norm = header_of(&l.norm, l.colon, &|d| d.norm.clone());
             let first = decorators.first().map_or(l.start, |d| d.start);
             decorators.clear();
             // Block: following logical lines indented deeper.
@@ -249,6 +284,7 @@ fn outline(text: &str) -> (Vec<Def>, String) {
                 name: qual,
                 kind: kind.to_string(),
                 sig,
+                sig_norm,
                 doc,
                 body: inline_body,
                 first,
@@ -341,7 +377,7 @@ pub fn compare(old: &str, new: &str) -> Vec<PyChange> {
             }),
             Some(o) => {
                 let old_src = own_lines(&old_lines, o);
-                let sig_changed = o.sig != d.sig || o.kind != d.kind;
+                let sig_changed = o.sig_norm != d.sig_norm || o.kind != d.kind;
                 let doc_changed = o.doc != d.doc;
                 let body_changed = o.body != d.body;
                 // Blank lines between nested definitions don't count.
@@ -496,7 +532,19 @@ class Store:
     fn brackets_and_continuations_make_one_logical_line() {
         let l = logical_lines("x = [\n  1,  # one\n  2,\n]\ny = 1 + \\\n  2\n");
         assert_eq!(l.len(), 2);
-        assert_eq!(l[0].norm, "x = [ 1, 2, ]");
+        assert_eq!(l[0].norm, "x=[1,2,]");
+        assert_eq!(l[0].text, "x = [ 1, 2, ]");
         assert_eq!((l[1].start, l[1].end), (4, 5));
+    }
+
+    #[test]
+    fn formatting_is_not_a_change() {
+        let c = compare("def f(a,b): return a+b\n", "def f(a, b):  return a + b\n");
+        assert!(c.is_empty() || c.iter().all(|x| x.cosmetic), "{c:#?}");
+        let c = compare(
+            "def f(a,b):\n    return a+b\n",
+            "def f(a, b):\n    return a + b  # sum\n",
+        );
+        assert!(c.iter().all(|x| x.cosmetic), "{c:#?}");
     }
 }

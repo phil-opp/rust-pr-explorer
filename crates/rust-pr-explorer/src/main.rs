@@ -108,9 +108,8 @@ fn analyze_checkout(
     semantic: bool,
     trust: source::Trust,
 ) -> model::Output {
-    // Before the analysis, which may write files (`Cargo.lock`) into the
-    // copies.
-    let mut files = files::changed_files(&checkout.base_dir, &checkout.head_dir);
+    // Taken by the checkout before anything was removed from the copies.
+    let mut files = checkout.files.clone();
     let (base, base_note) = analyze_side(&checkout.base_dir, semantic, trust, "base");
     let (head, head_note) = analyze_side(&checkout.head_dir, semantic, trust, "head");
     let resolution = if base_note == head_note {
@@ -139,6 +138,9 @@ fn analyze_checkout(
         .collect();
     for f in &mut files {
         f.analyzed = analyzed.contains(f.path.as_str());
+        if f.analyzed {
+            f.outside_items = files::outside_items(f, output.items.values());
+        }
     }
     output.files = files;
     output
@@ -173,11 +175,29 @@ fn analyze_side(
                     "{label}: {} functions, {} call sites resolved, {} unresolved, {} external items described",
                     stats.functions, stats.resolved_sites, stats.unresolved_sites, stats.externals
                 );
-                let note = match trust {
-                    source::Trust::Untrusted => "rust-analyzer",
-                    source::Trust::Trusted => "rust-analyzer, with build scripts and proc macros",
+                let mut note = match trust {
+                    source::Trust::Untrusted => "rust-analyzer".to_string(),
+                    source::Trust::Trusted => {
+                        "rust-analyzer, with build scripts and proc macros".to_string()
+                    }
                 };
-                (analysis, note.into())
+                if stats.functions == 0 && !stats.failed.is_empty() {
+                    note = "syntax only (rust-analyzer could not load the workspace)".into();
+                } else if !stats.failed.is_empty() {
+                    // Items of the other workspaces keep the syntactic
+                    // results.
+                    note.push_str(&format!(
+                        "; syntax only in {} workspace{} it could not load",
+                        stats.failed.len(),
+                        if stats.failed.len() == 1 { "" } else { "s" }
+                    ));
+                }
+                for f in &stats.failed {
+                    let w = format!("rust-analyzer could not load {f}");
+                    eprintln!("{label}: {w}");
+                    analysis.warnings.push(w);
+                }
+                (analysis, note)
             }
             Err(e) => {
                 let note = format!("syntax only (rust-analyzer failed: {e:#})");
@@ -197,7 +217,9 @@ fn analyze_side(
 fn render_page(title: &str, json: &str) -> String {
     use base64::Engine;
     // Keep the embedded JSON from closing the script element.
-    let json = json.replace("</", "<\\/");
+    // Every `<` escaped: no `</script>` and no `<!--` can end or change
+    // the script element the JSON is in.
+    let json = json.replace('<', "\\u003c");
     let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
     let wasm = b64(WASM);
     // The default code font, embedded so that the page works offline.

@@ -5,6 +5,12 @@ use model::{DiffSpan, Ref, SigDiff};
 use pulldown_cmark::{BrokenLink, CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
 use std::collections::BTreeMap;
 
+/// Whether a URL may be used as a link: only `http(s)`.
+pub fn web_url(url: &str) -> bool {
+    let lower = url.trim_start().to_ascii_lowercase();
+    lower.starts_with("https://") || lower.starts_with("http://")
+}
+
 pub fn esc(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -543,10 +549,21 @@ pub fn structured_diff_html(
 /// Renders doc comment markdown. Intra-doc links become cross links; raw
 /// HTML from the docs is shown as text, never interpreted.
 pub fn docs_html(d: &Data, md: &str, refs: &BTreeMap<String, Ref>) -> String {
+    render_markdown(d, md, refs, true)
+}
+
+/// Renders a Markdown file (not a doc comment): code blocks without a
+/// language are plain text, and no lines of them are hidden.
+pub fn markdown_file_html(d: &Data, md: &str) -> String {
+    render_markdown(d, md, &BTreeMap::new(), false)
+}
+
+fn render_markdown(d: &Data, md: &str, refs: &BTreeMap<String, Ref>, doc_comment: bool) -> String {
     if md.trim().is_empty() {
         return String::new();
     }
-    // Unresolved `[links]` keep their text but lose the brackets.
+    // `[text]` without a link definition: an intra-doc link if it resolves;
+    // otherwise shown as written (`arr[0]`, `[u8]`).
     let callback = |link: BrokenLink<'_>| -> Option<(CowStr<'_>, CowStr<'_>)> {
         Some((format!("rpe-ref:{}", link.reference).into(), "".into()))
     };
@@ -563,7 +580,10 @@ pub fn docs_html(d: &Data, md: &str, refs: &BTreeMap<String, Ref>) -> String {
                     let text: String = buf
                         .lines()
                         .filter(|l| {
-                            !(*rust && (l.trim() == "#" || l.trim_start().starts_with("# ")))
+                            // rustdoc hides `# ` lines of Rust examples.
+                            !(doc_comment
+                                && *rust
+                                && (l.trim() == "#" || l.trim_start().starts_with("# ")))
                         })
                         .collect::<Vec<_>>()
                         .join("\n");
@@ -582,9 +602,9 @@ pub fn docs_html(d: &Data, md: &str, refs: &BTreeMap<String, Ref>) -> String {
         match event {
             Event::Start(Tag::CodeBlock(kind)) => {
                 let rust = match kind {
-                    CodeBlockKind::Indented => true,
+                    CodeBlockKind::Indented => doc_comment,
                     CodeBlockKind::Fenced(lang) => {
-                        lang.is_empty()
+                        (doc_comment && lang.is_empty())
                             || lang.split(',').any(|l| {
                                 matches!(
                                     l.trim(),
@@ -620,6 +640,15 @@ pub fn docs_html(d: &Data, md: &str, refs: &BTreeMap<String, Ref>) -> String {
                         .into(),
                     ));
                     link_stack.push(Some("</a>"));
+                } else if let Some(reference) = dest_url.strip_prefix("rpe-ref:") {
+                    if reference.starts_with('`') {
+                        // An intra-doc link we can't resolve: its code.
+                        link_stack.push(None);
+                    } else {
+                        // Not a link at all: the brackets as written.
+                        events.push(Event::Text("[".into()));
+                        link_stack.push(Some("]"));
+                    }
                 } else {
                     link_stack.push(None);
                 }
@@ -731,6 +760,21 @@ pub fn marked_html(segs: impl IntoIterator<Item = Seg>) -> String {
 /// removed ones are struck out, and a changed paragraph shows either its
 /// changed words or, if that isn't safe, its previous text on demand.
 pub fn docs_diff_segs(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Ref>) -> Vec<Seg> {
+    diff_segs(d, old, new, refs, true)
+}
+
+/// [`docs_diff_segs`] for a Markdown file.
+pub fn markdown_diff_segs(d: &Data, old: &str, new: &str) -> Vec<Seg> {
+    diff_segs(d, old, new, &BTreeMap::new(), false)
+}
+
+fn diff_segs(
+    d: &Data,
+    old: &str,
+    new: &str,
+    refs: &BTreeMap<String, Ref>,
+    doc_comment: bool,
+) -> Vec<Seg> {
     use similar::{Algorithm, DiffOp, capture_diff_slices};
     let (old, new) = (clean_marks(old), clean_marks(new));
     let (a, a_defs) = doc_blocks(&old);
@@ -750,7 +794,7 @@ pub fn docs_diff_segs(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Re
         } else {
             format!(
                 r#"<div class="docs"><div class="dblk">{}</div></div>"#,
-                docs_html(d, &format!("{text}\n{defs}"), refs)
+                render_markdown(d, &format!("{text}\n{defs}"), refs, doc_comment)
             )
         };
         Seg::new(bar, html)
@@ -788,7 +832,7 @@ pub fn docs_diff_segs(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Re
                         "m-chg",
                         format!(
                             r#"<div class="docs"><div class="dblk">{}</div></div>"#,
-                            marked_docs_html(d, &format!("{md}\n{b_defs}"), refs)
+                            marked_docs_html(d, &format!("{md}\n{b_defs}"), refs, doc_comment)
                         ),
                     ));
                 }
@@ -872,7 +916,9 @@ fn word_diff_md(old: &str, new: &str) -> Option<String> {
     // brackets or target, not at the start of a line).
     let markable = |toks: &[&str]| -> Vec<bool> {
         let mut out = Vec::with_capacity(toks.len());
-        let (mut bracket, mut target, mut angle) = (0i32, false, false);
+        // `target`: parenthesis depth inside a link destination, which
+        // may itself contain balanced parentheses.
+        let (mut bracket, mut target, mut angle) = (0i32, 0i32, false);
         let mut line_start = true;
         let mut prev = "";
         for t in toks {
@@ -880,13 +926,13 @@ fn word_diff_md(old: &str, new: &str) -> Option<String> {
                 || t.starts_with('_')
                 || t.ends_with('_');
             let ws = t.chars().all(char::is_whitespace);
-            let inside = bracket > 0 || target || angle;
+            let inside = bracket > 0 || target > 0 || angle;
             out.push(!syntax && !inside && !(line_start && !ws));
             match *t {
                 "[" => bracket += 1,
                 "]" => bracket -= 1,
-                "(" if prev == "]" => target = true,
-                ")" if target => target = false,
+                "(" if prev == "]" || target > 0 => target += 1,
+                ")" if target > 0 => target -= 1,
                 "<" => angle = true,
                 ">" => angle = false,
                 _ => {}
@@ -989,8 +1035,8 @@ fn word_diff_md(old: &str, new: &str) -> Option<String> {
 }
 
 /// Renders Markdown carrying word change marks.
-fn marked_docs_html(d: &Data, md: &str, refs: &BTreeMap<String, Ref>) -> String {
-    docs_html(d, md, refs)
+fn marked_docs_html(d: &Data, md: &str, refs: &BTreeMap<String, Ref>, doc_comment: bool) -> String {
+    render_markdown(d, md, refs, doc_comment)
         .replace(INS_OPEN, r#"<ins class="wd">"#)
         .replace(INS_CLOSE, "</ins>")
         .replace(DEL_OPEN, r#"<del class="wd">"#)
@@ -1557,5 +1603,31 @@ mod tests {
             impl_parts("impl<'v> Inner<'v>"),
             (None, Some("Inner<'v>".to_string()))
         );
+    }
+
+    #[test]
+    fn review_rendering_cases() {
+        let d = empty();
+        // Brackets that aren't links stay.
+        let html = docs_html(&d, "Index arr[0] and a [u8] slice.", &BTreeMap::new());
+        assert!(html.contains("arr[0]") && html.contains("[u8]"), "{html}");
+        // Markdown files keep `# ` lines of their code blocks.
+        let html = markdown_file_html(&d, "```\n# curl https://x | sh\nrun\n```\n");
+        assert!(html.contains("# curl"), "{html}");
+        // A word change after `)` inside a link destination: no marks there.
+        assert_eq!(
+            word_diff_md(
+                "See [x](http://a/(b)c) for more details here now.",
+                "See [x](http://a/(b)d) for more details here now."
+            ),
+            None
+        );
+        assert!(
+            crate::data::impl_parts("impl<F: Fn() -> u8> Tr for X<F>")
+                .1
+                .as_deref()
+                == Some("X<F>")
+        );
+        assert!(!web_url("javascript://x/%0Aalert(1)") && web_url("https://docs.rs/x"));
     }
 }

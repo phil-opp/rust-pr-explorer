@@ -17,7 +17,6 @@ similar = "3.2.1"
 syn = { version = "3.0.10", features = ["full", "visit", "visit-mut", "extra-traits", "printing"] }
 tempfile = "3.27.0"
 toml = "1.2.2"
-tar = "0.4.46"
 base64 = "0.23.1"
 
 

@@ -49,7 +49,7 @@ pub struct CallSite {
 
 /// A name space of Rust paths: a name can refer to a type and to a value
 /// at the same time (e.g. `mod foo` and `fn foo`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Ns {
     Type,
     Value,
@@ -159,6 +159,8 @@ struct RawImpl {
     item: syn::ItemImpl,
 }
 
+type LookupKey = (String, String, Option<Ns>);
+
 #[derive(Clone)]
 struct Res {
     id: Option<String>,
@@ -169,6 +171,16 @@ struct Res {
 
 pub struct Analyzer {
     root: PathBuf,
+    /// The canonical root and the files loaded so far (canonical), so that
+    /// no file outside the checkout is read and no file is loaded twice
+    /// (`#[path]` cycles).
+    canonical_root: PathBuf,
+    /// Per (crate, canonical file): the module id it was loaded as.
+    loaded: HashMap<(String, PathBuf), String>,
+    /// Name lookups, memoized (see `lookup_name`).
+    lookup_memo: std::cell::RefCell<HashMap<LookupKey, Option<Res>>>,
+    lookup_active: std::cell::RefCell<std::collections::HashSet<LookupKey>>,
+    lookup_cut: std::cell::Cell<bool>,
     modules: HashMap<String, ModData>,
     kinds: HashMap<String, Kind>,
     pending: Vec<Pending>,
@@ -264,6 +276,11 @@ impl Analyzer {
     pub fn run(root: &Path, crates: &[CrateSrc]) -> Analysis {
         let mut an = Analyzer {
             root: root.to_path_buf(),
+            canonical_root: std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()),
+            loaded: Default::default(),
+            lookup_memo: Default::default(),
+            lookup_active: Default::default(),
+            lookup_cut: Default::default(),
             modules: HashMap::new(),
             kinds: HashMap::new(),
             pending: Vec::new(),
@@ -287,7 +304,7 @@ impl Analyzer {
                 krate.name.clone(),
                 (krate.deps.iter().cloned().collect(), krate.edition),
             );
-            match an.load_file(&krate.root_file) {
+            match an.load_file(&krate.root_file, &krate.name).map_err(|e| e.0) {
                 Ok((file, src)) => {
                     let dir = krate.root_file.parent().unwrap().to_path_buf();
                     an.kinds.insert(krate.name.clone(), Kind::Mod);
@@ -328,11 +345,48 @@ impl Analyzer {
         }
     }
 
-    fn load_file(&self, path: &Path) -> Result<(syn::File, Rc<SrcFile>), String> {
+    /// Reads and parses a source file for module `id`. Files outside the
+    /// checkout are refused, and so is a file its crate already loaded as
+    /// another module (a `#[path]` cycle); other crates may include the
+    /// same file. The error's flag is set when the file is the same
+    /// module, declared again (under another `cfg`).
+    fn load_file(
+        &mut self,
+        path: &Path,
+        id: &str,
+    ) -> Result<(syn::File, Rc<SrcFile>), (String, bool)> {
+        let canonical = std::fs::canonicalize(path)
+            .map_err(|e| (format!("cannot read {}: {e}", path.display()), false))?;
+        if !canonical.starts_with(&self.canonical_root) {
+            return Err((
+                format!("{} is outside the checkout; not read", path.display()),
+                false,
+            ));
+        }
+        let key = (Self::crate_of(id).to_string(), canonical);
+        if let Some(first) = self.loaded.get(&key) {
+            return Err(if first == id {
+                (
+                    format!(
+                        "module `{id}` is declared more than once (under different `cfg`s); the first declaration is used"
+                    ),
+                    true,
+                )
+            } else {
+                (
+                    format!(
+                        "{} is already loaded as module `{first}` (a `#[path]` cycle?); not read again",
+                        path.display()
+                    ),
+                    false,
+                )
+            });
+        }
+        self.loaded.insert(key, id.to_string());
         let text = std::fs::read_to_string(path)
-            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
-        let file =
-            syn::parse_file(&text).map_err(|e| format!("cannot parse {}: {e}", path.display()))?;
+            .map_err(|e| (format!("cannot read {}: {e}", path.display()), false))?;
+        let file = syn::parse_file(&text)
+            .map_err(|e| (format!("cannot parse {}: {e}", path.display()), false))?;
         let rel = path
             .strip_prefix(&self.root)
             .unwrap_or(path)
@@ -343,6 +397,45 @@ impl Analyzer {
             lines: text.lines().map(str::to_string).collect(),
         });
         Ok((file, src))
+    }
+
+    /// An id not used yet: `base`, or for a second definition at the same
+    /// path (`#[cfg(unix)]` and `#[cfg(windows)]` variants) `base` with its
+    /// `cfg` (and a number if that is taken too).
+    fn unique_id(&self, base: &str, attrs: &[Attribute], kind: Kind) -> String {
+        let Some(existing) = self.kinds.get(base) else {
+            return base.to_string();
+        };
+        // Different name spaces (a module and a function `helper`): both
+        // are legal, the later one is tagged with its kind.
+        let space = |k: Kind| match k {
+            Kind::Fn | Kind::Method | Kind::TraitMethod | Kind::Const | Kind::Static => 1,
+            Kind::AssocConst => 1,
+            Kind::Macro => 2,
+            Kind::Impl => 3,
+            _ => 0,
+        };
+        if space(*existing) != space(kind) {
+            let tagged = format!("{base} [{}]", kind.label());
+            if !self.kinds.contains_key(&tagged) {
+                return tagged;
+            }
+        }
+        let cfg: Option<String> = attrs
+            .iter()
+            .find(|a| a.path().is_ident("cfg"))
+            .map(|a| a.meta.to_token_stream().to_string().replace(' ', ""));
+        let tagged = match &cfg {
+            Some(c) => format!("{base} [{c}]"),
+            None => format!("{base} #2"),
+        };
+        let mut id = tagged.clone();
+        let mut n = 2;
+        while self.kinds.contains_key(&id) {
+            n += 1;
+            id = format!("{tagged} #{n}");
+        }
+        id
     }
 
     fn define(&mut self, module: &str, name: &str, id: &str, kind: Kind, vis: &Visibility) {
@@ -393,8 +486,8 @@ impl Analyzer {
             if skipped(module, item_attrs(item)) {
                 continue;
             }
-            let push = |an: &mut Analyzer, name: String, kind: Kind| {
-                let id = format!("{module}::{name}");
+            let push = |an: &mut Analyzer, name: String, kind: Kind| -> String {
+                let id = an.unique_id(&format!("{module}::{name}"), item_attrs(item), kind);
                 let vis = match item {
                     Item::Fn(i) => i.vis.clone(),
                     Item::Struct(i) => i.vis.clone(),
@@ -408,7 +501,7 @@ impl Analyzer {
                 };
                 an.define(module, &name, &id, kind, &vis);
                 an.pending.push(Pending {
-                    id,
+                    id: id.clone(),
                     name,
                     module: module.to_string(),
                     file: src.clone(),
@@ -418,33 +511,42 @@ impl Analyzer {
                     impl_ctx: None,
                     outer_generics: Vec::new(),
                 });
+                id
             };
             match item {
-                Item::Fn(f) => push(self, f.sig.ident.to_string(), Kind::Fn),
-                Item::Struct(s) => {
-                    if !matches!(s.fields, syn::Fields::Named(_)) {
-                        self.value_structs.insert(format!("{module}::{}", s.ident));
-                    }
-                    push(self, s.ident.to_string(), Kind::Struct)
+                Item::Fn(f) => {
+                    push(self, f.sig.ident.to_string(), Kind::Fn);
                 }
-                Item::Union(u) => push(self, u.ident.to_string(), Kind::Union),
+                Item::Struct(s) => {
+                    let id = push(self, s.ident.to_string(), Kind::Struct);
+                    if !matches!(s.fields, syn::Fields::Named(_)) {
+                        self.value_structs.insert(id);
+                    }
+                }
+                Item::Union(u) => {
+                    push(self, u.ident.to_string(), Kind::Union);
+                }
                 Item::Enum(e) => {
-                    let id = format!("{module}::{}", e.ident);
+                    let id = push(self, e.ident.to_string(), Kind::Enum);
                     self.enum_variants
                         .insert(id, e.variants.iter().map(|v| v.ident.to_string()).collect());
-                    push(self, e.ident.to_string(), Kind::Enum)
                 }
-                Item::Const(c) => push(self, c.ident.to_string(), Kind::Const),
-                Item::Static(s) => push(self, s.ident.to_string(), Kind::Static),
-                Item::Type(t) => push(self, t.ident.to_string(), Kind::TypeAlias),
+                Item::Const(c) => {
+                    push(self, c.ident.to_string(), Kind::Const);
+                }
+                Item::Static(s) => {
+                    push(self, s.ident.to_string(), Kind::Static);
+                }
+                Item::Type(t) => {
+                    push(self, t.ident.to_string(), Kind::TypeAlias);
+                }
                 Item::Macro(m) => {
                     if let Some(ident) = &m.ident {
-                        push(self, ident.to_string(), Kind::Macro)
+                        push(self, ident.to_string(), Kind::Macro);
                     }
                 }
                 Item::Trait(t) => {
-                    let trait_id = format!("{module}::{}", t.ident);
-                    push(self, t.ident.to_string(), Kind::Trait);
+                    let trait_id = push(self, t.ident.to_string(), Kind::Trait);
                     for member in &t.items {
                         let (name, kind, node) = match member {
                             syn::TraitItem::Fn(f) => (
@@ -542,7 +644,7 @@ impl Analyzer {
                                 ));
                                 continue;
                             };
-                            match self.load_file(file_path) {
+                            match self.load_file(file_path, &id) {
                                 Ok((file, child_src)) => {
                                     let is_mod_rs = file_path.file_name().unwrap() == "mod.rs"
                                         || path_attr.is_some();
@@ -553,7 +655,7 @@ impl Analyzer {
                                     };
                                     (file.items, child_src, child_dir, file.attrs)
                                 }
-                                Err(e) => {
+                                Err((e, _)) => {
                                     self.warnings.push(e);
                                     continue;
                                 }
@@ -605,6 +707,9 @@ impl Analyzer {
 
     /// Pass 2: impl blocks. Needs the full module tree to resolve self types.
     fn collect_impls(&mut self) {
+        // Lookups made while modules were still being collected may have
+        // missed later definitions.
+        self.lookup_memo.borrow_mut().clear();
         let impls = std::mem::take(&mut self.impls);
         for raw in impls {
             let item = &raw.item;
@@ -650,15 +755,20 @@ impl Analyzer {
                         unparse_type(&parse_quote!(#p))
                     };
                     let base = self_id.clone().unwrap_or_else(|| raw.module.clone());
-                    let impl_id = match &self_id {
-                        Some(_) => format!("{base}::<impl {trait_display}>"),
-                        None => format!("{base}::<impl {trait_display} for {self_display}>"),
+                    // The self type is spelled out when it is more than a
+                    // name (`W<u8>`, `&T`), so that impls for `W<u8>` and
+                    // `W<u16>` stay apart.
+                    let bare = self_id
+                        .as_deref()
+                        .and_then(|i| i.rsplit("::").next())
+                        .is_some_and(|n| n == self_display);
+                    let impl_id = if bare {
+                        format!("{base}::<impl {trait_display}>")
+                    } else {
+                        format!("{base}::<impl {trait_display} for {self_display}>")
                     };
+                    let impl_id = self.unique_id(&impl_id, &item.attrs, Kind::Impl);
                     let name = format!("impl {trait_display} for {self_display}");
-                    if self.kinds.contains_key(&impl_id) {
-                        // Duplicate impl headers (e.g. different generics); skip.
-                        continue;
-                    }
                     self.kinds.insert(impl_id.clone(), Kind::Impl);
                     let owner_of_impl = self_id.clone().unwrap_or_else(|| raw.module.clone());
                     self.children
@@ -733,10 +843,13 @@ impl Analyzer {
                     ),
                     _ => continue,
                 };
-                let id = format!("{impl_id}::{name}");
-                if self.kinds.contains_key(&id) {
-                    continue;
-                }
+                let attrs = match member {
+                    syn::ImplItem::Fn(f) => &f.attrs,
+                    syn::ImplItem::Const(c) => &c.attrs,
+                    syn::ImplItem::Type(t) => &t.attrs,
+                    _ => continue,
+                };
+                let id = self.unique_id(&format!("{impl_id}::{name}"), attrs, kind);
                 self.register_assoc(&owner, &name, &id, kind);
                 // Trait impl members are also reachable as `Type::name`.
                 if trait_res.is_some()
@@ -886,11 +999,22 @@ impl Analyzer {
                 }
                 Some(id) if self.kinds.get(id).is_some_and(|k| k.is_type_like()) => {
                     reached_type.get_or_insert(idx - 1);
-                    if let Some((_, member)) = self
+                    let candidates: Vec<&String> = self
                         .assoc
                         .get(id)
-                        .and_then(|members| members.iter().find(|(n, _)| n == seg))
-                    {
+                        .into_iter()
+                        .flatten()
+                        .filter(|(n, _)| n == seg)
+                        .map(|(_, m)| m)
+                        .collect::<BTreeSet<_>>()
+                        .into_iter()
+                        .collect();
+                    if candidates.len() > 1 {
+                        // Several impls provide the name (`From<u8>` and
+                        // `From<String>`): which one needs types.
+                        return None;
+                    }
+                    if let Some(member) = candidates.first().copied() {
                         cur = Res {
                             id: Some(member.clone()),
                             path: member.clone(),
@@ -934,10 +1058,39 @@ impl Analyzer {
 
     /// Looks a name up in a module: its definitions, then its imports, then
     /// its glob imports (only what they make visible).
+    /// Looks a name up in a module, memoized: glob imports that import
+    /// each other (`use super::*` in every child of a `pub use child::*`
+    /// root) would otherwise make this exponential. A lookup already in
+    /// progress further up (a cycle) finds nothing on this path.
     fn lookup_name(&self, module: &str, name: &str, ns: Option<Ns>, depth: usize) -> Option<Res> {
-        if depth > 12 {
+        let key = (module.to_string(), name.to_string(), ns);
+        if let Some(r) = self.lookup_memo.borrow().get(&key) {
+            return r.clone();
+        }
+        if depth > 12 || !self.lookup_active.borrow_mut().insert(key.clone()) {
+            self.lookup_cut.set(true);
             return None;
         }
+        let outer_cut = self.lookup_cut.replace(false);
+        let r = self.lookup_name_uncached(module, name, ns, depth);
+        let cut = self.lookup_cut.get();
+        self.lookup_cut.set(outer_cut || cut);
+        self.lookup_active.borrow_mut().remove(&key);
+        // A "not found" reached through a cut cycle may hold only for this
+        // path; anything found holds everywhere.
+        if r.is_some() || !cut {
+            self.lookup_memo.borrow_mut().insert(key, r.clone());
+        }
+        r
+    }
+
+    fn lookup_name_uncached(
+        &self,
+        module: &str,
+        name: &str,
+        ns: Option<Ns>,
+        depth: usize,
+    ) -> Option<Res> {
         let m = self.modules.get(module)?;
         if let Some(ids) = m.defs.get(name)
             && let Some(id) = ids.iter().find(|id| {
@@ -1067,10 +1220,13 @@ impl Analyzer {
 
     /// Pass 3: signatures, docs, references and edges.
     fn build_items(&mut self) -> BTreeMap<String, ItemData> {
+        self.lookup_memo.borrow_mut().clear();
         let pending = std::mem::take(&mut self.pending);
         let mut items = BTreeMap::new();
         // `pub use`: (module, target, name it gets there).
         let mut reexports: Vec<(String, String, Option<String>)> = Vec::new();
+        // `pub use m::*`: (module, m).
+        let mut globs: Vec<(String, String)> = Vec::new();
         for (module, data) in &self.modules {
             for u in &data.uses {
                 // `pub use path::Item;` and `pub use path::*;`
@@ -1091,8 +1247,30 @@ impl Analyzer {
                                 reexports.push((module.clone(), child.clone(), None));
                             }
                         }
+                        globs.push((module.clone(), id));
                     }
                 }
+            }
+        }
+        // A glob re-export also forwards the module's own `pub use`s (the
+        // facade pattern), through chains of globs.
+        for _ in 0..16 {
+            let mut added = false;
+            for (m, t) in &globs {
+                let forwarded: Vec<(String, String, Option<String>)> = reexports
+                    .iter()
+                    .filter(|(rm, _, _)| rm == t)
+                    .map(|(_, target, name)| (m.clone(), target.clone(), name.clone()))
+                    .collect();
+                for r in forwarded {
+                    if !reexports.contains(&r) {
+                        reexports.push(r);
+                        added = true;
+                    }
+                }
+            }
+            if !added {
+                break;
             }
         }
         for p in pending {
@@ -1487,8 +1665,7 @@ impl Analyzer {
                     let mut t2 = t.clone();
                     t2.attrs.clear();
                     sig_col.visit_trait_item_type_mut(&mut t2);
-                    let text = t2.to_token_stream().to_string();
-                    let text = unparse(parse_quote!(trait __X { #text }));
+                    let text = unparse(parse_quote!(trait __X { #t2 }));
                     let text = text
                         .trim()
                         .trim_start_matches("trait __X {")
@@ -1693,8 +1870,11 @@ impl Analyzer {
         ext_sites.extend(sig_col.ext_sites.clone());
         let mut source_refs = sig_col.pos_refs.clone();
         source_refs.extend(body_col.pos_refs.clone());
-        let sig_norm = format!("{sig}|{:?}", sig_col.refs);
-        let body_norm = format!("{body_norm}|{:?}", body_col.refs);
+        // The text, plus every name's full target in order: names that
+        // print the same (`io::Error` and `fmt::Error` both show as
+        // `Error`) still differ here.
+        let sig_norm = format!("{sig}|{:?}", ordered_targets(&sig_col.pos_refs));
+        let body_norm = format!("{body_norm}|{:?}", ordered_targets(&body_col.pos_refs));
         let mut children = self.children.get(&p.id).cloned().unwrap_or_default();
         children.dedup();
 
@@ -1744,6 +1924,19 @@ impl Analyzer {
             ext_sites,
         })
     }
+}
+
+/// The targets of resolved paths, in source order.
+fn ordered_targets(pos_refs: &BTreeMap<String, Ref>) -> Vec<&str> {
+    let mut v: Vec<((usize, usize), &str)> = pos_refs
+        .iter()
+        .filter_map(|(k, r)| {
+            let (l, c) = k.split_once(':')?;
+            Some(((l.parse().ok()?, c.parse().ok()?), r.path.as_str()))
+        })
+        .collect();
+    v.sort();
+    v.into_iter().map(|(_, p)| p).collect()
 }
 
 fn reachable(

@@ -13,7 +13,7 @@
 
 use crate::analyze::{Analysis, LineCol};
 use crate::source::Trust;
-use anyhow::{Context, Result};
+use anyhow::Result;
 use model::{Call, External, Kind, Ref};
 use ra_ap_ide::{
     AnalysisHost, CallHierarchyConfig, FilePosition, FileRange, GotoDefinitionConfig, HoverConfig,
@@ -39,6 +39,9 @@ pub struct Stats {
     pub unresolved_sites: usize,
     /// Items outside the analyzed crates it described.
     pub externals: usize,
+    /// Workspaces that failed to load, with the error: their items keep
+    /// the syntactic results.
+    pub failed: Vec<String>,
 }
 
 /// What a call site refers to.
@@ -77,8 +80,19 @@ pub fn refine(
     let mut done: BTreeSet<String> = BTreeSet::new();
     for dir in manifest_dirs {
         let dir = std::fs::canonicalize(dir)?;
-        let (host, vfs) =
-            load(&dir, trust).with_context(|| format!("loading {}", dir.display()))?;
+        let (host, vfs) = match load(&dir, trust) {
+            Ok(loaded) => loaded,
+            Err(e) => {
+                let rel = dir
+                    .strip_prefix(&root)
+                    .unwrap_or(&dir)
+                    .display()
+                    .to_string();
+                let rel = if rel.is_empty() { ".".to_string() } else { rel };
+                stats.failed.push(format!("{rel}: {e:#}"));
+                continue;
+            }
+        };
         let ra = host.analysis();
         let call_config = CallHierarchyConfig {
             exclude_tests: true,
@@ -234,6 +248,7 @@ fn describe_externals(
                 .or_insert_with(|| (item.info.file.clone(), *pos));
         }
     }
+    let allowed = allowed_sources(root);
     for (path, (rel, pos)) in sites {
         if analysis.externals.contains_key(&path) {
             continue;
@@ -269,10 +284,44 @@ fn describe_externals(
         let Ok(Some((nav, markup, url))) = result else {
             continue;
         };
+        // Only describe items whose source is in the checkout, the
+        // toolchain or Cargo's download directory: a path dependency
+        // could point at any file on this machine.
+        let source = vfs
+            .file_path(nav.file_id)
+            .as_path()
+            .map(|p| PathBuf::from(p.as_str()));
+        if !source.is_some_and(|p| allowed.iter().any(|a| p.starts_with(a))) {
+            continue;
+        }
         if let Some(ext) = external_from(&path, &nav, &markup, url) {
             analysis.externals.insert(path, ext);
         }
     }
+}
+
+/// Directories whose files may be described: the checkout, the toolchain
+/// (sysroot) and Cargo's registry and git checkouts.
+fn allowed_sources(root: &Path) -> Vec<PathBuf> {
+    let mut out = vec![root.to_path_buf()];
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cargo")));
+    if let Some(home) = cargo_home {
+        for sub in ["registry", "git"] {
+            if let Ok(p) = std::fs::canonicalize(home.join(sub)) {
+                out.push(p);
+            }
+        }
+    }
+    if let Ok(o) = std::process::Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .output()
+        && let Ok(p) = std::fs::canonicalize(String::from_utf8_lossy(&o.stdout).trim())
+    {
+        out.push(p);
+    }
+    out
 }
 
 /// Builds the description of `path` from rust-analyzer's answers, if they

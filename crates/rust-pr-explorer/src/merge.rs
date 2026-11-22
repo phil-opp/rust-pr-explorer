@@ -134,6 +134,7 @@ fn compare(b: ItemData, h: ItemData, moved_from: Option<String>) -> Item {
         old_sig: (b.info.sig != h.info.sig).then(|| b.info.sig.clone()),
         old_docs: docs.then(|| b.info.docs.clone()),
         old_line: Some(b.info.line),
+        old_file: (b.info.file != h.info.file).then(|| b.info.file.clone()),
         source,
         info: h.info,
         status,
@@ -194,11 +195,18 @@ fn find_moves(
                 old.info.kind,
                 Kind::Const | Kind::Static | Kind::AssocConst | Kind::Macro
             );
-        if has_body {
-            old.body_norm == new.body_norm
+        let (o, n) = if has_body {
+            (&old.body_norm, &new.body_norm)
         } else {
-            old.sig_norm == new.sig_norm
+            (&old.sig_norm, &new.sig_norm)
+        };
+        if o == n {
+            return true;
         }
+        // Names of items that moved along (siblings, `Self`) point into the
+        // new module: compare with the old module's paths rewritten.
+        let (om, nm) = (&old.info.module, &new.info.module);
+        om != nm && o.replace(&format!("\"{om}::"), &format!("\"{nm}::")) == *n
     };
     let mut moves = HashMap::new();
     for (k, new_ids) in added {

@@ -29,3 +29,12 @@ impl Op {
         }
     }
 }
+
+/// Something that can be reduced to a value.
+pub trait Reduce {
+    /// The value it reduces to.
+    type Output;
+
+    /// Reduces `self`.
+    fn reduce(&self) -> Self::Output;
+}

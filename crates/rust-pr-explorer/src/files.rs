@@ -11,8 +11,8 @@ const MAX_BYTES: u64 = 1 << 20;
 /// Lines of context around changes.
 const CONTEXT: usize = 3;
 
-/// All regular files under `root`, by path relative to it, except version
-/// control data.
+/// All regular files and symlinks under `root`, by path relative to it,
+/// except version control data. Symlinks are not followed.
 fn files(root: &Path) -> BTreeSet<String> {
     let mut out = BTreeSet::new();
     fn walk(root: &Path, dir: &Path, out: &mut BTreeSet<String>) {
@@ -28,7 +28,7 @@ fn files(root: &Path) -> BTreeSet<String> {
             }
             if ty.is_dir() {
                 walk(root, &path, out);
-            } else if ty.is_file()
+            } else if (ty.is_file() || ty.is_symlink())
                 && let Ok(rel) = path.strip_prefix(root)
             {
                 out.insert(rel.to_string_lossy().replace('\\', "/"));
@@ -129,7 +129,11 @@ fn hunks(old: &str, new: &str) -> (Vec<SourceLine>, u32, u32) {
 }
 
 /// Text of a file, if it is text and not too large. `Err` means binary.
+/// A symlink reads as the path it points to; it is never followed.
 fn read(path: &Path) -> Result<Option<String>, ()> {
+    if let Ok(target) = std::fs::read_link(path) {
+        return Ok(Some(format!("symbolic link to {}\n", target.display())));
+    }
     let Ok(meta) = std::fs::metadata(path) else {
         return Ok(None);
     };
@@ -151,7 +155,12 @@ pub fn changed_files(base: &Path, head: &Path) -> Vec<ChangedFile> {
         let (pa, pb) = (base.join(path), head.join(path));
         let status = match (a.contains(path), b.contains(path)) {
             (true, true) => {
-                if std::fs::read(&pa).ok() == std::fs::read(&pb).ok() {
+                let same = match (std::fs::read_link(&pa), std::fs::read_link(&pb)) {
+                    (Ok(x), Ok(y)) => x == y,
+                    (Err(_), Err(_)) => std::fs::read(&pa).ok() == std::fs::read(&pb).ok(),
+                    _ => false,
+                };
+                if same {
                     continue;
                 }
                 Status::Changed
@@ -172,10 +181,15 @@ pub fn changed_files(base: &Path, head: &Path) -> Vec<ChangedFile> {
         );
         let binary = ta.is_err() || tb.is_err();
         let (ta, tb) = (ta.ok().flatten(), tb.ok().flatten());
+        let symlink = [&pa, &pb].iter().any(|p| std::fs::read_link(p).is_ok());
         let mut file = ChangedFile {
             path: path.clone(),
             status,
-            lang: lang(path, binary).to_string(),
+            lang: if symlink {
+                "symlink".to_string()
+            } else {
+                lang(path, binary).to_string()
+            },
             generated: generated(path, tb.as_deref().or(ta.as_deref())),
             ..Default::default()
         };
@@ -202,6 +216,72 @@ pub fn changed_files(base: &Path, head: &Path) -> Vec<ChangedFile> {
         out.push(file);
     }
     out
+}
+
+/// How many changed lines of an analyzed Rust file lie outside every
+/// item: changes the item view doesn't show. Imports and module
+/// declarations (their effect is on the items), blank lines and comments
+/// don't count.
+pub fn outside_items<'a>(file: &ChangedFile, items: impl Iterator<Item = &'a model::Item>) -> u32 {
+    // Line spans (1-based, inclusive) of the items on each side.
+    let mut old: Vec<(usize, usize)> = Vec::new();
+    let mut new: Vec<(usize, usize)> = Vec::new();
+    for it in items.filter(|i| i.info.kind != model::Kind::Mod) {
+        let count = |tags: &[char]| it.source.iter().filter(|l| tags.contains(&l.0)).count();
+        let old_file = it.old_file.as_deref().unwrap_or(&it.info.file);
+        if it.status != Status::Removed && it.info.file == file.path {
+            let n = count(&[' ', '+']);
+            new.push((it.info.line, it.info.line + n.saturating_sub(1)));
+        }
+        if it.status != Status::Added && old_file == file.path {
+            let start = it.old_line.unwrap_or(it.info.line);
+            let n = count(&[' ', '-']);
+            old.push((start, start + n.saturating_sub(1)));
+        }
+    }
+    let inside = |spans: &[(usize, usize)], l: usize| spans.iter().any(|&(a, b)| a <= l && l <= b);
+    let ignorable = |text: &str| {
+        let t = text.trim();
+        t.is_empty()
+            || t.starts_with("//")
+            || t.starts_with("use ")
+            || t.starts_with("pub use ")
+            || (t.starts_with("pub(") && t.contains(") use "))
+            || (t.ends_with(';') && (t.starts_with("mod ") || t.starts_with("pub mod ")))
+            || t == "}"
+            // Inherent impl headers: their methods are the items, and their
+            // cards show the header.
+            || ((t.starts_with("impl ") || t.starts_with("impl<") || t.starts_with("unsafe impl"))
+                && t.ends_with('{'))
+    };
+    let (mut o, mut n) = (0usize, 0usize);
+    let mut count = 0;
+    for l in &file.hunks {
+        match l.0 {
+            '@' => {
+                let mut it = l.1.split(' ').filter_map(|x| x.parse::<usize>().ok());
+                o = it.next().unwrap_or(1);
+                n = it.next().unwrap_or(1);
+            }
+            '+' => {
+                if !inside(&new, n) && !ignorable(&l.1) {
+                    count += 1;
+                }
+                n += 1;
+            }
+            '-' => {
+                if !inside(&old, o) && !ignorable(&l.1) {
+                    count += 1;
+                }
+                o += 1;
+            }
+            _ => {
+                o += 1;
+                n += 1;
+            }
+        }
+    }
+    count
 }
 
 /// One `Cargo.toml` entry as written, on one line.
@@ -250,6 +330,17 @@ fn entries(text: &str) -> Option<BTreeMap<(String, String), String>> {
             }
         }
     }
+    // Sources replaced for the whole build: they matter most.
+    if let Some(patch) = t.get("patch").and_then(|v| v.as_table()) {
+        for (registry, table) in patch {
+            if let Some(table) = table.as_table() {
+                add_table(format!("patch.{registry}"), table);
+            }
+        }
+    }
+    if let Some(table) = t.get("replace").and_then(|v| v.as_table()) {
+        add_table("replace".into(), table);
+    }
     if let Some(ws) = t.get("workspace").and_then(|v| v.as_table()) {
         if let Some(table) = ws.get("dependencies").and_then(|v| v.as_table()) {
             add_table("workspace.dependencies".into(), table);
@@ -268,8 +359,9 @@ fn entries(text: &str) -> Option<BTreeMap<(String, String), String>> {
     Some(out)
 }
 
-/// What changed in a `Cargo.toml`: dependencies, features, workspace
-/// members and package version, edition and minimum Rust version.
+/// What changed in a `Cargo.toml`: dependencies, `[patch]` and
+/// `[replace]`, features, workspace members and package version, edition
+/// and minimum Rust version.
 pub fn manifest_changes(old: &str, new: &str) -> Vec<ManifestChange> {
     let (Some(a), Some(b)) = (entries(old), entries(new)) else {
         return Vec::new();
@@ -356,5 +448,20 @@ mod tests {
         assert_eq!(notes.hunks.len(), 1 + 3 + 2 + 3);
         assert_eq!(files[2].generated.as_deref(), Some("vendored"));
         assert_eq!(files[2].status, Status::Added);
+    }
+
+    #[test]
+    fn manifest_patches() {
+        let old = "[patch.crates-io]\nserde = { path = \"../serde\" }\n";
+        let new = "[patch.crates-io]\nserde = { git = \"https://example.com/serde\" }\n[replace]\n\"log:0.4.0\" = { path = \"log\" }\n";
+        let c = manifest_changes(old, new);
+        let keys: Vec<(&str, &str)> = c
+            .iter()
+            .map(|m| (m.section.as_str(), m.name.as_str()))
+            .collect();
+        assert_eq!(
+            keys,
+            [("patch.crates-io", "serde"), ("replace", "log:0.4.0")]
+        );
     }
 }

@@ -43,6 +43,9 @@ pub struct Checkout {
     pub head_label: String,
     pub url: Option<String>,
     pub pr: Option<model::PrMeta>,
+    /// Every file that differs, taken before anything was removed from
+    /// the copies (see [`sanitize`]).
+    pub files: Vec<model::ChangedFile>,
     // Keeps temporary directories alive for as long as the checkout is used.
     _temp: Option<tempfile::TempDir>,
 }
@@ -61,6 +64,8 @@ impl Checkout {
         let head_dir = temp.path().join("head");
         copy_tree(base, &base_dir)?;
         copy_tree(head, &head_dir)?;
+        // From the originals: the copies have no symlinks.
+        let files = crate::files::changed_files(base, head);
         sanitize(&base_dir, trust)?;
         sanitize(&head_dir, trust)?;
         Ok(Checkout {
@@ -71,6 +76,7 @@ impl Checkout {
             head_label: head.display().to_string(),
             url: None,
             pr: None,
+            files,
             _temp: Some(temp),
         })
     }
@@ -82,8 +88,35 @@ impl Checkout {
         let head_rev = rev_parse(repo, head)?;
         let base_dir = temp.path().join("base");
         let head_dir = temp.path().join("head");
-        export_rev(repo, &base_rev, &base_dir)?;
-        export_rev(repo, &head_rev, &head_dir)?;
+        // A worktree of a shared clone: unlike `git archive`, it doesn't
+        // apply the commit's `export-ignore` attributes, which a PR could
+        // use to hide files; and the user's repository is not modified.
+        let clone = temp.path().join("repo");
+        run_git(
+            None,
+            &[
+                "clone",
+                "--quiet",
+                "--shared",
+                "--no-checkout",
+                repo.to_str().context("repository path is not UTF-8")?,
+                clone.to_str().unwrap(),
+            ],
+        )?;
+        for (rev, dir) in [(&base_rev, &base_dir), (&head_rev, &head_dir)] {
+            run_git(
+                Some(&clone),
+                &[
+                    "worktree",
+                    "add",
+                    "--quiet",
+                    "--detach",
+                    dir.to_str().unwrap(),
+                    rev,
+                ],
+            )?;
+        }
+        let files = crate::files::changed_files(&base_dir, &head_dir);
         sanitize(&base_dir, trust)?;
         sanitize(&head_dir, trust)?;
         Ok(Checkout {
@@ -94,6 +127,7 @@ impl Checkout {
             head_label: format!("{head} ({})", short(&head_rev)),
             url: None,
             pr: None,
+            files,
             _temp: Some(temp),
         })
     }
@@ -190,6 +224,7 @@ impl Checkout {
                 ],
             )?;
         }
+        let files = crate::files::changed_files(&base_dir, &head_dir);
         sanitize(&base_dir, trust)?;
         sanitize(&head_dir, trust)?;
         Ok(Checkout {
@@ -213,6 +248,7 @@ impl Checkout {
                     .map(str::to_string),
                 head_rev: short(&head_rev).to_string(),
             }),
+            files,
             _temp: Some(temp),
         })
     }
@@ -321,22 +357,6 @@ fn rev_parse(repo: &Path, rev: &str) -> Result<String> {
     )
 }
 
-fn export_rev(repo: &Path, rev: &str, dest: &Path) -> Result<()> {
-    std::fs::create_dir_all(dest)?;
-    let archive = Command::new("git")
-        .arg("-C")
-        .arg(repo)
-        .args(["archive", "--format=tar", rev])
-        .output()
-        .context("failed to run git archive")?;
-    if !archive.status.success() {
-        bail!("git archive {rev} failed");
-    }
-    tar::Archive::new(archive.stdout.as_slice())
-        .unpack(dest)
-        .with_context(|| format!("extracting {rev}"))
-}
-
 /// Removes what could make tools run code chosen by the analyzed project.
 ///
 /// Without trust, analysis never builds the code, but `cargo metadata` and
@@ -417,6 +437,9 @@ fn copy_tree(from: &Path, to: &Path) -> Result<()> {
 
 /// Finds all library (or, if there is no library, binary) crates in a tree.
 pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
+    // Manifest paths (`[lib] path`, `[[bin]] path`, `package.build`) may
+    // point anywhere: the analyzer refuses files outside the checkout, with
+    // a warning on the page.
     let mut manifests = Vec::new();
     walk_manifests(root, &mut manifests, 0);
     // Outermost manifests first: the root crate is the main subject.

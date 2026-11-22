@@ -76,6 +76,17 @@ pub fn with_app<R>(f: impl FnOnce(&mut App) -> R) -> Option<R> {
 
 #[wasm_bindgen(start)]
 pub fn start() {
+    // A bug must not leave a page that silently stops responding.
+    std::panic::set_hook(Box::new(|info| {
+        let body = dom::document().body();
+        if let Some(body) = body {
+            let msg = format!(
+                r#"<div id="panic">The viewer hit an internal error and stopped: {}. Reload the page to continue.</div>"#,
+                esc(&info.to_string())
+            );
+            let _ = body.insert_adjacent_html("afterbegin", &msg);
+        }
+    }));
     let Some(json) = dom::by_id("data").and_then(|el| el.text_content()) else {
         return;
     };
@@ -447,9 +458,7 @@ fn on_mouse_over(app: &mut App, el: &Element) {
         }
     }
     let Some(r) = dom::closest(el, ".ref") else {
-        if app.s.view != View::Space {
-            hide_tooltip();
-        }
+        hide_tooltip();
         return;
     };
     let path = dom::data(&r, "path").unwrap_or_default();
@@ -504,6 +513,8 @@ fn render_search(app: &mut App) {
     };
     let q = search_query();
     if q.is_empty() {
+        // No stale hit for Enter to open.
+        app.s.search.clear();
         dom::toggle_class(&b, "open", false);
         return;
     }

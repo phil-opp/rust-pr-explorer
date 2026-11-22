@@ -59,3 +59,12 @@ impl fmt::Display for Expr {
 pub(crate) fn format_number(n: f64) -> String {
     if n.fract() == 0.0 { format!("{}", n as i64) } else { format!("{n}") }
 }
+
+/// Something that can be reduced to a value.
+pub trait Reduce {
+    /// The value it reduces to.
+    type Output;
+
+    /// Reduces `self`.
+    fn reduce(&self) -> Self::Output;
+}

@@ -2,7 +2,7 @@
 //! definitions, Markdown sections, and plain line diffs for the rest.
 
 use crate::code::{
-    Links, Seg, code_html, docs_diff_segs, docs_html, esc, marked_html, sig_diff_html,
+    Links, Seg, code_html, esc, markdown_diff_segs, markdown_file_html, marked_html, sig_diff_html,
 };
 use crate::data::Data;
 use model::{ChangedFile, ManifestChange, PyChange, SourceLine, Status};
@@ -259,7 +259,6 @@ pub fn markdown_html(d: &Data, old: &str, new: &str) -> String {
     let old_by_key: BTreeMap<&str, &(String, String, String)> =
         a.iter().map(|s| (s.0.as_str(), s)).collect();
     let new_keys: BTreeSet<&str> = b.iter().map(|s| s.0.as_str()).collect();
-    let no_refs = BTreeMap::new();
     let heading = |h: &str, key: &str| {
         let title = h
             .lines()
@@ -289,10 +288,10 @@ pub fn markdown_html(d: &Data, old: &str, new: &str) -> String {
                     if head_changed { "m-chg" } else { "" },
                     heading(&s.1, &s.0),
                 ));
-                segs.extend(docs_diff_segs(d, &o.2, &s.2, &no_refs));
+                segs.extend(markdown_diff_segs(d, &o.2, &s.2));
             }
             None => {
-                let body = docs_html(d, &s.2, &no_refs);
+                let body = markdown_file_html(d, &s.2);
                 segs.push(Seg::new(
                     "m-add",
                     format!(r#"{}<div class="docs">{body}</div>"#, heading(&s.1, &s.0)),
@@ -317,6 +316,17 @@ pub fn markdown_html(d: &Data, old: &str, new: &str) -> String {
 }
 
 fn file_card(d: &Data, f: &ChangedFile) -> String {
+    let outside = if f.analyzed {
+        format!(
+            r#"<div class="mark m-chg"><div class="note">{} changed line{} of this file {} outside every item (a macro invocation without a name, an <code>extern</code> block, test code, …), so the items above don't show {}. The line diff shows the whole file.</div></div>"#,
+            f.outside_items,
+            if f.outside_items == 1 { "" } else { "s" },
+            if f.outside_items == 1 { "is" } else { "are" },
+            if f.outside_items == 1 { "it" } else { "them" },
+        )
+    } else {
+        String::new()
+    };
     let structured = match f.lang.as_str() {
         "python" if !f.python.is_empty() => python_html(d, &f.python),
         "markdown" => match (&f.old_text, &f.new_text) {
@@ -351,7 +361,7 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
         )
     };
     format!(
-        r#"<div class="ientry file {}"><div class="irow"><div class="ihead"><span class="kind">{}</span><span class="title-name">{}</span>{}{}</div><div class="iacts">{}</div></div>{structured}{lines}</div>"#,
+        r#"<div class="ientry file {}"><div class="irow"><div class="ihead"><span class="kind">{}</span><span class="title-name">{}</span>{}{}</div><div class="iacts">{}</div></div>{outside}{structured}{lines}</div>"#,
         match f.status {
             Status::Added => "whole whole-added",
             Status::Removed => "whole whole-removed",
@@ -396,8 +406,20 @@ pub fn manifests_html(d: &Data) -> String {
 
 /// Every changed file the Rust analysis doesn't cover.
 pub fn other_files_html(d: &Data) -> String {
-    let others: Vec<&ChangedFile> = d.out.files.iter().filter(|f| !f.analyzed).collect();
-    let covered = d.out.files.len() - others.len();
+    // Rust files count as covered unless some of their changes are outside
+    // every item.
+    let others: Vec<&ChangedFile> = d
+        .out
+        .files
+        .iter()
+        .filter(|f| !f.analyzed || f.outside_items > 0)
+        .collect();
+    let covered = d
+        .out
+        .files
+        .iter()
+        .filter(|f| f.analyzed && f.outside_items == 0)
+        .count();
     let (generated, own): (Vec<&ChangedFile>, Vec<&ChangedFile>) =
         others.into_iter().partition(|f| f.generated.is_some());
     let mut html = format!(

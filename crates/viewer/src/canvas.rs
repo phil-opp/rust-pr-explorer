@@ -545,6 +545,8 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
             r#"<div class="ext-note">Outside the analyzed crates, as rust-analyzer describes it.{}</div>"#,
             e.url
                 .as_deref()
+                // The URL comes from the dependency (`html_root_url`).
+                .filter(|u| crate::code::web_url(u))
                 .map(|u| format!(
                     r#" <a href="{}" target="_blank" rel="noopener">Documentation ↗</a>"#,
                     esc(u)
@@ -991,7 +993,10 @@ fn draw_frames(app: &App, rects: &HashMap<u32, Rect>) {
         let Some(&r) = rects.get(&g.gid) else {
             continue;
         };
-        let e = by_mod.get_mut(&m).unwrap();
+        // Items outside the analyzed crates have no module frame.
+        let Some(e) = by_mod.get_mut(&m) else {
+            continue;
+        };
         if d.private_to(it, &m) {
             e.private.push(r)
         } else {
@@ -1224,7 +1229,9 @@ pub fn show_module_graph(app: &mut App, m: &str) {
         .filter(|it| it.info.kind != Kind::Impl)
         .collect();
     if own.is_empty() {
+        // Keep the user's cards.
         toast(&format!("No changed items directly in {}", d.mod_label(m)));
+        return;
     }
     let mut ids: Vec<String> = own.iter().map(|it| it.info.id.clone()).collect();
     for it in &own {

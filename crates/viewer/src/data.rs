@@ -964,6 +964,8 @@ pub fn impl_parts(header: &str) -> (Option<String>, Option<String>) {
         for (i, c) in rest.char_indices() {
             match c {
                 '<' => depth += 1,
+                // `->` in `F: Fn() -> u8` is not a closing bracket.
+                '>' if rest[..i].ends_with('-') => {}
                 '>' => {
                     depth -= 1;
                     if depth == 0 {
@@ -982,6 +984,7 @@ pub fn impl_parts(header: &str) -> (Option<String>, Option<String>) {
     for (i, c) in rest.char_indices() {
         match c {
             '<' | '(' | '[' => depth += 1,
+            '>' if rest[..i].ends_with('-') => {}
             '>' | ')' | ']' => depth -= 1,
             ' ' if depth == 0 && rest[i..].starts_with(" for ") => {
                 split = Some(i);

@@ -1,7 +1,10 @@
 name: CI
 
 on:
+  # Pull requests run on `pull_request`; `push` only for `main`, so that a
+  # push to a PR branch doesn't run the job twice.
   push:
+    branches: [main]
   pull_request:
 
 jobs:
@@ -13,6 +16,7 @@ jobs:
         with:
           targets: wasm32-unknown-unknown
           components: rustfmt, clippy, rust-src
+      - uses: Swatinem/rust-cache@v2
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo clippy -p viewer --target wasm32-unknown-unknown -- -D warnings

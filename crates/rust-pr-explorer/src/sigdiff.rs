@@ -51,8 +51,14 @@ pub fn diff(
     if cursor < new.len() {
         spans.push(same(&new[cursor..]));
     }
+    let spans = merge_same(spans);
+    // The texts differ but nothing was marked: this diff can't show the
+    // change, so the caller falls back to a token diff.
+    if old != new && spans.iter().all(|s| matches!(s, DiffSpan::Same { .. })) {
+        return None;
+    }
     Some(SigDiff {
-        spans: merge_same(spans),
+        spans,
         notes: cx.notes,
     })
 }
@@ -188,7 +194,11 @@ fn fn_sections<'a>(f: &'a syn::ItemFn, text: &str) -> Vec<Section<'a>> {
                     ty: None,
                 },
                 syn::FnArg::Typed(pt) => Piece {
-                    key: text[range_of(pt.pat.span())].to_string(),
+                    // The binding, without `mut`: that is not part of the
+                    // interface.
+                    key: text[range_of(pt.pat.span())]
+                        .trim_start_matches("mut ")
+                        .to_string(),
                     range: range_of(pt.span()),
                     ty: Some(&pt.ty),
                 },
@@ -488,7 +498,14 @@ impl Cx<'_> {
         let mut matched_old_order = Vec::new();
         for np in &n.pieces {
             let ntext = &new[np.range.clone()];
-            match o.pieces.iter().position(|op| op.key == np.key) {
+            // Each old piece pairs at most once (keys like `_` repeat).
+            let taken = matched_old_order.clone();
+            match o
+                .pieces
+                .iter()
+                .enumerate()
+                .position(|(i, op)| op.key == np.key && !taken.contains(&i))
+            {
                 Some(oi) => {
                     matched_old_order.push(oi);
                     let op = &o.pieces[oi];
@@ -1146,5 +1163,29 @@ mod tests {
             "pub struct Env {\n    pub lenient: ⟦Option<bool>⟧,\n    /* private fields */\n}"
         );
         assert_eq!(notes(&d), ["field `lenient` wrapped in `Option<_>`"]);
+    }
+
+    #[test]
+    fn review_cases() {
+        // Repeated keys pair each old piece once.
+        let d = diff(Kind::Fn, "fn f(_: u8, _: u16)", "fn f(_: u8, _: u32)").unwrap();
+        assert_eq!(notes(&d), ["parameter `_`: `u16` → `u32`"]);
+        // `mut` is not part of the parameter's identity.
+        let d = diff(Kind::Fn, "fn g(mut a: u8)", "fn g(a: u8)");
+        assert!(
+            d.as_ref()
+                .is_none_or(|d| notes(d).iter().all(|n| !n.contains("added"))),
+            "{:?}",
+            d.map(|d| notes(&d).iter().map(|s| s.to_string()).collect::<Vec<_>>())
+        );
+        // A change the structured diff can't show falls back.
+        assert!(
+            diff(
+                Kind::Struct,
+                "pub struct S<T>(pub T) where T: Clone;",
+                "pub struct S<T>(pub T) where T: Copy;"
+            )
+            .is_none()
+        );
     }
 }
