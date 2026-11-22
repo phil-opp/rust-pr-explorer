@@ -233,7 +233,8 @@ pub fn draw_map_edges(app: &App) {
     let mut svg = String::from(
         r#"<defs><marker id="mm-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="9" markerHeight="9" markerUnits="userSpaceOnUse" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="currentColor"/></marker></defs>"#,
     );
-    // Tree lines.
+    // Tree lines; arrows avoid running along them.
+    let mut tree_lines: Vec<Vec<(f64, f64)>> = Vec::new();
     for it in d.items().filter(|it| it.info.kind == Kind::Mod) {
         if d.is_root(it) {
             continue;
@@ -242,6 +243,7 @@ pub fn draw_map_edges(app: &App) {
             let (x1, y1) = (p.0 + p.2 / 2.0, p.1 + p.3);
             let (x2, y2) = (c.0 + c.2 / 2.0, c.1);
             let my = (y1 + y2) / 2.0;
+            tree_lines.push(vec![(x1, y1), (x1, my), (x2, my), (x2, y2)]);
             svg.push_str(&format!(
                 r#"<path class="mm-tree-line" d="M{x1:.1},{y1:.1} V{my:.1} H{x2:.1} V{y2:.1}"/>"#
             ));
@@ -254,35 +256,36 @@ pub fn draw_map_edges(app: &App) {
         // With many arrows, they stay faint until a module is hovered.
         dom::toggle_class(&w, "busy", between > 8);
     }
-    for ((a, b), list) in &f.pairs {
-        if a == b {
-            continue;
-        }
-        let (Some(ra), Some(rb)) = (rect(a), rect(b)) else {
-            continue;
-        };
+    // Every box is an obstacle; arrows run around them.
+    let boxes: Vec<(String, crate::route::Rect)> = dom::query_all(".mm-box[data-mm]")
+        .iter()
+        .filter_map(|e| {
+            let m = dom::data(e, "mm")?;
+            rect(&m).map(|r| (m, r))
+        })
+        .collect();
+    let index = |m: &str| boxes.iter().position(|(n, _)| n == m);
+    type Pair<'a> = (&'a (String, String), &'a Vec<Flow>, (usize, usize));
+    let pairs: Vec<Pair> = f
+        .pairs
+        .iter()
+        .filter(|((a, b), _)| a != b)
+        .filter_map(|(k, list)| Some((k, list, (index(&k.0)?, index(&k.1)?))))
+        .collect();
+    let rects: Vec<crate::route::Rect> = boxes.iter().map(|(_, r)| *r).collect();
+    let edges: Vec<(usize, usize)> = pairs.iter().map(|p| p.2).collect();
+    let routes = crate::route::route(
+        wrap.scroll_width() as f64,
+        wrap.scroll_height() as f64,
+        &rects,
+        &edges,
+        &tree_lines,
+    );
+    for ((ab, list, _), points) in pairs.iter().zip(routes) {
+        let (a, b) = (&ab.0, &ab.1);
+        let Some(points) = points else { continue };
         let calls = list.iter().filter(|e| e.2).count();
         let uses = list.len() - calls;
-        // From the side of one box to the facing side of the other.
-        let (ca, cb) = (
-            (ra.0 + ra.2 / 2.0, ra.1 + ra.3 / 2.0),
-            (rb.0 + rb.2 / 2.0, rb.1 + rb.3 / 2.0),
-        );
-        let side = |r: (f64, f64, f64, f64), toward: (f64, f64)| {
-            let c = (r.0 + r.2 / 2.0, r.1 + r.3 / 2.0);
-            let (dx, dy) = (toward.0 - c.0, toward.1 - c.1);
-            if dx.abs() * r.3 > dy.abs() * r.2 {
-                (if dx > 0.0 { r.0 + r.2 } else { r.0 }, c.1)
-            } else {
-                (c.0, if dy > 0.0 { r.1 + r.3 } else { r.1 })
-            }
-        };
-        let (p1, p2) = (side(ra, cb), side(rb, ca));
-        // Bend to the side, so that A→B and B→A don't overlap.
-        let (mx, my) = ((p1.0 + p2.0) / 2.0, (p1.1 + p2.1) / 2.0);
-        let (nx, ny) = (-(p2.1 - p1.1), p2.0 - p1.0);
-        let len = (nx * nx + ny * ny).sqrt().max(1.0);
-        let (qx, qy) = (mx + nx / len * 30.0, my + ny / len * 30.0);
         let label = match (calls, uses) {
             (c, 0) => format!("{c} call{}", if c == 1 { "" } else { "s" }),
             (0, u) => format!("{u} use{}", if u == 1 { "" } else { "s" }),
@@ -300,21 +303,14 @@ pub fn draw_map_edges(app: &App) {
             })
             .collect::<Vec<_>>()
             .join("\n");
-        let width = 1.2 + (list.len() as f64).ln_1p() * 1.2;
-        // The label sits on the curve's midpoint.
-        let (lx, ly) = (
-            0.25 * p1.0 + 0.5 * qx + 0.25 * p2.0,
-            0.25 * p1.1 + 0.5 * qy + 0.25 * p2.1,
-        );
+        let width = 1.2 + (list.len() as f64).ln_1p() * 0.8;
+        let (lx, ly) = crate::route::label_at(&points);
         svg.push_str(&format!(
-            r#"<g class="mm-flow" data-a="{}" data-b="{}"><title>{}</title><path d="M{:.1},{:.1} Q{qx:.1},{qy:.1} {:.1},{:.1}" style="stroke-width:{width:.1}" marker-end="url(#mm-arrow)"/><text x="{lx:.1}" y="{ly:.1}">{}</text></g>"#,
+            r#"<g class="mm-flow" data-a="{}" data-b="{}"><title>{}</title><path d="{}" style="stroke-width:{width:.1}" marker-end="url(#mm-arrow)"/><text x="{lx:.1}" y="{ly:.1}">{}</text></g>"#,
             esc(a),
             esc(b),
             esc(&title),
-            p1.0,
-            p1.1,
-            p2.0,
-            p2.1,
+            crate::route::path_d(&points),
             esc(&label)
         ));
     }

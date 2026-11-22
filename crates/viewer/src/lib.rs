@@ -10,6 +10,7 @@ mod data;
 mod dom;
 mod map;
 mod pages;
+mod route;
 mod settings;
 mod space;
 

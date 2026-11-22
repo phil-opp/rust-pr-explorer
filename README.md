@@ -80,7 +80,7 @@ Every item shows what rustdoc would show: its definition or signature (private f
 ### Structure view
 
 How the change spreads over the modules, in two modes:
-- **Module map** (default): the module tree as boxes, a parent above its children. Each box lists its changed items, exposed ones first and private ones below a dashed line; private modules have a dashed border. One arrow per pair of modules whose items call each other, labeled with the number of calls; hovering a module highlights its arrows. With many arrows they stay faint until hovered. Long lists are cut after 8 items, with a link to the module page.
+- **Module map** (default): the module tree as boxes, a parent above its children. Each box lists its changed items, exposed ones first and private ones below a dashed line; private modules have a dashed border. One arrow per pair of modules whose items call each other, labeled with the number of calls. Arrows run horizontally and vertically around the boxes, never through them, and leave and enter boxes at right angles; hovering a module highlights its arrows. With many arrows they stay faint until hovered. Long lists are cut after 8 items, with a link to the module page.
 - **Matrix**: modules against modules; each cell counts the calls from the row's module into the column's that involve a change. Hovering a cell lists the calls, clicking it opens them on the canvas.
 
 "uses" adds type uses to the calls, "all items" includes unchanged items.
