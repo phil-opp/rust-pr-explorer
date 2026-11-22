@@ -1,6 +1,6 @@
 //! The embedded analysis plus derived indexes and privacy rules.
 
-use crate::code::esc;
+use crate::code::{Seg, esc, marked_html};
 use model::{External, Item, ItemInfo, Kind, Output, Status, UseCtx};
 use std::collections::HashMap;
 
@@ -159,28 +159,49 @@ impl Data {
     }
 
     /// Public paths gained and lost, marked like other changes.
-    pub fn exports_html(&self, it: &Item) -> String {
+    pub fn exports_segs(&self, it: &Item) -> Vec<Seg> {
         let c = &it.changes;
-        if it.status != Status::Changed
-            || (c.exports_added.is_empty() && c.exports_removed.is_empty())
-        {
-            return String::new();
+        if it.status != Status::Changed {
+            return Vec::new();
         }
-        let mut html = String::from(r#"<div class="exports">"#);
-        for p in &c.exports_added {
-            html.push_str(&format!(
-                r#"<div class="dblk m-add"><span class="mk">+</span> now public as <code>{}</code></div>"#,
-                esc(p)
-            ));
+        let added = c.exports_added.iter().map(|p| {
+            Seg::new(
+                "m-add",
+                format!(
+                    r#"<div class="export"><span class="mk">+</span> now public as <code>{}</code></div>"#,
+                    esc(p)
+                ),
+            )
+        });
+        let removed = c.exports_removed.iter().map(|p| {
+            Seg::new(
+                "m-del",
+                format!(
+                    r#"<div class="export"><span class="mk">−</span> no longer public as <code><s>{}</s></code></div>"#,
+                    esc(p)
+                ),
+            )
+        });
+        added.chain(removed).collect()
+    }
+
+    /// Everything shown about an item's definition, in order, with
+    /// neighboring parts that changed the same way under one marker.
+    pub fn item_body_html(
+        &self,
+        it: &Item,
+        scope: &str,
+        full_docs: bool,
+        src: Option<Seg>,
+    ) -> String {
+        let mut segs = Vec::new();
+        if it.info.kind != Kind::Mod {
+            segs.extend(self.sig_segs(it, scope));
         }
-        for p in &c.exports_removed {
-            html.push_str(&format!(
-                r#"<div class="dblk m-del"><span class="mk">−</span> no longer public as <code><s>{}</s></code></div>"#,
-                esc(p)
-            ));
-        }
-        html.push_str("</div>");
-        html
+        segs.extend(self.exports_segs(it));
+        segs.extend(self.docs_segs(it, full_docs));
+        segs.extend(src);
+        marked_html(segs)
     }
 
     /// What is known about an item outside the analyzed crates.
@@ -520,18 +541,32 @@ impl Data {
     /// left that tells at a glance whether it changed: a changed signature
     /// is shown as a diff against the base version, an unchanged one is
     /// shown muted, for reference.
+    #[cfg(test)]
     pub fn sig_html(&self, it: &Item, scope: &str) -> String {
-        let (class, title) = match it.status {
-            Status::Added => ("m-add", "added"),
-            Status::Removed => ("m-del", "removed"),
-            _ if it.changes.signature => ("m-chg", "signature changed"),
-            _ => ("m-ref", "signature unchanged"),
+        marked_html(self.sig_segs(it, scope))
+    }
+
+    pub fn sig_segs(&self, it: &Item, scope: &str) -> Vec<Seg> {
+        let (bar, class, title) = match it.status {
+            Status::Added => ("m-add", "", "added"),
+            Status::Removed => ("m-del", "", "removed"),
+            _ if it.changes.signature => ("m-chg", "", "signature changed"),
+            _ => ("", "m-ref", "signature unchanged"),
         };
         let shown = format!(
             r#"<div class="sigbox {class}" title="{title}">{}</div>"#,
             self.sig_inner(it, scope)
         );
-        shown + &self.private_def_html(it, scope)
+        // For an added or removed item, the full definition is just as new.
+        let whole = if matches!(it.status, Status::Added | Status::Removed) {
+            bar
+        } else {
+            ""
+        };
+        vec![
+            Seg::new(bar, shown),
+            Seg::new(whole, self.private_def_html(it, scope)),
+        ]
     }
 
     /// Seen from outside its module, a type's private fields are hidden.
@@ -544,63 +579,85 @@ impl Data {
         }
         // The full text changed (not only where names point).
         let changed = it.status == Status::Changed && it.changes.signature && it.old_sig.is_some();
-        let class = if changed { "m-chg" } else { "m-ref" };
+        let (bar, class) = if changed {
+            ("m-chg", "")
+        } else {
+            ("", "m-ref")
+        };
+        // As seen from the defining module: every field.
+        let full = format!(
+            r#"<div class="sigbox {class}">{}</div>"#,
+            self.sig_inner(it, self.mod_of(it))
+        );
         format!(
-            r#"<details class="private-def"><summary>{}</summary><div class="sigbox {class}">{}</div></details>"#,
+            r#"<details class="private-def"><summary>{}</summary>{}</details>"#,
             if changed {
                 "<b>Full definition changed</b>, including private fields"
             } else {
                 "Full definition, including private fields"
             },
-            // As seen from the defining module: every field.
-            self.sig_inner(it, self.mod_of(it))
+            marked_html([Seg::new(bar, full)])
         )
     }
 
     /// The item's docs, with changes marked. Listings show only the first
     /// paragraph of unchanged docs (`full: false`).
-    pub fn docs_block_html(&self, it: &Item, full: bool) -> String {
-        use crate::code::{docs_diff_html, docs_html, first_paragraph};
+    pub fn docs_segs(&self, it: &Item, full: bool) -> Vec<Seg> {
+        use crate::code::{docs_diff_segs, docs_html, first_paragraph};
         let docs = &it.info.docs;
         if it.status == Status::Changed && it.changes.docs {
             let old = it.old_docs.as_deref().unwrap_or("");
-            return format!(
-                r#"<div class="docs">{}</div><div class="docs-acts"><button class="mini" data-compare-docs="{}">Compare docs side by side</button></div>"#,
-                docs_diff_html(self, old, docs, &it.info.doc_refs),
-                esc(&it.info.id)
-            );
+            let mut segs = docs_diff_segs(self, old, docs, &it.info.doc_refs);
+            segs.push(Seg::new(
+                "",
+                format!(
+                    r#"<div class="docs-acts"><button class="mini" data-compare-docs="{}">Compare docs side by side</button></div>"#,
+                    esc(&it.info.id)
+                ),
+            ));
+            return segs;
         }
+        // An added or removed item is added or removed as a whole.
+        let bar = match it.status {
+            Status::Added => "m-add",
+            Status::Removed => "m-del",
+            _ => "",
+        };
         let md = if full {
             docs.as_str()
         } else {
             first_paragraph(docs)
         };
-        if md.trim().is_empty() {
-            return if full {
-                r#"<div class="docs empty">No documentation.</div>"#.to_string()
-            } else {
-                String::new()
-            };
-        }
-        let class = match it.status {
-            Status::Added => "m-add",
-            Status::Removed => "m-del",
-            _ => "",
+        let html = if !md.trim().is_empty() {
+            format!(
+                r#"<div class="docs"><div class="dblk">{}</div></div>"#,
+                docs_html(self, md, &it.info.doc_refs)
+            )
+        } else if full {
+            r#"<div class="docs empty">No documentation.</div>"#.to_string()
+        } else {
+            String::new()
         };
-        format!(
-            r#"<div class="docs"><div class="dblk {class}">{}</div></div>"#,
-            docs_html(self, md, &it.info.doc_refs)
-        )
+        vec![Seg::new(bar, html)]
+    }
+
+    pub fn docs_block_html(&self, it: &Item, full: bool) -> String {
+        marked_html(self.docs_segs(it, full))
     }
 
     /// The item's source as an expandable section, summarized by what
     /// changed in it. `card`: inside a canvas card, which remembers
     /// whether it is open.
+    #[cfg(test)]
     pub fn source_html(&self, it: &Item, open: bool, card: bool) -> String {
+        marked_html(self.source_seg(it, open, card))
+    }
+
+    pub fn source_seg(&self, it: &Item, open: bool, card: bool) -> Option<Seg> {
         use crate::code::{Links, code_html};
         use similar::{Algorithm, DiffOp, capture_diff_slices};
         if it.source.is_empty() {
-            return String::new();
+            return None;
         }
         let opts = crate::settings::get();
         // Both versions, from the stored diff, compared again with the
@@ -752,15 +809,18 @@ impl Data {
             _ if added + removed > 0 => ("", format!("Source {stats} · {where_}")),
             _ => ("", format!("Source · {where_} · {} lines", it.source.len())),
         };
-        format!(
-            r#"<details class="src {class}" {} {}><summary>{summary}</summary>{lines}</details>"#,
+        let html = format!(
+            r#"<details class="src {}" {} {}><summary>{summary}</summary>{lines}</details>"#,
+            // The marker is drawn around it; this only colors the summary.
+            class.replace("m-", "src-"),
             if card {
                 format!(r#"data-src="{}""#, esc(&it.info.id))
             } else {
                 String::new()
             },
             if open { "open" } else { "" },
-        )
+        );
+        Some(Seg::new(class, html))
     }
 
     fn sig_inner(&self, it: &Item, scope: &str) -> String {

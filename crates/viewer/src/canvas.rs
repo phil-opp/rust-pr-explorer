@@ -518,14 +518,10 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         acts.push_str(r#"<button data-act="detach" title="Move this tab into its own card">detach tab</button>"#);
     }
 
-    let sig = if it.info.kind == Kind::Mod {
-        String::new()
-    } else {
-        d.sig_html(it, scope)
-    };
-    // External docs (e.g. the standard library's) can be long: first
-    // paragraph, the rest expandable.
-    let docs = if d.external(id).is_some() {
+    // Signature, docs and source, with changes marked.
+    let body = if d.external(id).is_some() {
+        // External docs (e.g. the standard library's) can be long: first
+        // paragraph, the rest expandable.
         let first = crate::code::first_paragraph(&it.info.docs);
         let more = if first.len() < it.info.docs.trim().len() {
             format!(
@@ -535,12 +531,15 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         } else {
             String::new()
         };
-        d.docs_block_html(it, false) + &more
+        crate::code::marked_html(d.sig_segs(it, scope)) + &d.docs_block_html(it, false) + &more
     } else {
-        d.docs_block_html(it, true)
+        d.item_body_html(
+            it,
+            scope,
+            true,
+            d.source_seg(it, g.open_src.contains(id), true),
+        )
     };
-    let src = d.source_html(it, g.open_src.contains(id), true);
-    let exports = d.exports_html(it);
     let external = d.external(id).map(|e| {
         format!(
             r#"<div class="ext-note">Outside the analyzed crates, as rust-analyzer describes it.{}</div>"#,
@@ -638,7 +637,7 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         {tabs}
         <div class="card-h"><span class="kind">{}</span>{} {}<span class="grow"></span>{}<span class="x" data-close="{}" title="Close">×</span></div>
         <div class="card-loc">{}</div>
-        <div class="card-b">{impl_header}{sig}{exports}{docs}{src}{}{members}{}{}
+        <div class="card-b">{impl_header}{body}{}{members}{}{}
           <div class="card-acts">{acts}</div></div></div>"#,
         it.status.css(),
         g.gid,

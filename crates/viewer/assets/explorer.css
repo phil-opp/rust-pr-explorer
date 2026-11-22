@@ -156,24 +156,27 @@ code { font-size: .92em; }
 /* Signatures are laid out by the analysis (rustfmt style); never soft-wrap. */
 .sig { margin: 0; padding: 8px 10px; background: var(--bg-code); border-radius: 4px; white-space: pre; overflow-x: auto; }
 /* Change markers: a bar on the left of what changed. */
-.sigbox, .dblk, details.src { border-left: 3px solid transparent; padding-left: 7px; margin-left: -10px; }
+/* A run of neighboring parts that changed the same way shares one bar. */
+.mark { border-left: 3px solid transparent; padding-left: 7px; margin-left: -10px; display: flex; flex-direction: column; gap: 6px; }
 /* Each marker differs in line style too, not only in color:
    added = solid, removed = dashed, changed = dotted. */
 .m-add { border-left: 3px solid var(--added) !important; }
 .m-del { border-left: 3px dashed var(--removed) !important; }
 .m-chg { border-left: 3px dotted var(--changed) !important; }
 .mk { font-family: var(--mono); font-weight: 700; }
-.exports .dblk { font-size: 13px; margin-top: 2px; margin-bottom: 2px; }
-.exports .m-del s { text-decoration-color: var(--removed); }
+.export s { text-decoration-color: var(--removed); }
 /* An unchanged signature, shown for reference: muted, no code background. */
 .sigbox.m-ref .sig { background: transparent; box-shadow: inset 0 0 0 1px var(--border); color: var(--muted); }
 .sigbox.m-ref .sig .ref, .sigbox.m-ref .sig .kw { opacity: .8; }
-.dblk.m-del { opacity: .7; text-decoration: line-through; text-decoration-color: var(--removed); }
+.mark.m-del .docs, .mark.m-del .export { opacity: .75; text-decoration: line-through; text-decoration-color: var(--removed); }
 .dblk-old { font-size: 12.5px; color: var(--muted); margin: 0 0 4px; }
 .dblk-old summary { cursor: pointer; }
 .d-add { color: var(--added); font-family: var(--mono); }
 .d-del { color: var(--removed); font-family: var(--mono); }
-details.src.m-chg > summary b { color: var(--changed); }
+details.src.src-chg > summary b { color: var(--changed); }
+.mark > .docs .dblk > :first-child { margin-top: 0; }
+.mark > .docs .dblk > :last-child { margin-bottom: 0; }
+.export { font-size: 13px; }
 .ext-note { font-size: 12.5px; color: var(--muted); margin: 6px 0; }
 .kw { color: var(--kw); }
 .str { color: var(--str); }
@@ -229,8 +232,8 @@ a.ref:hover { text-decoration: underline; }
 .irow:last-child { border-bottom: none; }
 .irow .ihead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .irow .iacts { display: flex; gap: 4px; align-items: start; }
-.irow .sigbox, .irow .docs, .irow details.src { grid-column: 1 / -1; }
-.irow .docs { margin: 0 0 0 2px; }
+.irow > .sigbox, .irow > .docs, .irow > details, .irow > .mark, .irow > .docs-acts { grid-column: 1 / -1; }
+.irow .docs { margin: 0; }
 .irow.context { opacity: .75; }
 .irow.member { margin-left: 26px; }
 .irow.removed .sigbox .sig { text-decoration: line-through; text-decoration-color: var(--removed); }

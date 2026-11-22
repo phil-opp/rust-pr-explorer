@@ -770,50 +770,95 @@ fn doc_blocks(md: &str) -> (Vec<String>, String) {
     (blocks, defs)
 }
 
-/// Docs with their changes marked block by block: added and changed
-/// paragraphs (list, code block, …) get a colored bar, removed ones are
-/// shown struck out, and the previous text of a changed block can be
-/// expanded.
-pub fn docs_diff_html(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Ref>) -> String {
+/// A part of an item's view (signature, a doc paragraph, the source, …)
+/// and the change marker it gets: `m-add`, `m-del`, `m-chg`, or none.
+pub struct Seg {
+    pub bar: &'static str,
+    pub html: String,
+}
+
+impl Seg {
+    pub fn new(bar: &'static str, html: String) -> Seg {
+        Seg { bar, html }
+    }
+}
+
+/// Renders parts in order. Neighboring parts with the same marker share
+/// one continuous bar, so an added item has a single bar along all of it.
+pub fn marked_html(segs: impl IntoIterator<Item = Seg>) -> String {
+    let mut out = String::new();
+    let mut run: Option<(&'static str, String)> = None;
+    let flush = |out: &mut String, run: &mut Option<(&'static str, String)>| {
+        if let Some((bar, html)) = run.take() {
+            out.push_str(&format!(r#"<div class="mark {bar}">{html}</div>"#));
+        }
+    };
+    for seg in segs {
+        if seg.html.is_empty() {
+            continue;
+        }
+        match &mut run {
+            Some((bar, html)) if *bar == seg.bar => html.push_str(&seg.html),
+            _ => {
+                flush(&mut out, &mut run);
+                if seg.bar.is_empty() {
+                    out.push_str(&seg.html);
+                } else {
+                    run = Some((seg.bar, seg.html));
+                }
+            }
+        }
+    }
+    flush(&mut out, &mut run);
+    out
+}
+
+/// Docs with their changes marked paragraph by paragraph (a list or code
+/// block counts as one): added, changed and removed ones get a marker,
+/// removed ones are struck out, and a changed paragraph shows either its
+/// changed words or, if that isn't safe, its previous text on demand.
+pub fn docs_diff_segs(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Ref>) -> Vec<Seg> {
     use similar::{Algorithm, DiffOp, capture_diff_slices};
     let (old, new) = (clean_marks(old), clean_marks(new));
     let (a, a_defs) = doc_blocks(&old);
     let (b, b_defs) = doc_blocks(&new);
     let no_refs = BTreeMap::new();
-    let block = |text: &str, defs: &str, refs: &BTreeMap<String, Ref>, class: &str| {
-        if text.lines().all(is_link_def) {
+    let block = |text: &str, defs: &str, refs: &BTreeMap<String, Ref>, bar: &'static str| {
+        let html = if text.lines().all(is_link_def) {
             // Definitions render as nothing; show a changed one as text.
-            return if class.is_empty() {
+            if bar.is_empty() {
                 String::new()
             } else {
                 format!(
-                    r#"<div class="dblk {class}"><code>{}</code></div>"#,
+                    r#"<div class="docs"><div class="dblk"><code>{}</code></div></div>"#,
                     esc(text.trim())
                 )
-            };
-        }
-        format!(
-            r#"<div class="dblk {class}">{}</div>"#,
-            docs_html(d, &format!("{text}\n{defs}"), refs)
-        )
+            }
+        } else {
+            format!(
+                r#"<div class="docs"><div class="dblk">{}</div></div>"#,
+                docs_html(d, &format!("{text}\n{defs}"), refs)
+            )
+        };
+        Seg::new(bar, html)
     };
-    let mut out = String::new();
+    let mut out = Vec::new();
     for op in capture_diff_slices(Algorithm::Myers, &a, &b) {
         let (old_range, new_range) = (op.old_range(), op.new_range());
         match op {
             DiffOp::Equal { .. } => {
                 for t in &b[new_range] {
-                    out.push_str(&block(t, &b_defs, refs, ""));
+                    out.push(block(t, &b_defs, refs, ""));
                 }
             }
             DiffOp::Insert { .. } => {
                 for t in &b[new_range] {
-                    out.push_str(&block(t, &b_defs, refs, "m-add"));
+                    out.push(block(t, &b_defs, refs, "m-add"));
                 }
             }
             DiffOp::Delete { .. } => {
                 for t in &a[old_range] {
-                    out.push_str(&block(t, &a_defs, &no_refs, "m-del"));
+                    out.push(block(t, &a_defs, &no_refs, "m-del"));
                 }
             }
             DiffOp::Replace { .. }
@@ -826,27 +871,40 @@ pub fn docs_diff_html(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Re
                 // Paragraphs that changed a few words: mark the words.
                 for (i, j) in old_range.zip(new_range) {
                     let md = word_diff_md(&a[i], &b[j]).unwrap_or_default();
-                    out.push_str(&format!(
-                        r#"<div class="dblk m-chg">{}</div>"#,
-                        marked_docs_html(d, &format!("{md}\n{b_defs}"), refs)
+                    out.push(Seg::new(
+                        "m-chg",
+                        format!(
+                            r#"<div class="docs"><div class="dblk">{}</div></div>"#,
+                            marked_docs_html(d, &format!("{md}\n{b_defs}"), refs)
+                        ),
                     ));
                 }
             }
             DiffOp::Replace { .. } => {
                 for t in &b[new_range] {
-                    out.push_str(&block(t, &b_defs, refs, "m-chg"));
+                    out.push(block(t, &b_defs, refs, "m-chg"));
                 }
-                let previous: String = a[old_range]
-                    .iter()
-                    .map(|t| block(t, &a_defs, &no_refs, "m-del"))
-                    .collect();
-                out.push_str(&format!(
-                    r#"<details class="dblk-old"><summary>previous text</summary>{previous}</details>"#
+                let previous = marked_html(
+                    a[old_range]
+                        .iter()
+                        .map(|t| block(t, &a_defs, &no_refs, "m-del")),
+                );
+                out.push(Seg::new(
+                    "",
+                    format!(
+                        r#"<details class="dblk-old"><summary>previous text</summary>{previous}</details>"#
+                    ),
                 ));
             }
         }
     }
     out
+}
+
+/// [`docs_diff_segs`], rendered on their own.
+#[cfg(test)]
+pub fn docs_diff_html(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Ref>) -> String {
+    marked_html(docs_diff_segs(d, old, new, refs))
 }
 
 // Private-use characters that mark word changes in Markdown before it is
@@ -1035,16 +1093,16 @@ pub fn docs_compare_html(d: &Data, it: &model::Item) -> String {
     let (b, b_defs) = doc_blocks(&new);
     let no_refs = BTreeMap::new();
     let render =
-        |blocks: &[String], defs: &str, refs: &BTreeMap<String, Ref>, class: &str| -> String {
-            blocks
-                .iter()
-                .map(|t| {
+        |blocks: &[String], defs: &str, refs: &BTreeMap<String, Ref>, bar: &'static str| {
+            marked_html(blocks.iter().map(|t| {
+                Seg::new(
+                    bar,
                     format!(
-                        r#"<div class="dblk {class}">{}</div>"#,
+                        r#"<div class="dblk">{}</div>"#,
                         docs_html(d, &format!("{t}\n{defs}"), refs)
-                    )
-                })
-                .collect()
+                    ),
+                )
+            }))
         };
     let mut rows = String::new();
     for op in capture_diff_slices(Algorithm::Myers, &a, &b) {
@@ -1333,23 +1391,27 @@ mod tests {
             &BTreeMap::new(),
         );
         assert!(
-            html.starts_with(r#"<div class="dblk "><p>Same.</p>"#),
+            html.starts_with(r#"<div class="docs"><div class="dblk"><p>Same.</p>"#),
             "{html}"
         );
         assert!(
-            html.contains(r#"<div class="dblk m-chg"><p>New text.</p>"#),
+            html.contains(
+                r#"<div class="mark m-chg"><div class="docs"><div class="dblk"><p>New text.</p>"#
+            ),
             "{html}"
         );
-        assert!(html.contains(r#"<details class="dblk-old"><summary>previous text</summary><div class="dblk m-del"><p>Old text.</p>"#), "{html}");
-        // The link definition applies to the block that uses it.
+        assert!(html.contains(r#"<details class="dblk-old"><summary>previous text</summary><div class="mark m-del"><div class="docs"><div class="dblk"><p>Old text.</p>"#), "{html}");
+        // The link definition applies to the block that uses it, and the
+        // two added blocks share one marker.
         assert!(
-            html.contains(r#"<div class="dblk m-add"><p>Added, see <a href="https://example.com""#),
+            html.contains(r#"<div class="mark m-add"><div class="docs"><div class="dblk"><p>Added, see <a href="https://example.com""#),
             "{html}"
         );
         assert!(
-            html.contains(r#"<div class="dblk m-add"><code>[x]: https://example.com</code></div>"#),
+            html.ends_with(r#"<div class="docs"><div class="dblk"><code>[x]: https://example.com</code></div></div></div>"#),
             "{html}"
         );
+        assert_eq!(html.matches("mark m-add").count(), 1);
     }
 
     #[test]
@@ -1400,8 +1462,8 @@ mod tests {
         );
         assert_eq!(
             html,
-            r#"<div class="dblk m-chg"><p>Evaluates <del class="wd">an</del><ins class="wd">a parsed</ins> expression.</p>
-</div>"#
+            r#"<div class="mark m-chg"><div class="docs"><div class="dblk"><p>Evaluates <del class="wd">an</del><ins class="wd">a parsed</ins> expression.</p>
+</div></div></div>"#
         );
     }
 
@@ -1478,5 +1540,44 @@ mod tests {
         // Inside the module everything is shown already.
         let inside = d.sig_html(it, "c::m");
         assert!(!inside.contains("private-def"), "{inside}");
+    }
+
+    #[test]
+    fn neighboring_markers_are_joined() {
+        let seg = |bar, html: &str| Seg::new(bar, html.to_string());
+        assert_eq!(
+            marked_html([
+                seg("m-add", "a"),
+                seg("m-add", "b"),
+                seg("", ""),
+                seg("m-add", "c"),
+                seg("", "d"),
+                seg("m-chg", "e"),
+                seg("m-del", "f"),
+            ]),
+            r#"<div class="mark m-add">abc</div>d<div class="mark m-chg">e</div><div class="mark m-del">f</div>"#
+        );
+    }
+
+    #[test]
+    fn an_added_item_has_one_marker() {
+        use model::{Item, SourceLine, Status};
+        let mut out = empty().out;
+        let mut it = Item {
+            status: Status::Added,
+            ..Default::default()
+        };
+        it.info.id = "c::f".into();
+        it.info.kind = model::Kind::Fn;
+        it.info.module = "c".into();
+        it.info.sig = "pub fn f()".into();
+        it.info.docs = "Does things.\n\nIn detail.".into();
+        it.source = vec![SourceLine('+', "pub fn f() {}".into())];
+        out.items.insert(it.info.id.clone(), it);
+        let d = Data::new(out);
+        let it = d.item("c::f").unwrap();
+        let html = d.item_body_html(it, "c", true, d.source_seg(it, false, true));
+        assert_eq!(html.matches("class=\"mark").count(), 1, "{html}");
+        assert!(html.starts_with(r#"<div class="mark m-add">"#), "{html}");
     }
 }

@@ -89,11 +89,6 @@ fn item_row(
     member: bool,
     with_module: bool,
 ) -> String {
-    let sig = if it.info.kind == Kind::Mod {
-        String::new()
-    } else {
-        d.sig_html(it, scope)
-    };
     // In the public API, re-exported items appear under their public name.
     let title = match d.public_path(it) {
         Some(path) if with_module && d.reexported(it) => format!(
@@ -104,19 +99,18 @@ fn item_row(
         ),
         _ => d.title_html(it, false),
     };
-    let exports = d.exports_html(it);
-    let docs = d.docs_block_html(it, false);
     // What changed in the body, expandable to the diff.
     let src = if it.changes.body || it.changes.cosmetic {
-        d.source_html(it, false, false)
+        d.source_seg(it, false, false)
     } else {
-        String::new()
+        None
     };
+    let body = d.item_body_html(it, scope, false, src);
     format!(
         r#"<div class="irow {} {} {}" data-id="{}">
         <div class="ihead"><span class="kind">{}</span>{} {} {}</div>
         <div class="iacts"><button data-open="{}" title="Open on the canvas">Open ▸</button></div>
-        {sig}{exports}{docs}{src}</div>"#,
+        {body}</div>"#,
         it.status.css(),
         if context { "context" } else { "" },
         if member { "member" } else { "" },
