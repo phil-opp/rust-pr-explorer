@@ -71,6 +71,7 @@ pub fn render_sidebar(app: &App) {
             r#"<div class="side-h">Modules</div><ul class="tree">{roots}</ul>
             <div class="side-legend">
               <div><span class="dot added"></span> added &nbsp; <span class="dot changed"></span> changed &nbsp; <span class="dot removed"></span> removed</div>
+              <div class="legend-bars"><span class="lb m-add">added</span><span class="lb m-chg">changed</span><span class="lb m-del">removed</span></div>
               <div>Numbers: changed items defined directly in the module.</div>
               <div>Calls resolved with: {}</div>
             </div>{warnings}"#,
@@ -93,6 +94,17 @@ fn item_row(
     } else {
         d.sig_html(it, scope)
     };
+    // In the public API, re-exported items appear under their public name.
+    let title = match d.public_path(it) {
+        Some(path) if with_module && d.reexported(it) => format!(
+            r#"<span class="title-name"><span class="k-{}">{}</span></span> <span class="dim">re-export of <code>{}</code></span>"#,
+            it.info.kind.css(),
+            esc(path.rsplit("::").next().unwrap_or(path)),
+            esc(d.short_path(&format!("{}::{}", it.info.module, it.info.name)))
+        ),
+        _ => d.title_html(it, false),
+    };
+    let exports = d.exports_html(it);
     let docs = d.docs_block_html(it, false);
     // What changed in the body, expandable to the diff.
     let src = if it.changes.body || it.changes.cosmetic {
@@ -104,13 +116,13 @@ fn item_row(
         r#"<div class="irow {} {} {}" data-id="{}">
         <div class="ihead"><span class="kind">{}</span>{} {} {}</div>
         <div class="iacts"><button data-open="{}" title="Open on the canvas">Open ▸</button></div>
-        {sig}{docs}{src}</div>"#,
+        {sig}{exports}{docs}{src}</div>"#,
         it.status.css(),
         if context { "context" } else { "" },
         if member { "member" } else { "" },
         esc(&it.info.id),
         it.info.kind.label(),
-        d.title_html(it, with_module),
+        title,
         d.vis_html(it),
         d.status_html(it),
         esc(&it.info.id),
@@ -156,72 +168,56 @@ fn item_with_members(
 pub fn render_overview(app: &App) {
     let d = &app.d;
     let all: Vec<&Item> = d.items().filter(|it| it.info.kind != Kind::Mod).collect();
-    let is_pub = |it: &Item| it.info.public && changed(it);
+    let is_pub = |it: &Item| d.in_public_api(it) && changed(it);
     // Seen from outside the crate.
     const OUTSIDE: &str = "<extern>";
 
+    // Modules and items as rustdoc shows them: each item under the module
+    // whose public path names it, re-exports included.
     fn mod_block(d: &Data, m: &str, is_pub: &dyn Fn(&Item) -> bool) -> String {
         let Some(module) = d.item(m) else {
             return String::new();
         };
-        let root = d.is_root(module);
-        if !module.info.public && !root {
+        if !d.in_public_api(module) && !d.is_root(module) {
             return String::new();
         }
+        let mut listed: Vec<&Item> = d
+            .items()
+            .filter(|c| {
+                c.info.kind != Kind::Mod
+                    && c.info.parent.is_none()
+                    && d.in_public_api(c)
+                    && d.public_module(c).unwrap_or(&c.info.module) == m
+            })
+            .collect();
+        listed.sort_by(|a, b| kind_order(a, b));
+        let entries: String = listed
+            .iter()
+            .map(|c| item_with_members(d, c, OUTSIDE, is_pub, true))
+            .collect();
         let mut kids = d.mod_children_items(m);
         kids.sort_by(|a, b| kind_order(a, b));
-        let entries: String = kids
-            .iter()
-            .filter(|c| c.info.kind != Kind::Mod && c.info.public)
-            .map(|c| item_with_members(d, c, OUTSIDE, is_pub, false))
-            .collect();
         let subs: String = kids
             .iter()
             .filter(|c| c.info.kind == Kind::Mod)
             .map(|c| mod_block(d, &c.info.id, is_pub))
             .collect();
-        // Public items of private modules are reachable through `pub use`.
-        let reexported: String = if root {
-            let mut list: Vec<&Item> = d
-                .items()
-                .filter(|c| {
-                    crate::data::within(d.mod_of(c), m)
-                        && c.info.public
-                        && c.info.parent.is_none()
-                        && c.info.kind != Kind::Mod
-                        && d.item(&c.info.module).is_some_and(|p| !p.info.public)
-                })
-                .collect();
-            list.sort_by(|a, b| kind_order(a, b));
-            list.iter()
-                .map(|c| item_with_members(d, c, OUTSIDE, is_pub, true))
-                .collect()
-        } else {
-            String::new()
-        };
-        if entries.is_empty() && subs.is_empty() && reexported.is_empty() {
+        if entries.is_empty() && subs.is_empty() {
             return String::new();
         }
         format!(
             r#"<div class="modbox"><div class="modbox-h"><span class="kind">{}</span>{} {}<span style="flex:1"></span><a data-mod="{}">module page ›</a></div>
-            <div class="modbox-b">{entries}{}{subs}</div></div>"#,
-            if root { "crate" } else { "mod" },
+            <div class="modbox-b">{entries}{subs}</div></div>"#,
+            if d.is_root(module) { "crate" } else { "mod" },
             d.title_html(module, false),
             d.status_html(module),
             esc(m),
-            if reexported.is_empty() {
-                String::new()
-            } else {
-                format!(
-                    r#"<div class="section-label">re-exported from private modules</div>{reexported}"#
-                )
-            }
         )
     }
 
     let public_html: String = d.roots().iter().map(|r| mod_block(d, r, &is_pub)).collect();
     let mut internal: BTreeMap<String, Vec<&Item>> = BTreeMap::new();
-    for it in all.iter().filter(|it| !it.info.public && changed(it)) {
+    for it in all.iter().filter(|it| !d.in_public_api(it) && changed(it)) {
         internal
             .entry(d.mod_of(it).to_string())
             .or_default()
@@ -246,23 +242,19 @@ pub fn render_overview(app: &App) {
     let meta = &d.out.meta;
     let html = format!(
         r#"<h1>{}</h1>
-        <div class="sub">{} → {} {}</div>
+        <div class="sub">{}</div>
         <h2>Public API changes</h2>
         <p class="sub">Items reachable from outside the crate that were added, changed or removed, in rustdoc form. Types appear as context when only their members changed.</p>
         {}
         <h2>Internal changes</h2>
         <p class="sub">Items not reachable from outside the crate (private, pub(crate), pub(super), …) are kept out of the overview. Open a module to see them and its internal call graph.</p>
         {}"#,
-        esc(&meta.title),
-        esc(&meta.base),
-        esc(&meta.head),
-        meta.url
-            .as_deref()
-            .map(|u| format!(
-                r#"· <a href="{}" target="_blank" rel="noopener">view on GitHub</a>"#,
-                esc(u)
-            ))
-            .unwrap_or_default(),
+        esc(meta
+            .pr
+            .as_ref()
+            .and_then(|p| p.title.as_deref())
+            .unwrap_or(&meta.title)),
+        d.compared_html(),
         if public_html.is_empty() {
             r#"<div class="empty-state">This pull request does not change the public API.</div>"#
                 .to_string()

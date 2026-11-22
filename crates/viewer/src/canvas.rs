@@ -540,6 +540,7 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         d.docs_block_html(it, true)
     };
     let src = d.source_html(it, g.open_src.contains(id), true);
+    let exports = d.exports_html(it);
     let external = d.external(id).map(|e| {
         format!(
             r#"<div class="ext-note">Outside the analyzed crates, as rust-analyzer describes it.{}</div>"#,
@@ -637,7 +638,7 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         {tabs}
         <div class="card-h"><span class="kind">{}</span>{} {}<span class="grow"></span>{}<span class="x" data-close="{}" title="Close">×</span></div>
         <div class="card-loc">{}</div>
-        <div class="card-b">{impl_header}{sig}{docs}{src}{}{members}{}{}
+        <div class="card-b">{impl_header}{sig}{exports}{docs}{src}{}{members}{}{}
           <div class="card-acts">{acts}</div></div></div>"#,
         it.status.css(),
         g.gid,
@@ -650,6 +651,17 @@ fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         esc(id),
         if external.is_some() {
             String::new()
+        } else if d.reexported(it) {
+            format!(
+                "{} · public as {}",
+                esc(&d.mod_label(d.mod_of(it))),
+                it.info
+                    .public_paths
+                    .iter()
+                    .map(|p| format!("<code>{}</code>", esc(p)))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
         } else {
             esc(&d.mod_label(d.mod_of(it)))
         },

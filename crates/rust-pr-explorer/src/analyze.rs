@@ -1062,7 +1062,8 @@ impl Analyzer {
     fn build_items(&mut self) -> BTreeMap<String, ItemData> {
         let pending = std::mem::take(&mut self.pending);
         let mut items = BTreeMap::new();
-        let mut reexports: Vec<(String, String)> = Vec::new();
+        // `pub use`: (module, target, name it gets there).
+        let mut reexports: Vec<(String, String, Option<String>)> = Vec::new();
         for (module, data) in &self.modules {
             for u in &data.uses {
                 // `pub use path::Item;` and `pub use path::*;`
@@ -1075,12 +1076,12 @@ impl Analyzer {
                     Some(Ns::Type)
                 };
                 if let Some(Res { id: Some(id), .. }) = self.resolve(module, &u.path, None, ns) {
-                    if u.alias.is_some() {
-                        reexports.push((module.clone(), id));
+                    if let Some(alias) = &u.alias {
+                        reexports.push((module.clone(), id, Some(alias.clone())));
                     } else if self.kinds.get(&id) == Some(&Kind::Mod) {
                         for child in self.children.get(&id).into_iter().flatten() {
                             if self.def_vis.get(child).is_some_and(|v| v.is_none()) {
-                                reexports.push((module.clone(), child.clone()));
+                                reexports.push((module.clone(), child.clone(), None));
                             }
                         }
                     }
@@ -1122,20 +1123,59 @@ impl Analyzer {
                 }
             }
         }
-        loop {
-            let pending: Vec<String> = reexports
-                .iter()
-                .filter(|(module, target)| {
-                    items.get(module).is_some_and(|m| m.info.public)
-                        && items.get(target).is_some_and(|t| !t.info.public)
-                })
-                .map(|(_, target)| target.clone())
-                .collect();
-            if pending.is_empty() {
+        // Public paths: crate roots, then every `pub` item of a module
+        // with a public path, and every `pub use` in such a module, until
+        // nothing changes (a module can become public through a re-export).
+        let mut paths: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        let roots: Vec<String> = self.crate_info.keys().cloned().collect();
+        for root in &roots {
+            paths.entry(root.clone()).or_default().insert(root.clone());
+        }
+        // Long paths only arise from re-export cycles (`pub use self::*`).
+        const MAX_SEGMENTS: usize = 12;
+        for _ in 0..64 {
+            let mut new: Vec<(String, String)> = Vec::new();
+            for (id, item) in &items {
+                let i = &item.info;
+                // Impl blocks have no path of their own.
+                if i.parent.is_some()
+                    || i.id == i.module
+                    || i.vis_scope.is_some()
+                    || i.kind == Kind::Impl
+                {
+                    continue;
+                }
+                for p in paths.get(&i.module).into_iter().flatten() {
+                    new.push((id.clone(), format!("{p}::{}", i.name)));
+                }
+            }
+            for (module, target, name) in &reexports {
+                let Some(name) = name
+                    .clone()
+                    .or_else(|| items.get(target).map(|t| t.info.name.clone()))
+                else {
+                    continue;
+                };
+                for p in paths.get(module).into_iter().flatten() {
+                    new.push((target.clone(), format!("{p}::{name}")));
+                }
+            }
+            let mut changed = false;
+            for (id, p) in new {
+                if p.split("::").count() <= MAX_SEGMENTS && items.contains_key(&id) {
+                    changed |= paths.entry(id).or_default().insert(p);
+                }
+            }
+            if !changed {
                 break;
             }
-            for target in pending {
-                mark_public(&target, &mut items);
+        }
+        for (id, set) in paths {
+            let mut list: Vec<String> = set.into_iter().collect();
+            list.sort_by_key(|p| (p.split("::").count(), p.clone()));
+            mark_public(&id, &mut items);
+            if let Some(item) = items.get_mut(&id) {
+                item.info.public_paths = list;
             }
         }
         items
@@ -1654,6 +1694,7 @@ impl Analyzer {
         let info = ItemInfo {
             id: p.id.clone(),
             kind,
+            public_paths: Vec::new(),
             name: p.name.clone(),
             module: p.module.clone(),
             vis_scope,

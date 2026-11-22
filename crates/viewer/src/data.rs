@@ -16,6 +16,8 @@ pub struct Data {
     touched: HashMap<String, bool>,
     /// Items outside the analyzed crates, shown read-only, by path.
     ext: HashMap<String, Item>,
+    /// Modules by each of their public paths.
+    mod_by_path: HashMap<String, String>,
 }
 
 /// `m` is `s` or nested inside it.
@@ -74,7 +76,15 @@ impl Data {
             mod_children,
             touched: HashMap::new(),
             ext,
+            mod_by_path: HashMap::new(),
         };
+        for it in d.out.items.values() {
+            if it.info.kind == Kind::Mod {
+                for p in &it.info.public_paths {
+                    d.mod_by_path.insert(p.clone(), it.info.id.clone());
+                }
+            }
+        }
         let ids: Vec<String> = d.out.items.keys().cloned().collect();
         let mut memo = HashMap::new();
         for id in &ids {
@@ -115,6 +125,62 @@ impl Data {
     /// names.
     pub fn item(&self, id: &str) -> Option<&Item> {
         self.out.items.get(id).or_else(|| self.ext.get(id))
+    }
+
+    /// Whether the item is part of the public API on either side.
+    pub fn in_public_api(&self, it: &Item) -> bool {
+        it.info.public || !it.changes.exports_removed.is_empty()
+    }
+
+    /// The path the item is listed under in the public API: its shortest
+    /// public path (or, if it lost all, the shortest one it had).
+    pub fn public_path<'a>(&self, it: &'a Item) -> Option<&'a str> {
+        it.info
+            .public_paths
+            .first()
+            .or(it.changes.exports_removed.first())
+            .map(String::as_str)
+    }
+
+    /// The module whose public path contains the item's public path, i.e.
+    /// where rustdoc lists it.
+    pub fn public_module(&self, it: &Item) -> Option<&str> {
+        let (parent, _) = self.public_path(it)?.rsplit_once("::")?;
+        self.mod_by_path.get(parent).map(String::as_str)
+    }
+
+    /// Whether the item's own definition path is not how the public API
+    /// names it (it is re-exported, perhaps renamed).
+    pub fn reexported(&self, it: &Item) -> bool {
+        let def = format!("{}::{}", it.info.module, it.info.name);
+        it.info.parent.is_none()
+            && it.info.kind != Kind::Mod
+            && self.public_path(it).is_some_and(|p| p != def)
+    }
+
+    /// Public paths gained and lost, marked like other changes.
+    pub fn exports_html(&self, it: &Item) -> String {
+        let c = &it.changes;
+        if it.status != Status::Changed
+            || (c.exports_added.is_empty() && c.exports_removed.is_empty())
+        {
+            return String::new();
+        }
+        let mut html = String::from(r#"<div class="exports">"#);
+        for p in &c.exports_added {
+            html.push_str(&format!(
+                r#"<div class="dblk m-add"><span class="mk">+</span> now public as <code>{}</code></div>"#,
+                esc(p)
+            ));
+        }
+        for p in &c.exports_removed {
+            html.push_str(&format!(
+                r#"<div class="dblk m-del"><span class="mk">−</span> no longer public as <code><s>{}</s></code></div>"#,
+                esc(p)
+            ));
+        }
+        html.push_str("</div>");
+        html
     }
 
     /// What is known about an item outside the analyzed crates.
@@ -413,6 +479,43 @@ impl Data {
 }
 
 impl Data {
+    /// What is compared: for a pull request the repository, PR number and
+    /// title, and the base and PR branches with the compared commits.
+    pub fn compared_html(&self) -> String {
+        let meta = &self.out.meta;
+        let Some(pr) = &meta.pr else {
+            if meta.title.contains(&meta.base) {
+                return format!("<b>{}</b>", esc(&meta.title));
+            }
+            return format!(
+                "<b>{}</b> <span class=\"dim\">{} → {}</span>",
+                esc(&meta.title),
+                esc(&meta.base),
+                esc(&meta.head)
+            );
+        };
+        let repo_url = format!("https://github.com/{}", pr.repo);
+        let pr_url = format!("{repo_url}/pull/{}", pr.number);
+        let title = pr
+            .title
+            .as_deref()
+            .map(|t| format!(" <b>{}</b>", esc(t)))
+            .unwrap_or_default();
+        let head = match (&pr.head_ref, &pr.head_owner) {
+            (Some(r), Some(o)) => format!("<code>{}:{}</code>", esc(o), esc(r)),
+            (Some(r), None) => format!("<code>{}</code>", esc(r)),
+            _ => "PR head".to_string(),
+        };
+        format!(
+            r#"<a href="{repo_url}" target="_blank" rel="noopener">github.com/{}</a> · <a href="{pr_url}" target="_blank" rel="noopener">PR #{}</a>{title} <span class="dim">· base <code>{}</code> <span title="merge base">@ {}</span> ← {head} @ {}</span>"#,
+            esc(&pr.repo),
+            pr.number,
+            esc(&pr.base_ref),
+            esc(&pr.base_rev),
+            esc(&pr.head_rev),
+        )
+    }
+
     /// The signature block of an item seen from `scope`, with a bar on the
     /// left that tells at a glance whether it changed: a changed signature
     /// is shown as a diff against the base version, an unchanged one is
@@ -438,8 +541,9 @@ impl Data {
         if it.status == Status::Changed && it.changes.docs {
             let old = it.old_docs.as_deref().unwrap_or("");
             return format!(
-                r#"<div class="docs">{}</div>"#,
-                docs_diff_html(self, old, docs, &it.info.doc_refs)
+                r#"<div class="docs">{}</div><div class="docs-acts"><button class="mini" data-compare-docs="{}">Compare docs side by side</button></div>"#,
+                docs_diff_html(self, old, docs, &it.info.doc_refs),
+                esc(&it.info.id)
             );
         }
         let md = if full {
@@ -470,51 +574,141 @@ impl Data {
     /// whether it is open.
     pub fn source_html(&self, it: &Item, open: bool, card: bool) -> String {
         use crate::code::{Links, code_html};
+        use similar::{Algorithm, DiffOp, capture_diff_slices};
         if it.source.is_empty() {
             return String::new();
         }
-        let added = it.source.iter().filter(|l| l.0 == '+').count();
-        let removed = it.source.iter().filter(|l| l.0 == '-').count();
-        // Line numbers in the file the item's (head) source comes from.
-        let mut line = it.info.line;
-        let lines: String = it
+        let opts = crate::settings::get();
+        // Both versions, from the stored diff, compared again with the
+        // viewer's options.
+        let old: Vec<&str> = it
             .source
             .iter()
-            .map(|l| {
-                let class = match l.0 {
-                    '+' => "add",
-                    '-' => "del",
-                    _ => "",
-                };
-                // Removed lines are base code: what their names referred
-                // to is not known here, so they get no links.
-                let code = if l.0 == '-' || it.status == Status::Removed {
-                    code_html(self, &l.1, Links::None)
-                } else {
-                    let links = Links::Source {
-                        line,
-                        refs: &it.info.source_refs,
-                    };
-                    line += 1;
-                    code_html(self, &l.1, links)
-                };
-                format!(
-                    r#"<span class="ln {class}" data-t="{}">{}</span>"#,
-                    if l.0 == ' ' {
-                        String::new()
-                    } else {
-                        l.0.to_string()
-                    },
-                    if code.is_empty() {
-                        " ".to_string()
-                    } else {
-                        code
-                    }
-                )
-            })
+            .filter(|l| l.0 != '+')
+            .map(|l| l.1.as_str())
             .collect();
-        let stats =
-            format!(r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>"#);
+        let new: Vec<&str> = it
+            .source
+            .iter()
+            .filter(|l| l.0 != '-')
+            .map(|l| l.1.as_str())
+            .collect();
+        let key = |l: &&str| -> String {
+            if opts.ignore_ws {
+                l.split_whitespace().collect()
+            } else {
+                l.to_string()
+            }
+        };
+        let (ok, nk): (Vec<String>, Vec<String>) =
+            (old.iter().map(key).collect(), new.iter().map(key).collect());
+        // Rows: (old line index, new line index); one of them for added
+        // or removed lines.
+        let mut rows: Vec<(Option<usize>, Option<usize>)> = Vec::new();
+        let split = opts.split && it.status == Status::Changed;
+        for op in capture_diff_slices(Algorithm::Myers, &ok, &nk) {
+            let (o, n) = (op.old_range(), op.new_range());
+            match op {
+                DiffOp::Equal { .. } => rows.extend(o.zip(n).map(|(a, b)| (Some(a), Some(b)))),
+                DiffOp::Replace { .. } if split => {
+                    let len = o.len().max(n.len());
+                    rows.extend((0..len).map(|k| {
+                        (
+                            (k < o.len()).then(|| o.start + k),
+                            (k < n.len()).then(|| n.start + k),
+                        )
+                    }));
+                }
+                _ => {
+                    rows.extend(o.map(|a| (Some(a), None)));
+                    rows.extend(n.map(|b| (None, Some(b))));
+                }
+            }
+        }
+        let added = rows
+            .iter()
+            .filter(|r| {
+                r.1.is_some() && (r.0.is_none() || split && ok[r.0.unwrap()] != nk[r.1.unwrap()])
+            })
+            .count();
+        let removed = rows
+            .iter()
+            .filter(|r| {
+                r.0.is_some() && (r.1.is_none() || split && ok[r.0.unwrap()] != nk[r.1.unwrap()])
+            })
+            .count();
+        // Line numbers in the files the two versions come from.
+        let (old_start, new_start) = match it.status {
+            Status::Removed => (it.info.line, it.info.line),
+            _ => (it.old_line.unwrap_or(it.info.line), it.info.line),
+        };
+        let new_code = |n: usize| {
+            if it.status == Status::Removed {
+                // Base code: what its names referred to is not known here.
+                code_html(self, new[n], Links::None)
+            } else {
+                code_html(
+                    self,
+                    new[n],
+                    Links::Source {
+                        line: new_start + n,
+                        refs: &it.info.source_refs,
+                    },
+                )
+            }
+        };
+        let old_code = |o: usize| code_html(self, old[o], Links::None);
+        let nonempty = |s: String| if s.is_empty() { " ".to_string() } else { s };
+        let lines: String = if split {
+            let cells: String = rows
+                .iter()
+                .map(|&(o, n)| {
+                    let same = matches!((o, n), (Some(a), Some(b)) if ok[a] == nk[b]);
+                    let cell = |idx: Option<usize>, start: usize, class: &str, code: &dyn Fn(usize) -> String| match idx {
+                        Some(i) => format!(
+                            r#"<span class="no">{}</span><span class="ln {}" data-t="{}">{}</span>"#,
+                            start + i,
+                            if same { "" } else { class },
+                            if same { "" } else if class == "del" { "-" } else { "+" },
+                            nonempty(code(i))
+                        ),
+                        None => r#"<span class="no"></span><span class="ln gap"> </span>"#.to_string(),
+                    };
+                    cell(o, old_start, "del", &old_code) + &cell(n, new_start, "add", &new_code)
+                })
+                .collect();
+            format!(r#"<div class="sbs">{cells}</div>"#)
+        } else {
+            let body: String = rows
+                .iter()
+                .map(|&(o, n)| {
+                    let (class, tag, no, code) = match (o, n) {
+                        (_, Some(b)) if o.is_some() => ("", ' ', new_start + b, new_code(b)),
+                        (None, Some(b)) => ("add", '+', new_start + b, new_code(b)),
+                        (Some(a), _) => ("del", '-', old_start + a, old_code(a)),
+                        (None, None) => unreachable!(),
+                    };
+                    format!(
+                        r#"<span class="ln {class}" data-t="{}" data-no="{no}">{}</span>"#,
+                        if tag == ' ' {
+                            String::new()
+                        } else {
+                            tag.to_string()
+                        },
+                        nonempty(code)
+                    )
+                })
+                .collect();
+            format!("<pre>{body}</pre>")
+        };
+        let stats = format!(
+            r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>{}"#,
+            if opts.ignore_ws {
+                r#" <span class="dim">(whitespace hidden)</span>"#
+            } else {
+                ""
+            }
+        );
         let where_ = format!("{}:{}", esc(&it.info.file), it.info.line);
         let (class, summary) = match it.status {
             Status::Changed if it.changes.body => {
@@ -535,7 +729,7 @@ impl Data {
             _ => ("", format!("Source · {where_} · {} lines", it.source.len())),
         };
         format!(
-            r#"<details class="src {class}" {} {}><summary>{summary}</summary><pre>{lines}</pre></details>"#,
+            r#"<details class="src {class}" {} {}><summary>{summary}</summary>{lines}</details>"#,
             if card {
                 format!(r#"data-src="{}""#, esc(&it.info.id))
             } else {

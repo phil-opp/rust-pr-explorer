@@ -776,8 +776,9 @@ fn doc_blocks(md: &str) -> (Vec<String>, String) {
 /// expanded.
 pub fn docs_diff_html(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Ref>) -> String {
     use similar::{Algorithm, DiffOp, capture_diff_slices};
-    let (a, a_defs) = doc_blocks(old);
-    let (b, b_defs) = doc_blocks(new);
+    let (old, new) = (clean_marks(old), clean_marks(new));
+    let (a, a_defs) = doc_blocks(&old);
+    let (b, b_defs) = doc_blocks(&new);
     let no_refs = BTreeMap::new();
     let block = |text: &str, defs: &str, refs: &BTreeMap<String, Ref>, class: &str| {
         if text.lines().all(is_link_def) {
@@ -815,6 +816,22 @@ pub fn docs_diff_html(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Re
                     out.push_str(&block(t, &a_defs, &no_refs, "m-del"));
                 }
             }
+            DiffOp::Replace { .. }
+                if old_range.len() == new_range.len()
+                    && old_range
+                        .clone()
+                        .zip(new_range.clone())
+                        .all(|(i, j)| word_diff_md(&a[i], &b[j]).is_some()) =>
+            {
+                // Paragraphs that changed a few words: mark the words.
+                for (i, j) in old_range.zip(new_range) {
+                    let md = word_diff_md(&a[i], &b[j]).unwrap_or_default();
+                    out.push_str(&format!(
+                        r#"<div class="dblk m-chg">{}</div>"#,
+                        marked_docs_html(d, &format!("{md}\n{b_defs}"), refs)
+                    ));
+                }
+            }
             DiffOp::Replace { .. } => {
                 for t in &b[new_range] {
                     out.push_str(&block(t, &b_defs, refs, "m-chg"));
@@ -830,6 +847,235 @@ pub fn docs_diff_html(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Re
         }
     }
     out
+}
+
+// Private-use characters that mark word changes in Markdown before it is
+// rendered; they are turned into tags afterwards.
+const INS_OPEN: char = '\u{E000}';
+const INS_CLOSE: char = '\u{E001}';
+const DEL_OPEN: char = '\u{E002}';
+const DEL_CLOSE: char = '\u{E003}';
+
+/// Words, runs of whitespace, and single other characters.
+fn word_tokens(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    let class = |c: char| {
+        if c.is_alphanumeric() || c == '_' {
+            0
+        } else if c.is_whitespace() {
+            1
+        } else {
+            2
+        }
+    };
+    let chars: Vec<(usize, char)> = s.char_indices().collect();
+    for k in 0..chars.len() {
+        let (i, c) = chars[k];
+        let end = chars.get(k + 1).map_or(s.len(), |&(j, _)| j);
+        let next = chars.get(k + 1).map(|&(_, n)| class(n));
+        if class(c) == 2 || next != Some(class(c)) {
+            out.push(&s[start..end]);
+            start = end;
+        }
+        let _ = i;
+    }
+    out
+}
+
+/// A paragraph's changes word by word, as Markdown with change marks, if
+/// that can be shown without changing how the Markdown parses: the change
+/// must not touch Markdown syntax, link text or targets, or the start of
+/// a line, and most of the text must be unchanged. `None` otherwise.
+fn word_diff_md(old: &str, new: &str) -> Option<String> {
+    use similar::{Algorithm, DiffOp, capture_diff_slices};
+    let fenced = |t: &str| {
+        let t = t.trim_start();
+        t.starts_with("```") || t.starts_with("~~~") || t.starts_with("    ")
+    };
+    if fenced(old) || fenced(new) || old.lines().any(is_link_def) || new.lines().any(is_link_def) {
+        return None;
+    }
+    let (a, b) = (word_tokens(old), word_tokens(new));
+    // Per token: whether it may be marked (not syntax, not inside a link's
+    // brackets or target, not at the start of a line).
+    let markable = |toks: &[&str]| -> Vec<bool> {
+        let mut out = Vec::with_capacity(toks.len());
+        let (mut bracket, mut target, mut angle) = (0i32, false, false);
+        let mut line_start = true;
+        let mut prev = "";
+        for t in toks {
+            let syntax = t.chars().all(|c| "*_[]()<>#!|~`\\-+=:".contains(c))
+                || t.starts_with('_')
+                || t.ends_with('_');
+            let ws = t.chars().all(char::is_whitespace);
+            let inside = bracket > 0 || target || angle;
+            out.push(!syntax && !inside && !(line_start && !ws));
+            match *t {
+                "[" => bracket += 1,
+                "]" => bracket -= 1,
+                "(" if prev == "]" => target = true,
+                ")" if target => target = false,
+                "<" => angle = true,
+                ">" => angle = false,
+                _ => {}
+            }
+            if t.contains('\n') {
+                line_start = true;
+            } else if !ws {
+                line_start = false;
+            }
+            prev = t;
+        }
+        out
+    };
+    let (ma, mb) = (markable(&a), markable(&b));
+    let ops = capture_diff_slices(Algorithm::Myers, &a, &b);
+    let words = |toks: &[&str]| toks.iter().filter(|t| !t.trim().is_empty()).count();
+    let same: usize = ops
+        .iter()
+        .filter_map(|op| match op {
+            DiffOp::Equal { new_index, len, .. } => Some(words(&b[*new_index..new_index + len])),
+            _ => None,
+        })
+        .sum();
+    if same * 2 < words(&a).max(words(&b)) {
+        return None;
+    }
+    // Segments: unchanged token ranges, or changes (old range, new range).
+    // Changes separated only by whitespace are merged, so that a rewritten
+    // phrase reads as one removal and one insertion.
+    enum Seg {
+        Same(std::ops::Range<usize>),
+        Change(std::ops::Range<usize>, std::ops::Range<usize>),
+    }
+    let mut segs: Vec<Seg> = Vec::new();
+    for op in ops {
+        let (o, n) = (op.old_range(), op.new_range());
+        match op {
+            DiffOp::Equal { .. } => segs.push(Seg::Same(n)),
+            _ => {
+                let ws_between = match segs.as_slice() {
+                    [.., Seg::Change(..), Seg::Same(r)] => {
+                        b[r.clone()].iter().all(|t| t.trim().is_empty())
+                    }
+                    _ => false,
+                };
+                if ws_between {
+                    let Some(Seg::Same(r)) = segs.pop() else {
+                        unreachable!()
+                    };
+                    let Some(Seg::Change(po, pn)) = segs.pop() else {
+                        unreachable!()
+                    };
+                    // The whitespace is in both versions.
+                    let olen = r.len();
+                    segs.push(Seg::Change(
+                        po.start..po.end + olen + o.len(),
+                        pn.start..n.end,
+                    ));
+                } else if let Some(Seg::Change(po, pn)) = segs.last_mut()
+                    && po.end == o.start
+                    && pn.end == n.start
+                {
+                    po.end = o.end;
+                    pn.end = n.end;
+                } else {
+                    segs.push(Seg::Change(o, n));
+                }
+            }
+        }
+    }
+    let mut out = String::new();
+    let mark = |out: &mut String, toks: &[&str], ok: &[bool], open: char, close: char| -> bool {
+        if toks.is_empty() {
+            return true;
+        }
+        if toks.iter().any(|t| t.contains('\n')) || !ok.iter().all(|&m| m) {
+            return false;
+        }
+        out.push(open);
+        out.push_str(&toks.concat());
+        out.push(close);
+        true
+    };
+    for seg in segs {
+        let fine = match seg {
+            Seg::Same(n) => {
+                out.push_str(&b[n].concat());
+                true
+            }
+            Seg::Change(o, n) => {
+                mark(&mut out, &a[o.clone()], &ma[o], DEL_OPEN, DEL_CLOSE)
+                    && mark(&mut out, &b[n.clone()], &mb[n], INS_OPEN, INS_CLOSE)
+            }
+        };
+        if !fine {
+            return None;
+        }
+    }
+    Some(out)
+}
+
+/// Renders Markdown carrying word change marks.
+fn marked_docs_html(d: &Data, md: &str, refs: &BTreeMap<String, Ref>) -> String {
+    docs_html(d, md, refs)
+        .replace(INS_OPEN, r#"<ins class="wd">"#)
+        .replace(INS_CLOSE, "</ins>")
+        .replace(DEL_OPEN, r#"<del class="wd">"#)
+        .replace(DEL_CLOSE, "</del>")
+}
+
+/// Docs before and after, side by side, with changed paragraphs aligned.
+pub fn docs_compare_html(d: &Data, it: &model::Item) -> String {
+    use similar::{Algorithm, DiffOp, capture_diff_slices};
+    let old = clean_marks(it.old_docs.as_deref().unwrap_or(""));
+    let new = clean_marks(&it.info.docs);
+    let (a, a_defs) = doc_blocks(&old);
+    let (b, b_defs) = doc_blocks(&new);
+    let no_refs = BTreeMap::new();
+    let render =
+        |blocks: &[String], defs: &str, refs: &BTreeMap<String, Ref>, class: &str| -> String {
+            blocks
+                .iter()
+                .map(|t| {
+                    format!(
+                        r#"<div class="dblk {class}">{}</div>"#,
+                        docs_html(d, &format!("{t}\n{defs}"), refs)
+                    )
+                })
+                .collect()
+        };
+    let mut rows = String::new();
+    for op in capture_diff_slices(Algorithm::Myers, &a, &b) {
+        let (o, n) = (op.old_range(), op.new_range());
+        let (left, right) = match op {
+            DiffOp::Equal { .. } => (
+                render(&a[o], &a_defs, &no_refs, ""),
+                render(&b[n], &b_defs, &it.info.doc_refs, ""),
+            ),
+            DiffOp::Delete { .. } => (render(&a[o], &a_defs, &no_refs, "m-del"), String::new()),
+            DiffOp::Insert { .. } => (
+                String::new(),
+                render(&b[n], &b_defs, &it.info.doc_refs, "m-add"),
+            ),
+            DiffOp::Replace { .. } => (
+                render(&a[o], &a_defs, &no_refs, "m-chg"),
+                render(&b[n], &b_defs, &it.info.doc_refs, "m-chg"),
+            ),
+        };
+        rows.push_str(&format!(
+            r#"<div class="cmp-cell">{left}</div><div class="cmp-cell">{right}</div>"#
+        ));
+    }
+    format!(
+        r#"<div class="cmp docs"><div class="cmp-h">Before (base)</div><div class="cmp-h">After (PR)</div>{rows}</div>"#
+    )
+}
+
+/// Removes the characters used as change marks from text to render.
+fn clean_marks(s: &str) -> String {
+    s.replace([INS_OPEN, INS_CLOSE, DEL_OPEN, DEL_CLOSE], "\u{FFFD}")
 }
 
 pub fn first_paragraph(md: &str) -> &str {
@@ -859,6 +1105,7 @@ mod tests {
                 head: String::new(),
                 url: None,
                 resolution: String::new(),
+                pr: None,
             },
             crates: vec!["c".into()],
             items: BTreeMap::new(),
@@ -1101,6 +1348,106 @@ mod tests {
         );
         assert!(
             html.contains(r#"<div class="dblk m-add"><code>[x]: https://example.com</code></div>"#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn word_diff_marks_changed_words_only_where_safe() {
+        assert_eq!(
+            word_diff_md(
+                "Evaluates an expression.",
+                "Evaluates an arithmetic expression."
+            ),
+            Some("Evaluates an \u{E000}arithmetic \u{E001}expression.".into())
+        );
+        // A rewritten phrase is one removal and one insertion.
+        assert_eq!(
+            word_diff_md(
+                "Tokenizes `input` and creates a parser for it.",
+                "Tokenizes `input` and creates a parser positioned at its first token."
+            ),
+            Some(
+                "Tokenizes `input` and creates a parser \u{E002}for it\u{E003}\u{E000}positioned at its first token\u{E001}."
+                    .into()
+            )
+        );
+        // Mostly rewritten: block level instead.
+        assert_eq!(word_diff_md("One two three.", "Four five six."), None);
+        // Link text, link targets and Markdown syntax are left alone.
+        assert_eq!(word_diff_md("See [`Foo`] here.", "See [`Bar`] here."), None);
+        assert_eq!(
+            word_diff_md("See [x](a.html) now.", "See [x](b.html) now."),
+            None
+        );
+        assert_eq!(word_diff_md("A *b* c d e.", "A **b** c d e."), None);
+        // A list marker at the start of a line is syntax.
+        assert_eq!(
+            word_diff_md("- a b c\n- d e f", "- a b c\n- d e g"),
+            Some("- a b c\n- d e \u{E002}f\u{E003}\u{E000}g\u{E001}".into())
+        );
+        assert_eq!(word_diff_md("a b c d\ne", "a b c d\n- e"), None);
+    }
+
+    #[test]
+    fn word_diff_renders_as_ins_and_del() {
+        let d = empty();
+        let html = docs_diff_html(
+            &d,
+            "Evaluates an expression.",
+            "Evaluates a parsed expression.",
+            &BTreeMap::new(),
+        );
+        assert_eq!(
+            html,
+            r#"<div class="dblk m-chg"><p>Evaluates <del class="wd">an</del><ins class="wd">a parsed</ins> expression.</p>
+</div>"#
+        );
+    }
+
+    #[test]
+    fn source_diff_follows_the_settings() {
+        use model::{Item, SourceLine, Status};
+        let d = empty();
+        let mut it = Item {
+            status: Status::Changed,
+            ..Default::default()
+        };
+        it.changes.body = true;
+        it.info.kind = model::Kind::Fn;
+        it.info.line = 10;
+        it.old_line = Some(4);
+        it.source = vec![
+            SourceLine(' ', "fn f() {".into()),
+            SourceLine('-', "  a();".into()),
+            SourceLine('+', "    a();".into()),
+            SourceLine('-', "    b();".into()),
+            SourceLine('+', "    c();".into()),
+            SourceLine(' ', "}".into()),
+        ];
+        let html = d.source_html(&it, true, false);
+        assert!(
+            html.contains(">+2</span> <span class=\"d-del\">−2<"),
+            "{html}"
+        );
+        crate::settings::set(crate::settings::Settings {
+            ignore_ws: true,
+            split: true,
+            ..Default::default()
+        });
+        let html = d.source_html(&it, true, false);
+        crate::settings::set(Default::default());
+        // Only `b()` → `c()` counts, shown in one row: old line 6, new line 12.
+        assert!(
+            html.contains(">+1</span> <span class=\"d-del\">−1<"),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<span class="no">6</span><span class="ln del" data-t="-">"#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<span class="no">12</span><span class="ln add" data-t="+">"#),
             "{html}"
         );
     }

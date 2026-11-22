@@ -9,6 +9,7 @@ mod code;
 mod data;
 mod dom;
 mod pages;
+mod settings;
 mod space;
 
 use code::esc;
@@ -102,17 +103,8 @@ pub fn start() {
         },
         d,
     };
-    let meta = &app.d.out.meta;
-    let title = if meta.title.contains(&meta.base) {
-        format!("<b>{}</b>", esc(&meta.title))
-    } else {
-        format!(
-            "<b>{}</b> &nbsp;{} → {}",
-            esc(&meta.title),
-            esc(&meta.base),
-            esc(&meta.head)
-        )
-    };
+    settings::load();
+    let title = app.d.compared_html();
     dom::set_html("pr-title", &title);
     APP.with(|a| *a.borrow_mut() = Some(app));
     install_listeners();
@@ -166,6 +158,20 @@ pub fn toast(msg: &str) {
             dom::toggle_class(&el, "show", false);
         }
     });
+}
+
+pub fn open_modal(title: &str, body: &str) {
+    dom::set_html("modal-title", title);
+    dom::set_html("modal-b", body);
+    if let Some(m) = dom::by_id("modal") {
+        dom::toggle_class(&m, "hidden", false);
+    }
+}
+
+pub fn close_modal() {
+    if let Some(m) = dom::by_id("modal") {
+        dom::toggle_class(&m, "hidden", true);
+    }
 }
 
 pub fn show_tooltip(html: &str) {
@@ -269,7 +275,9 @@ fn install_listeners() {
             return;
         };
         with_app(|app| {
-            if el.id() == "show-unchanged" {
+            if settings::on_change(&el) {
+                set_view(app, app.s.view);
+            } else if el.id() == "show-unchanged" {
                 app.s.show_unchanged = el
                     .dyn_ref::<web_sys::HtmlInputElement>()
                     .is_some_and(|i| i.checked());
@@ -278,6 +286,17 @@ fn install_listeners() {
                 space::on_change(app, &el);
             }
         });
+    });
+    dom::listen(&doc, "keydown", |ev| {
+        if ev
+            .dyn_ref::<KeyboardEvent>()
+            .is_some_and(|k| k.key() == "Escape")
+        {
+            close_modal();
+            if let Some(p) = dom::by_id("settings") {
+                dom::toggle_class(&p, "hidden", true);
+            }
+        }
     });
     // `toggle` does not bubble; listen in the capture phase.
     dom::listen_with(&doc, "toggle", true, true, |ev| {
@@ -318,6 +337,32 @@ fn install_listeners() {
 }
 
 fn on_click(app: &mut App, el: &Element, ev: &Event) {
+    if let Some(panel) = dom::by_id("settings") {
+        if dom::closest(el, "#settings-btn").is_some() {
+            let open = panel.class_list().contains("hidden");
+            if open {
+                panel.set_inner_html(&settings::panel_html());
+            }
+            dom::toggle_class(&panel, "hidden", !open);
+            return;
+        }
+        if dom::closest(el, "#settings").is_some() {
+            return;
+        }
+        dom::toggle_class(&panel, "hidden", true);
+    }
+    if dom::closest(el, "[data-modal-close]").is_some() || el.id() == "modal" {
+        close_modal();
+        return;
+    }
+    if let Some(b) = dom::closest(el, "[data-compare-docs]") {
+        let id = dom::data(&b, "compare-docs").unwrap_or_default();
+        if let Some(it) = app.d.item(&id) {
+            let html = code::docs_compare_html(&app.d, it);
+            open_modal(&format!("Docs of {}", esc(&app.d.display_name(it))), &html);
+        }
+        return;
+    }
     if dom::closest(el, "#view-canvas").is_some() && canvas::on_click(app, el) {
         return;
     }

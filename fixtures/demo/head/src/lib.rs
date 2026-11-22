@@ -5,6 +5,7 @@ pub mod env;
 mod eval;
 pub mod parser;
 
+pub use ast::Op;
 pub use env::Env;
 pub use eval::evaluate;
 pub use parser::parse;

@@ -523,7 +523,15 @@ pub fn draw(app: &mut App) {
             || (!n.context && plane.nodes.len() <= 12);
         if show_label {
             ctx.set_fill_style_str(if n.context { &c.muted } else { &c.text });
-            let _ = ctx.fill_text(&d.display_name(it), x + rad + 4.0, y + 4.0);
+            // The status as a sign too, not only as a color.
+            let sign = match it.status {
+                Status::Added => "+ ",
+                Status::Removed => "− ",
+                Status::Changed => "~ ",
+                Status::Unchanged => "",
+            };
+            let label = format!("{sign}{}", d.display_name(it));
+            let _ = ctx.fill_text(&label, x + rad + 4.0, y + 4.0);
         }
         sp.projected.push((i, x, y, rad));
     }
@@ -574,7 +582,7 @@ fn render_bar(app: &App) {
     );
     dom::set_html(
         "space-legend",
-        r#"● exposed item &nbsp; ○ private item &nbsp; <span style="color:var(--fn)">━</span> call &nbsp; <span style="color:var(--type)">┅</span> use<br>Edges between planes cross a module boundary and land on exposed items;<br>grey ones reach a private item of an ancestor module."#,
+        r#"+ added &nbsp; ~ changed &nbsp; − removed<br>● exposed item &nbsp; ○ private item &nbsp; <span style="color:var(--fn)">━</span> call &nbsp; <span style="color:var(--type)">┅</span> use<br>Edges between planes cross a module boundary and land on exposed items;<br>grey ones reach a private item of an ancestor module."#,
     );
 }
 

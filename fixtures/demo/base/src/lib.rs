@@ -6,6 +6,7 @@ pub mod parser;
 
 pub use eval::evaluate;
 pub use parser::parse;
+pub use parser::Parser;
 
 /// Errors produced while parsing or evaluating an expression.
 #[derive(Debug, Clone, PartialEq)]

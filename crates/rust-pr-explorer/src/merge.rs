@@ -24,12 +24,7 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
                 source: lines(&h.source, '+'),
                 info: h.info,
                 status: Status::Added,
-                changes: Changes::default(),
-                old_sig: None,
-                old_sig_public: None,
-                sig_diff: None,
-                sig_diff_public: None,
-                old_docs: None,
+                ..Default::default()
             },
         };
         items.insert(id, item);
@@ -39,14 +34,10 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
             id,
             Item {
                 source: lines(&b.source, '-'),
+                old_line: Some(b.info.line),
                 info: b.info,
                 status: Status::Removed,
-                changes: Changes::default(),
-                old_sig: None,
-                old_sig_public: None,
-                sig_diff: None,
-                sig_diff_public: None,
-                old_docs: None,
+                ..Default::default()
             },
         );
     }
@@ -79,7 +70,23 @@ fn compare(b: ItemData, h: ItemData, moved_from: Option<String>) -> Item {
     let signature = b.sig_norm != h.sig_norm;
     let body = b.body_norm != h.body_norm;
     let docs = b.info.docs != h.info.docs;
-    let structural = signature || body || docs;
+    // Public paths gained or lost, e.g. by adding or removing a `pub use`.
+    let exports_added: Vec<String> = h
+        .info
+        .public_paths
+        .iter()
+        .filter(|p| !b.info.public_paths.contains(p))
+        .cloned()
+        .collect();
+    let exports_removed: Vec<String> = b
+        .info
+        .public_paths
+        .iter()
+        .filter(|p| !h.info.public_paths.contains(p))
+        .cloned()
+        .collect();
+    let exports = !exports_added.is_empty() || !exports_removed.is_empty();
+    let structural = signature || body || docs || exports;
     let cosmetic = !structural && b.source != h.source && h.info.kind != Kind::Mod;
     let status = if structural || moved_from.is_some() {
         Status::Changed
@@ -125,6 +132,7 @@ fn compare(b: ItemData, h: ItemData, moved_from: Option<String>) -> Item {
             .flatten(),
         old_sig: (b.info.sig != h.info.sig).then(|| b.info.sig.clone()),
         old_docs: docs.then(|| b.info.docs.clone()),
+        old_line: Some(b.info.line),
         source,
         info: h.info,
         status,
@@ -134,6 +142,8 @@ fn compare(b: ItemData, h: ItemData, moved_from: Option<String>) -> Item {
             docs,
             cosmetic,
             moved_from,
+            exports_added,
+            exports_removed,
         },
     }
 }

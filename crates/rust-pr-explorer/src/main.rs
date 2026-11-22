@@ -57,6 +57,8 @@ enum Input {
 }
 
 const TEMPLATE: &str = include_str!("../../viewer/assets/explorer.html");
+const IOSEVKA_400: &[u8] = include_bytes!("../../viewer/assets/fonts/iosevka-400.woff2");
+const IOSEVKA_700: &[u8] = include_bytes!("../../viewer/assets/fonts/iosevka-700.woff2");
 const STYLE: &str = include_str!("../../viewer/assets/explorer.css");
 // Built by build.rs from the `viewer` crate.
 const GLUE: &str = include_str!(concat!(env!("OUT_DIR"), "/viewer.js"));
@@ -120,6 +122,7 @@ fn analyze_checkout(
             head: checkout.head_label.clone(),
             url: checkout.url.clone(),
             resolution,
+            pr: checkout.pr.clone(),
         },
     )
 }
@@ -178,12 +181,25 @@ fn render_page(title: &str, json: &str) -> String {
     use base64::Engine;
     // Keep the embedded JSON from closing the script element.
     let json = json.replace("</", "<\\/");
-    let wasm = base64::engine::general_purpose::STANDARD.encode(WASM);
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let wasm = b64(WASM);
+    // The default code font, embedded so that the page works offline.
+    let fonts: String = [(400, IOSEVKA_400), (700, IOSEVKA_700)]
+        .iter()
+        .map(|(weight, bytes)| {
+            format!(
+                "@font-face {{ font-family: \"Iosevka\"; font-weight: {weight}; font-display: block; \
+                 src: url(data:font/woff2;base64,{}) format(\"woff2\"); }}\n",
+                b64(bytes)
+            )
+        })
+        .collect();
     TEMPLATE
-        .replace("{{TITLE}}", &html_escape(title))
+        .replace("/*{{FONTS}}*/", &fonts)
         .replace("/*{{STYLE}}*/", STYLE)
         .replace("/*{{GLUE}}*/", GLUE)
         .replace("{{WASM}}", &wasm)
+        .replace("{{TITLE}}", &html_escape(title))
         // Last, so that nothing in the analyzed code is taken for a placeholder.
         .replace("/*{{DATA}}*/", &json)
 }

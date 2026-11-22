@@ -44,6 +44,10 @@ Since this is a review tool, it never guesses. Name resolution follows Rust's ru
 - **External paths** are claimed only for declared dependencies and `std`/`core`/`alloc`, using the prelude of the crate's edition.
 - **Ambiguity.** A name that resolves to different items in two places of one item is not linked at all.
 
+### Public paths
+
+After the items are built, every item gets the paths under which code outside the crate can name it. Crate roots start with their own name. Then, until nothing changes: a `pub` item of a module with a public path gets that path plus its name, and a `pub use` in such a module gives its target the module's path plus the imported (or renamed) name; glob re-exports do this for every `pub` item of the module. Paths are capped at 12 segments, which only re-export cycles reach. An item is public if it has a path. Base and head paths are compared: a path gained or lost is a change of the item, even if its code is the same. The overview lists each item under its shortest path, as rustdoc does.
+
 ### 2. rust-analyzer as a library (on by default)
 
 The `semantic` feature links rust-analyzer's crates (`ra_ap_ide`, `ra_ap_load-cargo`, …). For every function found by the syntactic pass, the tool asks rust-analyzer for the function's *outgoing calls*, which it resolves with full type inference. Then every call site the syntactic pass recorded is checked against those answers by position. Sites the call hierarchy doesn't list, notably calls inside macro arguments, are checked with *go to definition* at the site. What still can't be resolved is counted per function and shown on its card. Results are mapped back to item ids through the position of the target's name. Method calls also keep their target by position, so the source view links each call site exactly.
@@ -164,6 +168,5 @@ The tool calls the `git` binary to clone, fetch pull request refs, compute merge
 
 - Opt-in rustdoc JSON in trusted mode, for an exact public API.
 - Public-API computation via rust-analyzer's `hir` (exact re-exports, `doc(hidden)`).
-- Report changes of the public API that come from `pub use` alone (an item newly re-exported or no longer re-exported), and show items at their public path.
-- Fetch PR metadata (title, description) through the GitHub API when a token is available.
+- Show the PR description (`gh pr view --json body`).
 - Smaller wasm, for example by replacing `serde_json` with a more compact format, or by running `wasm-opt`.

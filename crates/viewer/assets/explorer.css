@@ -25,6 +25,8 @@
   --private: #7a7a7a;
   --highlight: #ffe48a;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 4px 14px rgba(0, 0, 0, 0.06);
+  --code-font: "Iosevka", var(--mono);
+  --code-size: 13px;
   --mono: "Source Code Pro", "SFMono-Regular", Menlo, Consolas, "Liberation Mono", monospace;
   --sans: "Source Serif 4", "Fira Sans", -apple-system, "Segoe UI", Roboto, sans-serif;
   color-scheme: light;
@@ -82,7 +84,11 @@ button {
 button:hover { border-color: var(--link); }
 button.on { background: var(--link); color: var(--bg); border-color: var(--link); }
 a { color: var(--link); text-decoration: none; cursor: pointer; }
-code, pre { font-family: var(--mono); font-size: 13.5px; }
+/* The code font and size are viewer settings (see settings.rs). */
+/* No ligatures: a reviewer must see the characters as written (`->`, `=>`, `!=`). */
+code, pre, .sig, .sbs { font-family: var(--code-font); font-variant-ligatures: none; font-feature-settings: "calt" 0, "liga" 0; }
+pre, .sig, .sbs { font-size: var(--code-size); }
+code { font-size: .92em; }
 
 /* Header */
 #top {
@@ -148,12 +154,17 @@ code, pre { font-family: var(--mono); font-size: 13.5px; }
 
 /* Code */
 /* Signatures are laid out by the analysis (rustfmt style); never soft-wrap. */
-.sig { margin: 0; padding: 8px 10px; background: var(--bg-code); border-radius: 4px; white-space: pre; overflow-x: auto; font-size: 13px; }
+.sig { margin: 0; padding: 8px 10px; background: var(--bg-code); border-radius: 4px; white-space: pre; overflow-x: auto; }
 /* Change markers: a bar on the left of what changed. */
 .sigbox, .dblk, details.src { border-left: 3px solid transparent; padding-left: 7px; margin-left: -10px; }
-.m-add { border-left-color: var(--added) !important; }
-.m-del { border-left-color: var(--removed) !important; }
-.m-chg { border-left-color: var(--changed) !important; }
+/* Each marker differs in line style too, not only in color:
+   added = solid, removed = dashed, changed = double. */
+.m-add { border-left: 3px solid var(--added) !important; }
+.m-del { border-left: 3px dashed var(--removed) !important; }
+.m-chg { border-left: 5px double var(--changed) !important; padding-left: 5px !important; }
+.mk { font-family: var(--mono); font-weight: 700; }
+.exports .dblk { font-size: 13px; margin-top: 2px; margin-bottom: 2px; }
+.exports .m-del s { text-decoration-color: var(--removed); }
 /* An unchanged signature, shown for reference: muted, no code background. */
 .sigbox.m-ref .sig { background: transparent; box-shadow: inset 0 0 0 1px var(--border); color: var(--muted); }
 .sigbox.m-ref .sig .ref, .sigbox.m-ref .sig .kw { opacity: .8; }
@@ -263,8 +274,9 @@ a.ref:hover { text-decoration: underline; }
   border-radius: 8px; box-shadow: var(--shadow); cursor: default;
 }
 .card.cs-added { border-top: 4px solid var(--added); }
-.card.cs-changed { border-top: 4px solid var(--changed); }
-.card.cs-removed { border-top: 4px solid var(--removed); }
+.card.cs-changed { border-top: 6px double var(--changed); }
+.card.cs-removed { border-top: 4px dashed var(--removed); }
+.card.cs-removed .card-h .title-name { text-decoration: line-through; text-decoration-color: var(--removed); }
 .card.cs-unchanged { border-top: 4px solid var(--border); opacity: .93; }
 .card.context .card-b { font-size: 13px; }
 .card.flash { animation: flash 1s ease-out; }
@@ -275,8 +287,13 @@ a.ref:hover { text-decoration: underline; }
 .card-tab.active { background: var(--bg); border-color: var(--border); margin-bottom: -1px; }
 .card-tab .x { color: var(--muted); }
 .card-tab .x:hover { color: var(--removed); }
-.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; }
-.dot.added { background: var(--added); } .dot.changed { background: var(--changed); } .dot.removed { background: var(--removed); } .dot.unchanged { background: var(--border); }
+/* Status dots differ in shape too: added = disc, changed = diamond,
+   removed = hollow square, unchanged = small grey disc. */
+.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; box-sizing: border-box; }
+.dot.added { background: var(--added); }
+.dot.changed { background: var(--changed); border-radius: 1px; transform: rotate(45deg) scale(.95); }
+.dot.removed { background: transparent; border: 2px solid var(--removed); border-radius: 1px; }
+.dot.unchanged { background: var(--border); width: 5px; height: 5px; }
 .card-h { display: flex; align-items: center; gap: 6px; padding: 7px 10px 5px; cursor: move; flex-wrap: wrap; user-select: none; }
 .card-h .title-name { font-size: 14px; }
 .card-h .grow { flex: 1; }
@@ -297,7 +314,7 @@ a.ref:hover { text-decoration: underline; }
 .members .mitem.private { color: var(--private); }
 .hidden-note { font-size: 12px; color: var(--private); border: 1px dashed var(--border); border-radius: 4px; padding: 3px 8px; }
 .src summary { cursor: pointer; font-size: 12.5px; color: var(--muted); margin: 6px 0 2px; }
-.src pre { margin: 4px 0 0; background: var(--bg-code); border-radius: 4px; max-height: 420px; overflow: auto; padding: 4px 0; font-size: 12.5px; }
+.src pre { margin: 4px 0 0; background: var(--bg-code); border-radius: 4px; max-height: 420px; overflow: auto; padding: 4px 0; }
 .src .ln { display: block; padding: 0 8px 0 4px; white-space: pre; }
 .src .ln::before { content: attr(data-t); display: inline-block; width: 14px; color: var(--muted); }
 .src .ln.add { background: var(--added-bg); }
@@ -325,6 +342,7 @@ a.ref:hover { text-decoration: underline; }
 .sig-diff del.sd *, .sig-diff .wrap del.edge * { color: inherit; }
 .sig-diff ins.sd, .sig-diff .wrap ins.edge { background: color-mix(in srgb, var(--added) 22%, transparent); text-decoration: none; border-radius: 2px; }
 .sig-diff ins.sd { box-shadow: inset 0 -1.5px 0 var(--added); }
+.sig-diff del.sd { text-decoration-thickness: 1.5px; }
 /* A wrapper added around (or removed from) a type: one box, the kept type inside. */
 .sig-diff .wrap { border: 1.5px solid var(--added); border-radius: 4px; padding: 0 1px; }
 .sig-diff .wrap.unwrap { border: 1.5px dashed var(--removed); }
@@ -342,3 +360,47 @@ a.ref:hover { text-decoration: underline; }
 .sig-notes li { margin: 1px 0; border-radius: 3px; cursor: default; }
 .sig-notes code { font-size: 12px; color: var(--text); background: var(--bg-code); padding: 0 3px; border-radius: 3px; }
 .sig-note { font-size: 12px; color: var(--muted); }
+.legend-bars { display: flex; gap: 10px; margin-top: 6px !important; }
+.legend-bars .lb { padding-left: 5px; }
+
+.hidden { display: none !important; }
+
+/* Settings */
+.settings-wrap { position: relative; }
+#settings-btn { font: inherit; font-size: 13px; }
+#settings { position: absolute; right: 0; top: 34px; z-index: 50; width: 280px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 8px; box-shadow: 0 6px 24px rgba(0,0,0,.18); padding: 8px 14px 12px; font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+#settings label { display: flex; align-items: center; gap: 6px; }
+#settings select, #settings input[type=text] { font: inherit; flex: 1; min-width: 0; }
+.set-h { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-top: 6px; }
+.set-note { font-size: 12px; color: var(--muted); }
+
+/* Side-by-side source diff */
+.sbs { display: grid; grid-template-columns: auto minmax(max-content, 1fr) auto minmax(max-content, 1fr); margin: 4px 0 0;
+  background: var(--bg-code); border-radius: 4px; max-height: 420px; overflow: auto; padding: 4px 0; }
+.sbs .no { color: var(--muted); text-align: right; padding: 0 6px 0 8px; user-select: none; border-left: 1px solid var(--border); }
+.sbs .no:first-child, .sbs .no:nth-child(4n+1) { border-left: none; }
+.sbs .ln { white-space: pre; padding-right: 12px; }
+.sbs .ln::before { content: attr(data-t); display: inline-block; width: 14px; color: var(--muted); }
+.sbs .ln.add { background: var(--added-bg); }
+.sbs .ln.del { background: var(--removed-bg); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--removed) 60%, transparent); }
+.sbs .ln.gap { background: repeating-linear-gradient(135deg, transparent 0 4px, var(--border) 4px 5px); opacity: .5; }
+.card:has(details.src[open] .sbs) { width: 1080px; }
+.src .ln.del { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--removed) 60%, transparent); }
+
+/* Word changes in docs: inserted words underlined, removed ones struck out. */
+ins.wd { text-decoration: underline 2px var(--added); text-underline-offset: 3px; background: var(--added-bg); }
+del.wd { text-decoration: line-through 1.5px var(--removed); background: var(--removed-bg); margin-right: 3px; }
+.docs-acts { display: flex; }
+button.mini { font: inherit; font-size: 12px; padding: 1px 8px; }
+
+/* Docs comparison */
+#modal { position: fixed; inset: 0; z-index: 100; background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; }
+#modal-box { background: var(--bg); border-radius: 10px; width: min(1200px, 94vw); max-height: 88vh; display: flex; flex-direction: column; box-shadow: 0 10px 40px rgba(0,0,0,.3); }
+#modal-h { display: flex; align-items: center; padding: 10px 16px; border-bottom: 1px solid var(--border); font-weight: 600; }
+#modal-h #modal-title { flex: 1; }
+#modal-h .x { cursor: pointer; font-size: 20px; color: var(--muted); }
+#modal-b { overflow: auto; padding: 12px 16px 16px; }
+.cmp { display: grid; grid-template-columns: 1fr 1fr; gap: 0 28px; }
+.cmp-h { font: 600 11px var(--sans); text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding-bottom: 6px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+.cmp-cell { min-width: 0; padding-left: 10px; }

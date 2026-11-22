@@ -18,6 +18,7 @@ fn analyze_dirs(base: &Path, head: &Path) -> Output {
             head: String::new(),
             url: None,
             resolution: String::new(),
+            pr: None,
         },
     )
 }
@@ -160,6 +161,51 @@ fn glob_reexports_are_public() {
     let out = analyze_dirs(dir.path(), dir.path());
     assert!(out.items["t::inner::Thing"].info.public);
     assert!(!out.items["t::inner::Hidden"].info.public);
+}
+
+#[test]
+fn public_paths_follow_reexports() {
+    let dir = write_crate(&[
+        (
+            "src/lib.rs",
+            "mod inner;\npub mod api;\npub use inner::*;\npub use inner::Thing as Alias;\n",
+        ),
+        ("src/inner.rs", "pub struct Thing;\nstruct Hidden;\n"),
+        (
+            "src/api.rs",
+            "pub use crate::inner::Thing;\npub fn f() {}\n",
+        ),
+    ]);
+    let out = analyze_dirs(dir.path(), dir.path());
+    assert_eq!(
+        out.items["t::inner::Thing"].info.public_paths,
+        ["t::Alias", "t::Thing", "t::api::Thing"]
+    );
+    assert_eq!(out.items["t::api::f"].info.public_paths, ["t::api::f"]);
+    assert!(out.items["t::inner::Hidden"].info.public_paths.is_empty());
+    // The private definition path is not a public path.
+    assert!(out.items["t::inner"].info.public_paths.is_empty());
+}
+
+#[test]
+fn reexport_changes_are_changes() {
+    let base = write_crate(&[
+        ("src/lib.rs", "mod inner;\npub use inner::Old;\n"),
+        ("src/inner.rs", "pub struct Old;\npub struct New;\n"),
+    ]);
+    let head = write_crate(&[
+        ("src/lib.rs", "mod inner;\npub use inner::New;\n"),
+        ("src/inner.rs", "pub struct Old;\npub struct New;\n"),
+    ]);
+    let out = analyze_dirs(base.path(), head.path());
+    let new = &out.items["t::inner::New"];
+    assert_eq!(new.status, Status::Changed);
+    assert_eq!(new.changes.exports_added, ["t::New"]);
+    assert!(new.info.public);
+    let old = &out.items["t::inner::Old"];
+    assert_eq!(old.status, Status::Changed);
+    assert_eq!(old.changes.exports_removed, ["t::Old"]);
+    assert!(!old.info.public);
 }
 
 #[test]

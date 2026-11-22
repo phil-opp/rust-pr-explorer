@@ -41,6 +41,7 @@ pub struct Checkout {
     pub base_label: String,
     pub head_label: String,
     pub url: Option<String>,
+    pub pr: Option<model::PrMeta>,
     // Keeps temporary directories alive for as long as the checkout is used.
     _temp: Option<tempfile::TempDir>,
 }
@@ -68,6 +69,7 @@ impl Checkout {
             base_label: base.display().to_string(),
             head_label: head.display().to_string(),
             url: None,
+            pr: None,
             _temp: Some(temp),
         })
     }
@@ -90,6 +92,7 @@ impl Checkout {
             base_label: format!("{base} ({})", short(&base_rev)),
             head_label: format!("{head} ({})", short(&head_rev)),
             url: None,
+            pr: None,
             _temp: Some(temp),
         })
     }
@@ -124,17 +127,23 @@ impl Checkout {
             ],
         )?;
         let head_rev = rev_parse(&git_dir, "refs/pr/head")?;
-        let (base_rev, base_label) = match base {
+        // Title and branch names are only known to GitHub's API.
+        let gh = gh_pr_view(&owner, &repo, number);
+        let (base_rev, base_label, base_ref) = match base {
             Some(b) => {
                 let rev = rev_parse(&git_dir, b)
                     .or_else(|_| rev_parse(&git_dir, &format!("origin/{b}")))?;
-                (rev.clone(), format!("{b} ({})", short(&rev)))
+                (rev.clone(), format!("{b} ({})", short(&rev)), b.to_string())
             }
             None => {
-                let default = git_output(
-                    &git_dir,
-                    &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
-                )?;
+                // The branch the PR targets, else the default branch.
+                let default = match &gh {
+                    Some(info) => format!("origin/{}", info.base_ref_name),
+                    None => git_output(
+                        &git_dir,
+                        &["symbolic-ref", "--short", "refs/remotes/origin/HEAD"],
+                    )?,
+                };
                 let mut mb = git_output(&git_dir, &["merge-base", &default, &head_rev])?;
                 if mb == head_rev {
                     // Already merged with a merge commit: diff against the
@@ -157,9 +166,11 @@ impl Checkout {
                         )?;
                     }
                 }
+                let base_ref = default.strip_prefix("origin/").unwrap_or(&default);
                 (
                     mb.clone(),
                     format!("merge base with {default} ({})", short(&mb)),
+                    base_ref.to_string(),
                 )
             }
         };
@@ -187,9 +198,64 @@ impl Checkout {
             base_label,
             head_label: format!("PR head ({})", short(&head_rev)),
             url: Some(format!("https://github.com/{owner}/{repo}/pull/{number}")),
+            pr: Some(model::PrMeta {
+                repo: format!("{owner}/{repo}"),
+                number,
+                title: gh.as_ref().map(|i| i.title.clone()),
+                base_ref,
+                base_rev: short(&base_rev).to_string(),
+                head_ref: gh.as_ref().map(|i| i.head_ref_name.clone()),
+                head_owner: gh
+                    .as_ref()
+                    .filter(|i| i.is_cross_repository)
+                    .and_then(|i| i.head_repository_owner["login"].as_str())
+                    .map(str::to_string),
+                head_rev: short(&head_rev).to_string(),
+            }),
             _temp: Some(temp),
         })
     }
+}
+
+/// What `gh pr view --json` says about a pull request.
+#[derive(Debug, serde::Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+struct GhPr {
+    title: String,
+    base_ref_name: String,
+    head_ref_name: String,
+    /// `{"login": …}`; read loosely, since only the login is needed.
+    #[serde(default)]
+    head_repository_owner: serde_json::Value,
+    #[serde(default)]
+    is_cross_repository: bool,
+}
+
+/// Asks the GitHub CLI for the PR's title and branches. `None` (with a
+/// note) if `gh` is missing, not logged in, or fails.
+fn gh_pr_view(owner: &str, repo: &str, number: u64) -> Option<GhPr> {
+    let out = std::process::Command::new("gh")
+        .args([
+            "pr",
+            "view",
+            &number.to_string(),
+            "--repo",
+            &format!("{owner}/{repo}"),
+            "--json",
+            "title,baseRefName,headRefName,headRepositoryOwner,isCrossRepository",
+        ])
+        .output();
+    let parsed = match out {
+        Ok(o) if o.status.success() => serde_json::from_slice::<GhPr>(&o.stdout).ok(),
+        _ => None,
+    };
+    if parsed.is_none() {
+        eprintln!(
+            "note: `gh pr view` failed; the PR's title and branch names are left out \
+             and the base is the repository's default branch"
+        );
+    }
+    parsed
 }
 
 /// Accepts `https://github.com/owner/repo/pull/123` or `owner/repo#123`.
@@ -451,5 +517,21 @@ fn walk_manifests(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
         } else if name == "Cargo.toml" {
             out.push(path);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn gh_json_is_parsed() {
+        // As printed by `gh pr view --json title,baseRefName,headRefName,headRepositoryOwner,isCrossRepository`.
+        let json = r#"{"baseRefName":"master","headRefName":"value-bag","headRepositoryOwner":{"id":"MDQ6VXNlcjE=","login":"someone","name":"Some One"},"isCrossRepository":true,"title":"Use value-bag"}"#;
+        let pr: GhPr = serde_json::from_str(json).unwrap();
+        assert_eq!(pr.base_ref_name, "master");
+        assert_eq!(pr.head_ref_name, "value-bag");
+        assert!(pr.is_cross_repository);
+        assert_eq!(pr.head_repository_owner["login"], "someone");
     }
 }

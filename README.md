@@ -34,24 +34,26 @@ All commands write `pr-explorer.html` (change it with `-o`). Open that file in a
 
 In a sandboxed environment, `--trust-project-code` (or `RUST_PR_EXPLORER_TRUST_PROJECT_CODE=1`) lets rust-analyzer run the project's build scripts and procedural macros. It then also resolves calls involving generated code, such as types from `include!(concat!(env!("OUT_DIR"), …))` or items produced by proc macros. See [Safety](#safety).
 
-For `pr`, the repository is cloned without file contents (`--filter=blob:none`), and only the two revisions being compared are checked out. Without `--base`, the base is the merge base of the PR head and the default branch. For a PR that was already merged with a merge commit, the base is the state just before that merge.
+For `pr`, the repository is cloned without file contents (`--filter=blob:none`), and only the two revisions being compared are checked out. If the GitHub CLI (`gh`) is installed and logged in, `gh pr view` supplies the PR's title, its base branch and its own branch; the page header then shows the repository, PR number and title, `base-branch @ commit ← pr-branch @ commit`. Without `gh`, the title and PR branch are left out. Without `--base`, the base is the merge base of the PR head and the PR's base branch (without `gh`: the default branch). For a PR that was already merged with a merge commit, the base is the state just before that merge.
 
-The demo in `fixtures/demo` is a small calculator crate. Its "PR" adds variables (a new `env` module, a changed `evaluate` signature, new error variants), moves a helper between modules, and changes some import styles and formatting. That last part does not show up as a change.
+The demo in `fixtures/demo` is a small calculator crate. Its "PR" adds variables (a new `env` module, a changed `evaluate` signature, new error variants), moves a helper between modules, re-exports `ast::Op` at the crate root and drops the root re-export of `parser::Parser`, extends one doc comment (shown as a word diff), and changes some import styles and formatting. That last part does not show up as a change.
 
 ## What you see
 
 ### Overview
 
-Lists only the public items that were added, changed or removed, nested by module, with their rustdoc-style signature and docs. A type whose methods changed appears as context with the changed members below it. Public items of private modules that are re-exported with `pub use` are listed as well. Internal changes are summarized per module, with a link to each module's internal call graph.
+Lists only the public items that were added, changed or removed, nested by module, with their rustdoc-style signature and docs. A type whose methods changed appears as context with the changed members below it. Items are listed where rustdoc lists them: under their shortest public path, so an item of a private module that is re-exported with `pub use` appears at the re-export, marked "re-export of …". Internal changes are summarized per module, with a link to each module's internal call graph.
 
 ### Items
 
 Every item shows what rustdoc would show: its definition or signature (private fields hidden when looking from outside the module), its docs, and its place in the module tree.
 
-- **Change markers**: a colored bar on the left marks each part that changed, so the eye finds changes without reading labels: green for added, red for removed, amber for changed.
+- **Change markers**: a bar on the left marks each part that changed, so the eye finds changes without reading labels. Each kind differs in line style as well as color, so it doesn't depend on telling red from green: added is a solid green line, removed a dashed red line, changed a double amber line. Removed text is also struck through, and status dots differ in shape (disc, diamond, hollow square).
   - The signature block gets a bar when the signature changed. An unchanged signature, shown only for reference, is drawn muted and outlined instead.
-  - Docs are compared paragraph by paragraph (lists and code blocks count as one paragraph). Changed and added paragraphs get a bar; the previous text of a changed paragraph can be expanded; removed paragraphs are shown struck through.
+  - Docs are compared paragraph by paragraph (lists and code blocks count as one paragraph). Changed and added paragraphs get a bar; removed paragraphs are shown struck through. When a paragraph changed only a few words, the words are marked inside it (inserted underlined, removed struck through). This is done only when it can't change how the Markdown renders: not for changes to link text or targets, Markdown syntax, the start of a line, or code blocks. Otherwise the previous text of the paragraph can be expanded. **Compare docs side by side** opens both versions next to each other, with changed paragraphs aligned.
   - After the docs, a line such as **Body changed +4 −3** expands to the source diff.
+  - **Public paths**: an item that becomes public under a new path, for example through a new `pub use`, or loses a public path, is a change: "+ now public as `crate::Op`", "− no longer public as `crate::Parser`".
+- **Settings** (⚙ in the header, remembered per browser): source diffs inline or side by side, hiding whitespace-only changes (like GitHub), and the code font and size. The default font is Iosevka, embedded in the page; ligatures are off so that `->` and `=>` show as written.
   - Items moved to another module are marked as *moved*. If only formatting, comments or import style changed, the item is marked *formatting only* and counts as unchanged.
 - **Signature layout**: long function signatures are broken into lines the way rustfmt does (one parameter per line, `where` predicates on their own lines), never soft-wrapped.
 - **Signature diffs**: a changed signature is diffed by structure, not text.
@@ -129,7 +131,7 @@ What that leaves out:
 - **Generated code.** The syntactic pass never sees code generated by procedural macros (including derives) or build scripts. rust-analyzer sees it only with `--trust-project-code`.
 - **`cfg`.** Items behind `#[cfg(test)]` and `#[test]` functions are skipped. Other `cfg` attributes are ignored by the syntactic pass, so code behind every `cfg` is shown.
 - **External crates.** Their items are described (declaration and docs) only with rust-analyzer, and only when rust-analyzer's definition has the same name and crate as the path the syntactic pass resolved. Their calls and uses are not analyzed. Intra-doc links in their docs that rust-analyzer can't turn into URLs show as plain text.
-- **Re-exports.** They make the target public (including `pub use module::*`), but the item is still shown at its definition path. Adding or removing a `pub use` that changes whether an item is public is not yet reported as a change, and re-exports of items from other crates are not listed.
+- **Re-exports.** Public paths follow `pub use` (named, renamed and glob) through public modules. Re-exports of items from other crates are not listed, and `#[doc(hidden)]` and `#[doc(inline)]` are not taken into account.
 - **Moves.** An item counts as moved only when its code is identical: the same body (for functions, constants, macros) or the same definition (for types), and exactly one item of that kind and name disappears in one place and appears in another. Anything else is shown as removed plus added.
-- **PR metadata** (title, description) is not fetched. Only `git` access to the repository is used.
+- **PR metadata.** The title and branches come from `gh` when it is available; the PR description is not shown.
 - **Build time.** A clean release build takes a few minutes, mostly for rust-analyzer. `--no-default-features` builds without it.

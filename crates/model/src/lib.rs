@@ -137,6 +137,11 @@ pub struct Use {
 pub struct ItemInfo {
     pub id: String,
     pub kind: Kind,
+    /// Paths under which code outside the crate can name the item: its
+    /// definition path if that is public, plus `pub use` re-exports.
+    /// Shortest first; empty if it isn't reachable from outside.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub public_paths: Vec<String>,
     pub name: String,
     /// Id of the module the item is defined in (for a module: its parent;
     /// for a crate root: itself).
@@ -219,6 +224,11 @@ pub struct Changes {
     pub docs: bool,
     /// Only formatting, comments or import style differ.
     pub cosmetic: bool,
+    /// Public paths the item gained or lost, e.g. through a `pub use`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exports_added: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exports_removed: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub moved_from: Option<String>,
 }
@@ -298,10 +308,13 @@ pub struct Item {
     pub sig_diff_public: Option<SigDiff>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_docs: Option<String>,
+    /// The first line of the base version, for side-by-side diffs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_line: Option<usize>,
     pub source: Vec<SourceLine>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Meta {
     pub title: String,
     pub base: String,
@@ -309,6 +322,34 @@ pub struct Meta {
     pub url: Option<String>,
     /// How calls were resolved, e.g. "rust-analyzer" or "syntax only".
     pub resolution: String,
+    /// The pull request, when one was analyzed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pr: Option<PrMeta>,
+}
+
+/// A GitHub pull request and the revisions compared.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct PrMeta {
+    /// `owner/repo`
+    pub repo: String,
+    pub number: u64,
+    /// From the GitHub CLI, if it was available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// The branch the PR targets, e.g. `main`.
+    pub base_ref: String,
+    /// The compared base commit (abbreviated): the merge base of the PR
+    /// with `base_ref`, unless another base was given.
+    pub base_rev: String,
+    /// The PR's branch, e.g. `fix-parser`, if known (only the GitHub CLI
+    /// knows it).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_ref: Option<String>,
+    /// The owner of the PR's branch when it comes from a fork.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub head_owner: Option<String>,
+    /// The compared head commit (abbreviated).
+    pub head_rev: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

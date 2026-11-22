@@ -71,7 +71,7 @@ impl Parser {
     }
 }
 
-/// Parses `input` into an expression.
+/// Parses `input` into an expression, or returns the first error.
 pub fn parse(input: &str) -> Result<Expr, crate::Error> {
     Parser::new(input)?.parse_expr()
 }
