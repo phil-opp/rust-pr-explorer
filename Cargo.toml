@@ -1,17 +1,25 @@
-[package]
-name = "rust-pr-explorer"
+[workspace]
+resolver = "3"
+members = ["crates/model", "crates/rust-pr-explorer", "crates/viewer"]
+exclude = ["fixtures"]
+default-members = ["crates/model", "crates/rust-pr-explorer"]
+
+[workspace.package]
 version = "0.1.0"
 edition = "2024"
 
-[dependencies]
-anyhow = "1.0.104"
-clap = { version = "4.6.9", features = ["derive"] }
-prettyplease = "0.3.0"
-proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
-quote = "1.0.47"
+[workspace.dependencies]
+model = { path = "crates/model" }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-similar = "3.2.1"
-syn = { version = "3.0.10", features = ["full", "visit", "visit-mut", "extra-traits", "printing"] }
-tempfile = "3.27.0"
-toml = "1.2.2"
+# The viewer and the bindgen step in the CLI's build script must use the
+# exact same wasm-bindgen version.
+wasm-bindgen = "=0.2.130"
+wasm-bindgen-cli-support = "=0.2.130"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[profile.release.package.viewer]
+opt-level = "s"
+codegen-units = 1

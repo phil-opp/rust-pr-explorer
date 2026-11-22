@@ -1,0 +1,11 @@
+[package]
+name = "model"
+description = "Data exchanged between the analysis and the viewer"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+
+[lints]
+workspace = true

@@ -1,59 +1,9 @@
 //! Compares the base and head analyses item by item.
 
-use crate::analyze::{Analysis, ItemData, Kind};
-use serde::Serialize;
+use crate::analyze::{Analysis, ItemData};
+use model::{Changes, Item, Kind, Meta, Output, SourceLine, Status};
 use similar::{ChangeTag, TextDiff};
 use std::collections::{BTreeMap, HashMap};
-
-#[derive(Serialize, Clone, Copy, PartialEq, Eq, Debug)]
-#[serde(rename_all = "snake_case")]
-pub enum Status {
-    Added,
-    Removed,
-    Changed,
-    Unchanged,
-}
-
-#[derive(Serialize, Default, Debug)]
-pub struct Changes {
-    pub signature: bool,
-    pub body: bool,
-    pub docs: bool,
-    /// Only formatting or comments differ.
-    pub cosmetic: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub moved_from: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct OutItem {
-    #[serde(flatten)]
-    pub data: ItemData,
-    pub status: Status,
-    pub changes: Changes,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub old_sig: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub old_docs: Option<String>,
-    /// Source lines as `[tag, text]`, tag being ` `, `+` or `-`.
-    pub source: Vec<(char, String)>,
-}
-
-#[derive(Serialize)]
-pub struct Meta {
-    pub title: String,
-    pub base: String,
-    pub head: String,
-    pub url: Option<String>,
-}
-
-#[derive(Serialize)]
-pub struct Output {
-    pub meta: Meta,
-    pub crates: Vec<String>,
-    pub items: BTreeMap<String, OutItem>,
-    pub warnings: Vec<String>,
-}
 
 pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
     let mut base_items = base.items;
@@ -70,9 +20,9 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
         };
         let item = match b {
             Some(b) => compare(b, h, moves.get(&id).cloned()),
-            None => OutItem {
+            None => Item {
                 source: lines(&h.source, '+'),
-                data: h,
+                info: h.info,
                 status: Status::Added,
                 changes: Changes::default(),
                 old_sig: None,
@@ -84,9 +34,9 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
     for (id, b) in base_items {
         items.insert(
             id,
-            OutItem {
+            Item {
                 source: lines(&b.source, '-'),
-                data: b,
+                info: b.info,
                 status: Status::Removed,
                 changes: Changes::default(),
                 old_sig: None,
@@ -115,12 +65,12 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
     }
 }
 
-fn compare(b: ItemData, h: ItemData, moved_from: Option<String>) -> OutItem {
+fn compare(b: ItemData, h: ItemData, moved_from: Option<String>) -> Item {
     let signature = b.sig_norm != h.sig_norm;
     let body = b.body_norm != h.body_norm;
-    let docs = b.docs != h.docs;
+    let docs = b.info.docs != h.info.docs;
     let structural = signature || body || docs;
-    let cosmetic = !structural && b.source != h.source && h.kind != Kind::Mod;
+    let cosmetic = !structural && b.source != h.source && h.info.kind != Kind::Mod;
     let status = if structural || moved_from.is_some() {
         Status::Changed
     } else {
@@ -137,15 +87,15 @@ fn compare(b: ItemData, h: ItemData, moved_from: Option<String>) -> OutItem {
                     ChangeTag::Insert => '+',
                     ChangeTag::Delete => '-',
                 };
-                (tag, c.value().trim_end_matches('\n').to_string())
+                SourceLine(tag, c.value().trim_end_matches('\n').to_string())
             })
             .collect()
     };
-    OutItem {
-        old_sig: (b.sig != h.sig).then(|| b.sig.clone()),
-        old_docs: docs.then(|| b.docs.clone()),
+    Item {
+        old_sig: (b.info.sig != h.info.sig).then(|| b.info.sig.clone()),
+        old_docs: docs.then(|| b.info.docs.clone()),
         source,
-        data: h,
+        info: h.info,
         status,
         changes: Changes {
             signature,
@@ -157,11 +107,13 @@ fn compare(b: ItemData, h: ItemData, moved_from: Option<String>) -> OutItem {
     }
 }
 
-fn lines(text: &str, tag: char) -> Vec<(char, String)> {
+fn lines(text: &str, tag: char) -> Vec<SourceLine> {
     if text.is_empty() {
         return Vec::new();
     }
-    text.lines().map(|l| (tag, l.to_string())).collect()
+    text.lines()
+        .map(|l| SourceLine(tag, l.to_string()))
+        .collect()
 }
 
 /// Maps head ids to base ids of items that were moved to another module.
@@ -170,6 +122,7 @@ fn find_moves(
     head: &BTreeMap<String, ItemData>,
 ) -> HashMap<String, String> {
     fn key(item: &ItemData) -> (Kind, String, String) {
+        let item = &item.info;
         let parent = item
             .parent
             .as_deref()
@@ -180,13 +133,13 @@ fn find_moves(
     }
     let mut removed: HashMap<_, Vec<&String>> = HashMap::new();
     for (id, item) in base {
-        if !head.contains_key(id) && item.kind != Kind::Mod {
+        if !head.contains_key(id) && item.info.kind != Kind::Mod {
             removed.entry(key(item)).or_default().push(id);
         }
     }
     let mut added: HashMap<_, Vec<&String>> = HashMap::new();
     for (id, item) in head {
-        if !base.contains_key(id) && item.kind != Kind::Mod {
+        if !base.contains_key(id) && item.info.kind != Kind::Mod {
             added.entry(key(item)).or_default().push(id);
         }
     }

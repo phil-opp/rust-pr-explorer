@@ -12,6 +12,9 @@ pub struct CrateSrc {
     pub name: String,
     /// Root source file (`lib.rs` or `main.rs`).
     pub root_file: PathBuf,
+    /// Directory containing the crate's `Cargo.toml`.
+    #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
+    pub manifest_dir: PathBuf,
 }
 
 /// Two checked out source trees plus a description of where they came from.
@@ -27,20 +30,29 @@ pub struct Checkout {
 }
 
 impl Checkout {
+    /// Copies two directories, so that tools run on them (`cargo metadata`
+    /// writes a `Cargo.lock`) never touch the originals.
     pub fn from_dirs(base: &Path, head: &Path) -> Result<Self> {
         for dir in [base, head] {
             if !dir.is_dir() {
                 bail!("`{}` is not a directory", dir.display());
             }
         }
+        let temp = tempfile::tempdir()?;
+        let base_dir = temp.path().join("base");
+        let head_dir = temp.path().join("head");
+        copy_tree(base, &base_dir)?;
+        copy_tree(head, &head_dir)?;
+        sanitize(&base_dir)?;
+        sanitize(&head_dir)?;
         Ok(Checkout {
-            base_dir: base.to_path_buf(),
-            head_dir: head.to_path_buf(),
+            base_dir,
+            head_dir,
             title: format!("{} → {}", base.display(), head.display()),
             base_label: base.display().to_string(),
             head_label: head.display().to_string(),
             url: None,
-            _temp: None,
+            _temp: Some(temp),
         })
     }
 
@@ -53,6 +65,8 @@ impl Checkout {
         let head_dir = temp.path().join("head");
         export_rev(repo, &base_rev, &base_dir)?;
         export_rev(repo, &head_rev, &head_dir)?;
+        sanitize(&base_dir)?;
+        sanitize(&head_dir)?;
         Ok(Checkout {
             base_dir,
             head_dir,
@@ -148,6 +162,8 @@ impl Checkout {
                 ],
             )?;
         }
+        sanitize(&base_dir)?;
+        sanitize(&head_dir)?;
         Ok(Checkout {
             base_dir,
             head_dir,
@@ -233,17 +249,63 @@ fn export_rev(repo: &Path, rev: &str, dest: &Path) -> Result<()> {
     if !archive.status.success() {
         bail!("git archive {rev} failed");
     }
-    let mut tar = Command::new("tar")
-        .arg("-x")
-        .arg("-C")
-        .arg(dest)
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .context("failed to run tar")?;
-    use std::io::Write;
-    tar.stdin.take().unwrap().write_all(&archive.stdout)?;
-    if !tar.wait()?.success() {
-        bail!("extracting {rev} failed");
+    tar::Archive::new(archive.stdout.as_slice())
+        .unpack(dest)
+        .with_context(|| format!("extracting {rev}"))
+}
+
+/// Removes what could make tools run code chosen by the analyzed project.
+///
+/// Analysis never builds the code, but `cargo metadata` and rustup read
+/// configuration from the source tree: `.cargo/config.toml` can name a
+/// `rustc` (wrapper) to run and `rust-toolchain.toml` a toolchain directory.
+/// Symlinks are removed too, so that no file outside the tree is read and
+/// embedded in the page. Only ever called on temporary copies.
+fn sanitize(dir: &Path) -> Result<()> {
+    for entry in std::fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        let name = entry.file_name();
+        let file_type = entry.file_type()?;
+        if file_type.is_symlink() {
+            std::fs::remove_file(&path)?;
+        } else if file_type.is_dir() {
+            if name == ".cargo" {
+                for config in ["config", "config.toml"] {
+                    let config = path.join(config);
+                    if config.exists() {
+                        std::fs::remove_file(&config)?;
+                    }
+                }
+            }
+            sanitize(&path)?;
+        } else if matches!(
+            name.to_str(),
+            Some("rust-toolchain" | "rust-toolchain.toml")
+        ) {
+            std::fs::remove_file(&path)?;
+        }
+    }
+    Ok(())
+}
+
+/// Copies a source tree, skipping build output and version control data.
+fn copy_tree(from: &Path, to: &Path) -> Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        let path = entry.path();
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            if matches!(name.to_str(), Some("target" | ".git" | "node_modules")) {
+                continue;
+            }
+            copy_tree(&path, &to.join(&name))?;
+        } else if file_type.is_file() {
+            std::fs::copy(&path, to.join(&name))
+                .with_context(|| format!("copying {}", path.display()))?;
+        }
     }
     Ok(())
 }
@@ -289,6 +351,7 @@ pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
         crates.push(CrateSrc {
             name: lib_name.replace('-', "_"),
             root_file,
+            manifest_dir: dir.to_path_buf(),
         });
     }
     crates

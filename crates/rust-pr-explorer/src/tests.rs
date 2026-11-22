@@ -1,7 +1,8 @@
 //! End-to-end tests of the analysis on the demo fixture and small inline crates.
 
-use crate::analyze::{Analyzer, Kind};
-use crate::merge::{self, Output, Status};
+use crate::analyze::Analyzer;
+use crate::merge;
+use model::{Kind, Meta, Output, Status};
 use std::path::Path;
 
 fn analyze_dirs(base: &Path, head: &Path) -> Output {
@@ -10,20 +11,25 @@ fn analyze_dirs(base: &Path, head: &Path) -> Output {
     merge::merge(
         base_an,
         head_an,
-        merge::Meta {
+        Meta {
             title: String::new(),
             base: String::new(),
             head: String::new(),
             url: None,
+            resolution: String::new(),
         },
     )
 }
 
+fn fixture(side: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../fixtures/demo")
+        .join(side)
+}
+
 fn demo() -> Output {
-    analyze_dirs(
-        Path::new("fixtures/demo/base"),
-        Path::new("fixtures/demo/head"),
-    )
+    // Syntax only; see `semantic_calls` for the rust-analyzer step.
+    analyze_dirs(&fixture("base"), &fixture("head"))
 }
 
 /// Writes a one-crate tree with the given files into a temp dir.
@@ -83,14 +89,14 @@ fn moved_items_are_detected() {
 #[test]
 fn calls_and_uses() {
     let out = demo();
-    let calc = &out.items["tinycalc::calc"].data;
+    let calc = &out.items["tinycalc::calc"].info;
     let callees: Vec<_> = calc.calls.iter().map(|c| c.to.as_str()).collect();
     assert_eq!(
         callees,
         ["tinycalc::eval::evaluate", "tinycalc::parser::parse"]
     );
     // `env.get(..)` resolves through the parameter type `&Env`.
-    let lookup = &out.items["tinycalc::eval::lookup"].data;
+    let lookup = &out.items["tinycalc::eval::lookup"].info;
     assert!(
         lookup
             .calls
@@ -98,7 +104,7 @@ fn calls_and_uses() {
             .any(|c| c.to == "tinycalc::env::Env::get" && !c.inferred)
     );
     // `self.tokens.get(..)` must not be mistaken for `Env::get`.
-    let peek = &out.items["tinycalc::parser::Parser::peek"].data;
+    let peek = &out.items["tinycalc::parser::Parser::peek"].info;
     assert!(peek.calls.is_empty());
     let uses: Vec<_> = calc.uses.iter().map(|u| u.to.as_str()).collect();
     assert!(uses.contains(&"tinycalc::env::Env"));
@@ -107,7 +113,7 @@ fn calls_and_uses() {
 #[test]
 fn visibility_and_public_api() {
     let out = demo();
-    let item = |id: &str| &out.items[id].data;
+    let item = |id: &str| &out.items[id].info;
     let tokenize = item("tinycalc::parser::lexer::tokenize");
     assert_eq!(tokenize.vis_label, "pub(super)");
     assert_eq!(tokenize.vis_scope.as_deref(), Some("tinycalc::parser"));
@@ -130,7 +136,7 @@ fn visibility_and_public_api() {
 #[test]
 fn signatures_use_short_names_with_full_paths_on_hover() {
     let out = demo();
-    let evaluate = &out.items["tinycalc::eval::evaluate"].data;
+    let evaluate = &out.items["tinycalc::eval::evaluate"].info;
     assert_eq!(
         evaluate.sig,
         "pub fn evaluate(expr: &Expr, env: &Env) -> Result<f64, Error>"
@@ -145,15 +151,15 @@ fn signatures_use_short_names_with_full_paths_on_hover() {
 #[test]
 fn trait_impls_and_intra_doc_links() {
     let out = demo();
-    let fmt = &out.items["tinycalc::ast::Expr::<impl Display>::fmt"].data;
+    let fmt = &out.items["tinycalc::ast::Expr::<impl Display>::fmt"].info;
     assert_eq!(fmt.kind, Kind::Method);
     assert_eq!(fmt.impl_header.as_deref(), Some("impl Display for Expr"));
-    let expr = &out.items["tinycalc::ast::Expr"].data;
+    let expr = &out.items["tinycalc::ast::Expr"].info;
     assert!(
         expr.children
             .contains(&"tinycalc::ast::Expr::<impl Display>".to_string())
     );
-    let env = &out.items["tinycalc::env::Env"].data;
+    let env = &out.items["tinycalc::env::Env"].info;
     assert_eq!(
         env.doc_refs["crate::evaluate"].id.as_deref(),
         Some("tinycalc::eval::evaluate")
@@ -175,7 +181,7 @@ fn renamed_import_resolves_and_changing_target_is_a_change() {
     // Same text, but `Y` now names a different type.
     assert_eq!(f.status, Status::Changed);
     assert!(f.changes.signature);
-    assert_eq!(f.data.sig_refs["Y"].id.as_deref(), Some("t::b::X"));
+    assert_eq!(f.info.sig_refs["Y"].id.as_deref(), Some("t::b::X"));
 }
 
 #[test]
@@ -192,13 +198,81 @@ fn glob_imports_super_and_nested_files() {
         ),
     ]);
     let out = analyze_dirs(dir.path(), dir.path());
-    let g = &out.items["t::outer::g"].data;
+    let g = &out.items["t::outer::g"].info;
     assert_eq!(
         g.sig_refs["Thing"].id.as_deref(),
         Some("t::outer::inner::Thing")
     );
     assert!(g.calls.iter().any(|c| c.to == "t::outer::inner::make"));
-    let make = &out.items["t::outer::inner::make"].data;
+    let make = &out.items["t::outer::inner::make"].info;
     assert!(make.uses.iter().any(|u| u.to == "t::Root"));
     assert!(out.items.values().all(|i| i.status == Status::Unchanged));
+}
+
+/// rust-analyzer resolves calls whose receiver type the syntactic pass
+/// cannot know, and replaces guesses.
+#[cfg(feature = "semantic")]
+#[test]
+fn semantic_calls() {
+    let checkout = crate::source::Checkout::from_dirs(&fixture("base"), &fixture("head")).unwrap();
+    let root = &checkout.head_dir;
+    let mut analysis = Analyzer::run(root, &crate::source::find_crates(root));
+    let calls = |a: &crate::analyze::Analysis, id: &str| -> Vec<(String, bool)> {
+        a.items[id]
+            .info
+            .calls
+            .iter()
+            .map(|c| (c.to.clone(), c.inferred))
+            .collect()
+    };
+    // `Parser::new(input)?.parse_expr()`: the receiver is an expression.
+    assert_eq!(
+        calls(&analysis, "tinycalc::parser::parse"),
+        [
+            ("tinycalc::parser::Parser::new".to_string(), false),
+            ("tinycalc::parser::Parser::parse_expr".to_string(), true),
+        ]
+    );
+    let stats = crate::semantic::refine(root, std::slice::from_ref(root), &mut analysis).unwrap();
+    assert!(stats.functions > 10, "{stats:?}");
+    assert_eq!(
+        calls(&analysis, "tinycalc::parser::parse"),
+        [
+            ("tinycalc::parser::Parser::new".to_string(), false),
+            ("tinycalc::parser::Parser::parse_expr".to_string(), false),
+        ]
+    );
+    // `op.precedence()` on a local whose type comes from a pattern.
+    assert!(
+        calls(&analysis, "tinycalc::parser::Parser::parse_binary")
+            .contains(&("tinycalc::ast::Op::precedence".to_string(), false))
+    );
+    let parse = &analysis.items["tinycalc::parser::parse"].info;
+    assert!(!parse.body_refs[".parse_expr"].inferred);
+}
+
+#[test]
+fn checkouts_drop_tool_configuration_and_symlinks() {
+    let dir = write_crate(&[
+        ("src/lib.rs", "pub fn f() {}\n"),
+        (".cargo/config.toml", "[build]\nrustc = \"./not-rustc\"\n"),
+        ("sub/.cargo/config", "[build]\nrustc-wrapper = \"./wrap\"\n"),
+        (
+            "rust-toolchain.toml",
+            "[toolchain]\npath = \"./toolchain\"\n",
+        ),
+    ]);
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("/etc/hostname", dir.path().join("src/leak.rs")).unwrap();
+    let checkout = crate::source::Checkout::from_dirs(dir.path(), dir.path()).unwrap();
+    for side in [&checkout.base_dir, &checkout.head_dir] {
+        assert!(side.join("src/lib.rs").is_file());
+        assert!(!side.join(".cargo/config.toml").exists());
+        assert!(!side.join("sub/.cargo/config").exists());
+        assert!(!side.join("rust-toolchain.toml").exists());
+        assert!(!side.join("src/leak.rs").exists());
+    }
+    // The originals are untouched.
+    assert!(dir.path().join(".cargo/config.toml").is_file());
+    assert!(dir.path().join("rust-toolchain.toml").is_file());
 }

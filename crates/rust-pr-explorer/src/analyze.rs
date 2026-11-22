@@ -2,9 +2,9 @@
 //! rustdoc-style signatures and call/use edges.
 
 use crate::source::CrateSrc;
+use model::{Call, ItemInfo, Kind, Ref, Use, UseCtx};
 use proc_macro2::TokenStream;
 use quote::ToTokens;
-use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -12,115 +12,47 @@ use syn::spanned::Spanned;
 use syn::visit_mut::{self, VisitMut};
 use syn::{Attribute, Expr, Item, Visibility, parse_quote};
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Hash, PartialOrd, Ord)]
-#[serde(rename_all = "snake_case")]
-pub enum Kind {
-    Mod,
-    Struct,
-    Enum,
-    Union,
-    Trait,
-    Fn,
-    Method,
-    TraitMethod,
-    Const,
-    Static,
-    TypeAlias,
-    Macro,
-    Impl,
-    AssocConst,
-    AssocType,
+/// A position in a source file: 1-based line, 0-based column in chars
+/// (the convention of `proc_macro2`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct LineCol {
+    pub line: usize,
+    pub column: usize,
 }
 
-impl Kind {
-    fn is_type_like(self) -> bool {
-        matches!(
-            self,
-            Kind::Struct | Kind::Enum | Kind::Union | Kind::Trait | Kind::TypeAlias
-        )
-    }
-
-    pub fn is_callable(self) -> bool {
-        matches!(self, Kind::Fn | Kind::Method | Kind::TraitMethod)
+impl From<proc_macro2::LineColumn> for LineCol {
+    fn from(lc: proc_macro2::LineColumn) -> Self {
+        LineCol {
+            line: lc.line,
+            column: lc.column,
+        }
     }
 }
 
-/// What a name refers to.
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Ref {
-    /// Item id if the name refers to an item of an analyzed crate.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub id: Option<String>,
-    /// Fully qualified path.
-    pub path: String,
-    /// Set when the target was guessed (method calls without type info).
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub inferred: bool,
-}
-
-/// How an item uses another one.
-#[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-#[serde(rename_all = "snake_case")]
-pub enum UseCtx {
-    Signature,
-    Field,
-    Impl,
-    Body,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Call {
-    pub to: String,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    pub inferred: bool,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Use {
-    pub to: String,
-    pub ctx: UseCtx,
+/// A method call whose target was guessed from the method name.
+#[derive(Clone, Debug)]
+#[cfg_attr(not(feature = "semantic"), allow(dead_code))]
+pub struct GuessedCall {
+    pub method: String,
+    pub target: String,
+    pub site: LineCol,
 }
 
 /// One item of one side (base or head) of the pull request.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug)]
 pub struct ItemData {
-    pub id: String,
-    pub kind: Kind,
-    pub name: String,
-    /// Id of the module the item is defined in (for a module: its parent).
-    pub module: String,
-    /// `None` means `pub`; otherwise the module the item is visible in.
-    pub vis_scope: Option<String>,
-    pub vis_label: String,
-    /// The item whose visibility additionally restricts this one (the
-    /// module for free items, the type for methods).
-    pub vis_parent: Option<String>,
-    /// Reachable from outside the crate.
-    pub public: bool,
-    pub sig: String,
-    /// Signature with private fields hidden, if different from `sig`.
-    pub sig_public: Option<String>,
-    pub docs: String,
-    pub sig_refs: BTreeMap<String, Ref>,
-    pub body_refs: BTreeMap<String, Ref>,
-    pub doc_refs: BTreeMap<String, Ref>,
-    /// Owning type or impl for associated items.
-    pub parent: Option<String>,
-    /// `impl` header for associated items, e.g. `impl Display for Parser`.
-    pub impl_header: Option<String>,
-    pub trait_ref: Option<Ref>,
-    pub self_ty: Option<String>,
-    pub children: Vec<String>,
-    pub file: String,
-    pub line: usize,
-    pub calls: BTreeSet<Call>,
-    pub uses: BTreeSet<Use>,
-    #[serde(skip)]
+    pub info: ItemInfo,
+    /// Signature text plus the targets of all names in it.
     pub sig_norm: String,
-    #[serde(skip)]
+    /// Canonical body text plus the targets of all names in it.
     pub body_norm: String,
-    #[serde(skip)]
+    /// The item's source text.
     pub source: String,
+    /// Where the item's name is, for functions and methods.
+    #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
+    pub name_pos: Option<LineCol>,
+    #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
+    pub guessed_calls: Vec<GuessedCall>,
 }
 
 pub struct Analysis {
@@ -1085,18 +1017,18 @@ impl Analyzer {
         let mut memo: HashMap<String, bool> = HashMap::new();
         for id in &ids {
             let public = reachable(id, &items, &mut memo);
-            items.get_mut(id).unwrap().public = public;
+            items.get_mut(id).unwrap().info.public = public;
         }
         for (module, target) in reexports {
-            if items.get(&module).is_some_and(|m| m.public)
+            if items.get(&module).is_some_and(|m| m.info.public)
                 && let Some(item) = items.get_mut(&target)
             {
-                item.public = true;
-                for child in item.children.clone() {
+                item.info.public = true;
+                for child in item.info.children.clone() {
                     if let Some(c) = items.get_mut(&child)
-                        && c.vis_scope.is_none()
+                        && c.info.vis_scope.is_none()
                     {
-                        c.public = true;
+                        c.info.public = true;
                     }
                 }
             }
@@ -1567,10 +1499,10 @@ impl Analyzer {
                 });
             }
         }
-        for target in &body_col.inferred_calls {
-            if *target != p.id && !calls.iter().any(|c| c.to == *target) {
+        for g in &body_col.guessed {
+            if g.target != p.id && !calls.iter().any(|c| c.to == g.target) {
                 calls.insert(Call {
-                    to: target.clone(),
+                    to: g.target.clone(),
                     inferred: true,
                 });
             }
@@ -1592,7 +1524,13 @@ impl Analyzer {
         let mut children = self.children.get(&p.id).cloned().unwrap_or_default();
         children.dedup();
 
-        Some(ItemData {
+        let name_pos = match &p.node {
+            Node::Item(Item::Fn(f)) => Some(f.sig.ident.span().start().into()),
+            Node::ImplFn(f) => Some(f.sig.ident.span().start().into()),
+            Node::TraitFn(f) => Some(f.sig.ident.span().start().into()),
+            _ => None,
+        };
+        let info = ItemInfo {
             id: p.id.clone(),
             kind,
             name: p.name.clone(),
@@ -1616,9 +1554,14 @@ impl Analyzer {
             line,
             calls,
             uses,
+        };
+        Some(ItemData {
+            info,
             sig_norm,
             body_norm,
             source,
+            name_pos,
+            guessed_calls: body_col.guessed,
         })
     }
 }
@@ -1635,8 +1578,8 @@ fn reachable(
     let r = match items.get(id) {
         None => true,
         Some(item) => {
-            item.vis_scope.is_none()
-                && match &item.vis_parent {
+            item.info.vis_scope.is_none()
+                && match &item.info.vis_parent {
                     None => true,
                     Some(parent) => reachable(parent, items, memo),
                 }
@@ -1655,7 +1598,7 @@ struct Collector<'a> {
     normalize: bool,
     refs: BTreeMap<String, Ref>,
     targets: BTreeSet<String>,
-    inferred_calls: BTreeSet<String>,
+    guessed: Vec<GuessedCall>,
     /// Local variables with a known local type (from function parameters).
     locals: HashMap<String, String>,
 }
@@ -1669,7 +1612,7 @@ impl<'a> Collector<'a> {
             normalize,
             refs: BTreeMap::new(),
             targets: BTreeSet::new(),
-            inferred_calls: BTreeSet::new(),
+            guessed: Vec::new(),
             locals: HashMap::new(),
         }
     }
@@ -1799,7 +1742,11 @@ impl VisitMut for Collector<'_> {
         {
             let id = r.id.clone().unwrap();
             if r.inferred {
-                self.inferred_calls.insert(id);
+                self.guessed.push(GuessedCall {
+                    method: name.clone(),
+                    target: id,
+                    site: call.method.span().start().into(),
+                });
             } else {
                 self.targets.insert(id);
             }
