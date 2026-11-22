@@ -77,9 +77,14 @@ Every item shows what rustdoc would show: its definition or signature (private f
 - **Viewing from** sets the module the canvas is looking from. Only items that are visible from that module, under Rust's privacy rules, are shown. Hidden callers and callees are summarized ("2 callers are private to `mod lexer`") with a link to drill into that module.
 - **Arrange by module** lays the cards out inside nested module frames, with each module's private items in a dashed zone.
 
-### 3D view
+### Structure view
 
-Each module is a plane. Outer modules sit on top and nested modules below. Filled dots are items the module exposes, hollow dots are private items. Calls between planes cross module boundaries. *Side view* shows the layers from the side, *From above* together with *focus* shows one plane's internal graph. Drag to rotate and click a node to open it on the canvas.
+How the change spreads over the modules, in three modes:
+- **Module map** (default): the module tree as boxes, a parent above its children. Each box lists its changed items, exposed ones first and private ones below a dashed line; private modules have a dashed border. One arrow per pair of modules whose items call each other, labeled with the number of calls; hovering a module highlights its arrows. With many arrows they stay faint until hovered. Long lists are cut after 8 items, with a link to the module page.
+- **Matrix**: modules against modules; each cell counts the calls from the row's module into the column's that involve a change. Hovering a cell lists the calls, clicking it opens them on the canvas.
+- **3D planes**: each module is a plane, nested modules below their parents. It can be rotated, tilted, viewed from above, and focused on one module.
+
+"uses" adds type uses to the calls, "all items" includes unchanged items.
 
 ## How it works
 

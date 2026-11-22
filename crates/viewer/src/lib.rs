@@ -8,6 +8,7 @@ mod canvas;
 mod code;
 mod data;
 mod dom;
+mod map;
 mod pages;
 mod settings;
 mod space;
@@ -330,7 +331,8 @@ fn install_listeners() {
     dom::listen(&dom::window().into(), "resize", |_| {
         with_app(|app| match app.s.view {
             View::Canvas => canvas::draw_edges(app),
-            View::Space => space::draw(app),
+            View::Space if app.s.space.mode == space::Mode::Planes => space::draw(app),
+            View::Space => map::draw_map_edges(app),
             _ => {}
         });
     });
@@ -442,6 +444,9 @@ fn highlight_diff_group(el: &Element) {
 
 fn on_mouse_over(app: &mut App, el: &Element) {
     highlight_diff_group(el);
+    if app.s.view == View::Space && app.s.space.mode == space::Mode::Map {
+        map::hover(el);
+    }
     for c in dom::query_all(".card.hover-target") {
         if app.s.canvas.drag.is_none() {
             dom::toggle_class(&c, "hover-target", false);

@@ -57,13 +57,25 @@ struct Model {
     edges: Vec<Edge>,
 }
 
+/// How the module structure is shown.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Flat module tree with arrows between modules.
+    Map,
+    /// Module-by-module call counts.
+    Matrix,
+    /// Modules as planes in 3D.
+    Planes,
+}
+
 pub struct Space {
+    pub mode: Mode,
     cam: Camera,
     model: Model,
     hover: Option<usize>,
     focus: Option<String>,
-    show_unchanged: bool,
-    show_uses: bool,
+    pub show_unchanged: bool,
+    pub show_uses: bool,
     /// Screen positions and radii of the nodes from the last frame.
     projected: Vec<(usize, f64, f64, f64)>,
     /// Zoom that fits the whole model.
@@ -74,6 +86,7 @@ pub struct Space {
 impl Space {
     pub fn new() -> Space {
         Space {
+            mode: Mode::Map,
             cam: Camera {
                 cx: 0.0,
                 cy: 0.0,
@@ -568,17 +581,46 @@ fn render_bar(app: &App) {
             )
         })
         .collect();
+    let mode_button = |m: Mode, value: &str, label: &str| {
+        format!(
+            r#"<button data-space-mode="{value}" class="{}">{label}</button>"#,
+            if sp.mode == m { "on" } else { "" }
+        )
+    };
+    let modes = format!(
+        r#"<span class="seg">{}{}{}</span>"#,
+        mode_button(Mode::Map, "map", "Module map"),
+        mode_button(Mode::Matrix, "matrix", "Matrix"),
+        mode_button(Mode::Planes, "planes", "3D planes"),
+    );
+    let toggles = format!(
+        r#"<label><input type="checkbox" id="space-uses" {}> uses</label>
+        <label><input type="checkbox" id="space-unchanged" {}> all items</label>"#,
+        if sp.show_uses { "checked" } else { "" },
+        if sp.show_unchanged { "checked" } else { "" },
+    );
+    if sp.mode != Mode::Planes {
+        let hint = if sp.mode == Mode::Map {
+            "hover a module to highlight its calls · click an item to open it"
+        } else {
+            "click a cell to open its calls"
+        };
+        dom::set_html(
+            "space-bar",
+            &format!(
+                r#"{modes}{toggles}<span style="flex:1"></span><span class="dim">{hint}</span>"#
+            ),
+        );
+        return;
+    }
     dom::set_html(
         "space-bar",
         &format!(
-            r#"<b>Module planes</b>
+            r#"{modes}
             <button data-preset="side">Side view</button><button data-preset="tilt">Tilted</button><button data-preset="top">From above</button>
             <label>focus <select id="space-focus"><option value="">all planes</option>{options}</select></label>
-            <label><input type="checkbox" id="space-uses" {}> uses</label>
-            <label><input type="checkbox" id="space-unchanged" {}> all items</label>
+            {toggles}
             <span style="flex:1"></span><span class="dim">drag to rotate · wheel to zoom · click a node to open it</span>"#,
-            if sp.show_uses { "checked" } else { "" },
-            if sp.show_unchanged { "checked" } else { "" },
         ),
     );
     dom::set_html(
@@ -588,6 +630,27 @@ fn render_bar(app: &App) {
 }
 
 pub fn show(app: &mut App) {
+    let planes = app.s.space.mode == Mode::Planes;
+    for (id, on) in [
+        ("space", planes),
+        ("space-legend", planes),
+        ("space-alt", !planes),
+    ] {
+        if let Some(el) = dom::by_id(id) {
+            dom::toggle_class(&el, "hidden", !on);
+        }
+    }
+    match app.s.space.mode {
+        Mode::Map => {
+            render_bar(app);
+            return crate::map::render_map(app);
+        }
+        Mode::Matrix => {
+            render_bar(app);
+            return crate::map::render_matrix(app);
+        }
+        Mode::Planes => {}
+    }
     let model = build(&app.d, &app.s.space);
     app.s.space.model = model;
     render_bar(app);
@@ -669,6 +732,18 @@ fn camera_for(sp: &Space, yaw: f64, pitch: f64) -> Camera {
 }
 
 pub fn on_click(app: &mut App, el: &Element) -> bool {
+    if let Some(b) = dom::closest(el, "[data-space-mode]") {
+        app.s.space.mode = match dom::data(&b, "space-mode").as_deref() {
+            Some("matrix") => Mode::Matrix,
+            Some("planes") => Mode::Planes,
+            _ => Mode::Map,
+        };
+        show(app);
+        return true;
+    }
+    if crate::map::on_click(app, el) {
+        return true;
+    }
     let Some(b) = dom::closest(el, "[data-preset]") else {
         return false;
     };
