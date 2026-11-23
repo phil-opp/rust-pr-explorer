@@ -22,6 +22,8 @@ pub struct Data {
     ext: HashMap<String, Item>,
     /// Modules by each of their public paths.
     mod_by_path: HashMap<String, String>,
+    /// Where the PR's review threads are shown.
+    pub placement: crate::threads::Placement,
 }
 
 /// `m` is `s` or nested inside it.
@@ -81,6 +83,7 @@ impl Data {
             touched: HashMap::new(),
             ext,
             mod_by_path: HashMap::new(),
+            placement: Default::default(),
         };
         for it in d.out.items.values() {
             if it.info.kind == Kind::Mod {
@@ -95,6 +98,7 @@ impl Data {
             d.compute_touched(id, &mut memo);
         }
         d.touched = memo;
+        d.placement = crate::threads::place(&d);
         d
     }
 
@@ -1018,8 +1022,24 @@ impl Data {
                 .unwrap_or_else(|| code_html(self, old[o], old_links(o)))
         };
         let nonempty = |s: String| if s.is_empty() { " ".to_string() } else { s };
-        // One row of the diff.
-        let row_html = |r: usize| -> String {
+        // The PR's review threads under the rows of their lines.
+        let threads = self.item_threads(&it.info.id);
+        let threads_at = |r: usize| -> Vec<&model::ReviewThread> {
+            let (o, n) = rows[r];
+            threads
+                .iter()
+                .copied()
+                .filter(|t| {
+                    let at = if t.left {
+                        o.map(|a| old_start + a)
+                    } else {
+                        n.map(|b| new_start + b)
+                    };
+                    at.is_some() && t.line == at
+                })
+                .collect()
+        };
+        let row_line_html = |r: usize| -> String {
             let (o, n) = rows[r];
             if split {
                 let same = !changed_row(&(o, n));
@@ -1070,13 +1090,14 @@ impl Data {
                 };
                 let mv = tag != ' ' && moved(tag, idx).is_some();
                 format!(
-                    r#"<span class="ln {class}{}" data-t="{}" data-no="{no}">{}{}</span>"#,
+                    r#"<span class="ln {class}{}" data-t="{}" data-no="{no}">{}{}{}</span>"#,
                     if mv { " mv" } else { "" },
                     if tag == ' ' {
                         String::new()
                     } else {
                         tag.to_string()
                     },
+                    crate::code::gutter(o.map(|a| old_start + a), n.map(|b| new_start + b), tag),
                     if mv {
                         moved_note(tag, idx)
                     } else {
@@ -1086,6 +1107,11 @@ impl Data {
                 )
             }
         };
+        // One row of the diff, with the threads on its line.
+        let row_html = |r: usize| -> String {
+            let list = threads_at(r);
+            row_line_html(r) + &crate::threads::row_html(self, &list, split)
+        };
         // Unchanged lines more than `CONTEXT` rows away from a change are
         // folded: a button in their place shows them. Runs of fewer than
         // `MIN_FOLD` lines are shown, since the button takes a line too.
@@ -1093,10 +1119,10 @@ impl Data {
         const MIN_FOLD: usize = 2;
         let mut gaps: Vec<std::ops::Range<usize>> = Vec::new();
         if rows.iter().any(changed_row) {
+            // Lines with a review thread stay shown, like changed ones.
             let near = |i: usize| {
-                rows[i.saturating_sub(CONTEXT)..(i + CONTEXT + 1).min(rows.len())]
-                    .iter()
-                    .any(changed_row)
+                (i.saturating_sub(CONTEXT)..(i + CONTEXT + 1).min(rows.len()))
+                    .any(|r| changed_row(&rows[r]) || !threads_at(r).is_empty())
             };
             let mut i = 0;
             while i < rows.len() {
@@ -1158,7 +1184,10 @@ impl Data {
             if split {
                 format!(r#"<div class="sbs">{body}</div>"#)
             } else {
-                format!("<pre>{body}</pre>")
+                format!(
+                    "<pre {}>{body}</pre>",
+                    crate::code::gutter_style((old_start + old.len()).max(new_start + new.len()))
+                )
             },
             if folded > 1 {
                 format!(
@@ -1171,13 +1200,14 @@ impl Data {
         );
         // A small change to the body or definition starts open, the rest
         // behind the summary. So does a small new item, except an impl,
-        // whose members follow it with their own source.
+        // whose members follow it with their own source, and one with an
+        // open review thread.
         let small = match it.status {
             Status::Changed => it.changes.body && (1..=SMALL_BODY).contains(&(added + removed)),
             Status::Added => it.info.kind != Kind::Impl && it.source.len() <= SMALL_BODY,
             _ => false,
         };
-        let open = open.unwrap_or(small);
+        let open = open.unwrap_or(small || threads.iter().any(|t| !t.resolved));
         // Changed lines that were moved, on either side.
         let moved_count = rows
             .iter()
@@ -1202,7 +1232,12 @@ impl Data {
                 (false, false) => "",
             }
         );
-        let where_ = format!("{}:{}", esc(&it.info.file), it.info.line);
+        let where_ = format!(
+            "{}:{}{}",
+            esc(&it.info.file),
+            it.info.line,
+            crate::threads::summary_note(&threads)
+        );
         let (class, summary) = match it.status {
             Status::Changed if it.changes.body => {
                 let what = if it.info.kind.is_callable() {

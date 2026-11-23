@@ -15,6 +15,8 @@ pub struct Settings {
     pub ignore_ws: bool,
     /// Show lines that were only rewrapped (as rustfmt does) as unchanged.
     pub reformat: bool,
+    /// Old and new line numbers in front of diff lines.
+    pub line_numbers: bool,
     /// Code font family.
     pub font: String,
     /// Code font size in pixels.
@@ -27,6 +29,7 @@ impl Default for Settings {
             split: false,
             ignore_ws: false,
             reformat: true,
+            line_numbers: true,
             font: DEFAULT_FONT.into(),
             size: 13,
         }
@@ -63,10 +66,11 @@ pub(crate) fn set(new: Settings) {
 impl Settings {
     fn encode(&self) -> String {
         format!(
-            "split={};ws={};rf={};size={};font={}",
+            "split={};ws={};rf={};ln={};size={};font={}",
             u8::from(self.split),
             u8::from(self.ignore_ws),
             u8::from(self.reformat),
+            u8::from(self.line_numbers),
             self.size,
             self.font
         )
@@ -79,6 +83,7 @@ impl Settings {
                 Some(("split", v)) => out.split = v == "1",
                 Some(("ws", v)) => out.ignore_ws = v == "1",
                 Some(("rf", v)) => out.reformat = v == "1",
+                Some(("ln", v)) => out.line_numbers = v == "1",
                 Some(("size", v)) => {
                     if let Some(n) = v.parse().ok().filter(|n| SIZES.contains(n)) {
                         out.size = n;
@@ -136,6 +141,7 @@ fn apply() {
             &format!("\"{}\", var(--mono)", clean_font(&s.font)),
         );
         dom::set_style(&root, "--code-size", &format!("{}px", s.size));
+        dom::toggle_class(&root, "no-lno", !s.line_numbers);
     }
 }
 
@@ -170,6 +176,7 @@ pub fn panel_html() -> String {
         <label><input type="radio" name="set-layout" value="split" {}> Side by side</label>
         <label><input type="checkbox" id="set-ws" {}> Hide whitespace changes</label>
         <label title="Lines that only got wrapped differently, as by rustfmt"><input type="checkbox" id="set-rf" {}> Hide reformatting</label>
+        <label><input type="checkbox" id="set-ln" {}> Line numbers</label>
         <div class="set-h">Code</div>
         <label>Font <select id="set-font">{fonts}</select></label>
         <label class="{}">Font name <input id="set-font-custom" type="text" value="{}" placeholder="installed font"></label>
@@ -179,6 +186,7 @@ pub fn panel_html() -> String {
         if s.split { "checked" } else { "" },
         if s.ignore_ws { "checked" } else { "" },
         if s.reformat { "checked" } else { "" },
+        if s.line_numbers { "checked" } else { "" },
         if custom { "" } else { "hidden" },
         if custom { esc(&s.font) } else { String::new() },
     )
@@ -207,6 +215,7 @@ pub fn on_change(el: &Element) -> bool {
     match el.id().as_str() {
         "set-ws" => s.ignore_ws = checked(),
         "set-rf" => s.reformat = checked(),
+        "set-ln" => s.line_numbers = checked(),
         "set-size" => {
             if let Ok(n) = value().parse() {
                 s.size = n;
@@ -244,8 +253,12 @@ pub fn on_change(el: &Element) -> bool {
     set(s);
     save();
     apply();
-    // Font changes need no new HTML, only new sizes of the cards.
-    layout_changed || el.id().starts_with("set-font") || el.id() == "set-size"
+    // Font and line number changes need no new HTML (a class on the root
+    // element shows or hides the numbers), only new sizes of the cards.
+    layout_changed
+        || el.id().starts_with("set-font")
+        || el.id() == "set-size"
+        || el.id() == "set-ln"
 }
 
 #[cfg(test)]
@@ -258,11 +271,14 @@ mod tests {
             split: true,
             ignore_ws: true,
             reformat: false,
+            line_numbers: false,
             font: "Fira Code".into(),
             size: 15,
         };
         assert_eq!(Settings::decode(&s.encode()), s);
         assert_eq!(Settings::decode("garbage"), Settings::default());
+        // Settings saved before line numbers existed keep them on.
+        assert!(Settings::decode("split=1;ws=0;size=14").line_numbers);
         assert_eq!(Settings::decode("size=99").size, 13);
         // A font name can't break out of the CSS string.
         assert_eq!(clean_font("a\"; } body { x"), "a  body  x");
