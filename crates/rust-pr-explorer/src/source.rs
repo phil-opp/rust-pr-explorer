@@ -1194,7 +1194,15 @@ mod tests {
             Command::new("git")
                 .arg("-C")
                 .arg(r)
-                .args(["merge", "-q", "main"])
+                .args([
+                    "-c",
+                    "user.name=t",
+                    "-c",
+                    "user.email=t@t",
+                    "merge",
+                    "-q",
+                    "main"
+                ])
                 .output()
                 .unwrap()
                 .status
@@ -1222,7 +1230,15 @@ mod tests {
         Command::new("git")
             .arg("-C")
             .arg(r)
-            .args(["merge", "-q", "main"])
+            .args([
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+                "merge",
+                "-q",
+                "main",
+            ])
             .output()
             .unwrap();
         write("a.txt", "a, changed by all\n");
