@@ -2,7 +2,7 @@
 //! crates inside them.
 
 use anyhow::{Context, Result, bail};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -32,6 +32,12 @@ pub struct CrateSrc {
     pub deps: Vec<String>,
     /// Rust edition, which decides the prelude; `None` if unknown.
     pub edition: Option<u16>,
+    /// The package's `version` (Cargo's default is 0.0.0); `None` if it
+    /// can't be read.
+    pub version: Option<String>,
+    /// Whether the package may be published (no `publish = false` or
+    /// `publish = []`).
+    pub publish: bool,
 }
 
 /// Where the two trees of a checkout come from in a git repository.
@@ -858,23 +864,35 @@ fn sanitize(dir: &Path, trust: Trust) -> Result<()> {
     Ok(())
 }
 
-/// The `[workspace.package] edition` of the nearest workspace manifest
-/// above (or at) `dir`.
-fn workspace_edition(manifests: &[(PathBuf, toml::Table)], dir: &Path) -> Option<u16> {
+/// A key of the `[workspace.package]` table of the nearest workspace
+/// manifest above (or at) `dir`.
+fn workspace_package<'a>(
+    manifests: &'a [(PathBuf, toml::Table)],
+    dir: &Path,
+    key: &str,
+) -> Option<&'a toml::Value> {
     manifests
         .iter()
         .filter(|(path, t)| {
             t.contains_key("workspace") && path.parent().is_some_and(|p| dir.starts_with(p))
         })
         .max_by_key(|(path, _)| path.components().count())
-        .and_then(|(_, t)| {
-            t.get("workspace")?
-                .get("package")?
-                .get("edition")?
-                .as_str()?
-                .parse()
-                .ok()
-        })
+        .and_then(|(_, t)| t.get("workspace")?.get("package")?.get(key))
+}
+
+/// A `package` key, or the workspace's for `key.workspace = true`.
+fn package_value<'a>(
+    package: &'a toml::Table,
+    manifests: &'a [(PathBuf, toml::Table)],
+    dir: &Path,
+    key: &str,
+) -> Option<&'a toml::Value> {
+    match package.get(key)? {
+        toml::Value::Table(t) if t.get("workspace").and_then(|w| w.as_bool()) == Some(true) => {
+            workspace_package(manifests, dir, key)
+        }
+        v => Some(v),
+    }
 }
 
 /// Copies a source tree, skipping build output and version control data.
@@ -961,13 +979,21 @@ pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
                 }
             }
         }
-        let edition = match package.get("edition") {
+        let edition = match package_value(package, &manifests_text, dir, "edition") {
             Some(toml::Value::String(e)) => e.parse().ok(),
-            // `edition.workspace = true`: inherited from the workspace.
-            Some(toml::Value::Table(_)) => workspace_edition(&manifests_text, dir),
             // Cargo's default.
-            None => Some(2015),
-            Some(_) => None,
+            None if !package.contains_key("edition") => Some(2015),
+            _ => None,
+        };
+        let version = match package_value(package, &manifests_text, dir, "version") {
+            Some(toml::Value::String(v)) => Some(v.clone()),
+            None if !package.contains_key("version") => Some("0.0.0".to_string()),
+            _ => None,
+        };
+        let publish = match package_value(package, &manifests_text, dir, "publish") {
+            Some(toml::Value::Boolean(b)) => *b,
+            Some(toml::Value::Array(registries)) => !registries.is_empty(),
+            _ => true,
         };
         let lib_name = lib_name.replace('-', "_");
         if has_lib {
@@ -977,6 +1003,8 @@ pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
                 manifest_dir: dir.to_path_buf(),
                 deps: deps.clone(),
                 edition,
+                version: version.clone(),
+                publish,
             });
             // The other targets use the library by its name.
             deps.push(lib_name.clone());
@@ -998,10 +1026,32 @@ pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
                 manifest_dir: dir.to_path_buf(),
                 deps: deps.clone(),
                 edition,
+                version: version.clone(),
+                publish,
             });
         }
     }
     crates
+}
+
+/// The library crates' versions in both trees, by crate name.
+pub fn crate_versions(base: &Path, head: &Path) -> BTreeMap<String, model::CrateVersion> {
+    let libs = |root: &Path| -> Vec<CrateSrc> {
+        find_crates(root)
+            .into_iter()
+            .filter(|c| !c.name.contains(':'))
+            .collect()
+    };
+    let mut versions: BTreeMap<String, model::CrateVersion> = BTreeMap::new();
+    for c in libs(base) {
+        versions.entry(c.name).or_default().base = c.version;
+    }
+    for c in libs(head) {
+        let v = versions.entry(c.name).or_default();
+        v.head = c.version;
+        v.publish = c.publish;
+    }
+    versions
 }
 
 /// A package's targets other than the library: those declared in the

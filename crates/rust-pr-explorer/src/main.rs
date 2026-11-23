@@ -192,6 +192,7 @@ fn analyze_all(
         pr,
         project: checkout.project.clone(),
         commits: Vec::new(),
+        versions: Default::default(),
     };
     let since = match &checkout.since {
         Some(source::Since::Changes(s)) => {
@@ -239,7 +240,16 @@ fn compare(
     } else {
         format!("base: {base_note}; head: {head_note}")
     };
-    let mut output = merge::merge(base, head, model::Meta { resolution, ..meta });
+    let versions = source::crate_versions(base_dir, head_dir);
+    let mut output = merge::merge(
+        base,
+        head,
+        model::Meta {
+            resolution,
+            versions,
+            ..meta
+        },
+    );
     // Files the Rust analysis covers: one per module.
     let analyzed: std::collections::BTreeSet<&str> = output
         .items
