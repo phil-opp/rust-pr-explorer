@@ -207,10 +207,11 @@ impl Checkout {
         let head_rev = rev_parse(&git_dir, "refs/pr/head")?;
         // Title and branch names are only known to GitHub's API.
         let gh = gh_pr_view(&owner, &repo, number);
-        let threads = gh
-            .is_some()
-            .then(|| gh_review_threads(&owner, &repo, number))
-            .unwrap_or_default();
+        let threads = if gh.is_some() {
+            gh_review_threads(&owner, &repo, number)
+        } else {
+            Vec::new()
+        };
         let (base_rev, base_label, base_ref) = match base {
             Some(b) => {
                 let rev = rev_parse(&git_dir, b)

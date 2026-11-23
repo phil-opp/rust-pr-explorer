@@ -29,11 +29,14 @@ pub enum Where {
     File(String),
 }
 
+/// Lines of a file: (file, first line, last line).
+type Span<'a> = Option<(&'a str, usize, usize)>;
+
 /// The lines an item takes in the PR's version of its file and in the
-/// base's: (file, first line, last line).
-fn ranges(it: &Item) -> (Option<(&str, usize, usize)>, Option<(&str, usize, usize)>) {
+/// base's.
+fn ranges(it: &Item) -> (Span<'_>, Span<'_>) {
     let count = |tags: &[char]| it.source.iter().filter(|l| tags.contains(&l.0)).count();
-    fn span(file: &str, start: usize, n: usize) -> Option<(&str, usize, usize)> {
+    fn span(file: &str, start: usize, n: usize) -> Span<'_> {
         (n > 0).then(|| (file, start, start + n - 1))
     }
     let (old_start, new_start) = match it.status {
