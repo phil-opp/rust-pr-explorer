@@ -5,6 +5,7 @@
 //! on `data-*` attributes of the element that was clicked or dragged.
 
 mod bump;
+mod calls;
 mod canvas;
 mod code;
 mod commit_filter;
@@ -41,6 +42,7 @@ pub enum View {
     Overview,
     Module,
     Canvas,
+    Calls,
     Space,
 }
 
@@ -50,14 +52,21 @@ impl View {
             View::Overview => "overview",
             View::Module => "module",
             View::Canvas => "canvas",
+            View::Calls => "calls",
             View::Space => "space",
         }
     }
 
     fn from_name(name: &str) -> Option<View> {
-        [View::Overview, View::Module, View::Canvas, View::Space]
-            .into_iter()
-            .find(|v| v.name() == name)
+        [
+            View::Overview,
+            View::Module,
+            View::Canvas,
+            View::Calls,
+            View::Space,
+        ]
+        .into_iter()
+        .find(|v| v.name() == name)
     }
 }
 
@@ -72,6 +81,8 @@ pub struct State {
     /// The item last opened on the canvas from outside it, for the history
     /// entry (see [`nav`]).
     pub canvas_focus: Option<String>,
+    /// The call view.
+    pub calls: calls::Calls,
     pub space: space::Space,
     search: Vec<String>,
     search_sel: usize,
@@ -137,6 +148,7 @@ pub fn start() {
             side_all: false,
             canvas: canvas::Canvas::new(root),
             canvas_focus: None,
+            calls: calls::Calls::default(),
             space: space::Space::new(),
             search: Vec::new(),
             search_sel: 0,
@@ -186,6 +198,7 @@ pub fn set_view(app: &mut App, view: View) {
         View::Overview => pages::render_overview(app),
         View::Module => pages::render_module_page(app),
         View::Canvas => canvas::render(app),
+        View::Calls => calls::render(app),
         View::Space => space::show(app),
     }
     pages::render_sidebar(app);
@@ -514,6 +527,9 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         return;
     }
     if dom::closest(el, "#view-canvas").is_some() && canvas::on_click(app, el) {
+        return;
+    }
+    if dom::closest(el, "#view-calls").is_some() && calls::on_click(app, el) {
         return;
     }
     if dom::closest(el, "#view-space").is_some() && space::on_click(app, el) {
@@ -916,6 +932,10 @@ fn show_unit(app: &mut App, unit: &str, from: Option<&str>) {
         canvas::open_for_review(app, unit, from);
         return;
     }
+    if app.s.view == View::Calls {
+        calls::focus(app, unit);
+        return;
+    }
     let Some(module) = app.d.item(unit).map(|it| app.d.mod_of(it).to_string()) else {
         return;
     };
@@ -1175,6 +1195,8 @@ fn pick_search(app: &mut App, i: usize) {
     {
         app.s.module = id;
         set_view(app, View::Module);
+    } else if app.s.view == View::Calls {
+        calls::focus(app, &id);
     } else {
         canvas::open(app, &id, None, true);
     }

@@ -19,6 +19,8 @@ pub enum Route {
     Module(String),
     /// The canvas, focused on an item if it was opened from elsewhere.
     Canvas(Option<String>),
+    /// The call view, focused on an item.
+    Calls(Option<String>),
     Space,
 }
 
@@ -30,6 +32,8 @@ impl Route {
             Route::Module(m) => format!("#/module/{}", enc(m)),
             Route::Canvas(None) => "#/canvas".to_string(),
             Route::Canvas(Some(id)) => format!("#/canvas/{}", enc(id)),
+            Route::Calls(None) => "#/calls".to_string(),
+            Route::Calls(Some(id)) => format!("#/calls/{}", enc(id)),
             Route::Space => "#/structure".to_string(),
         }
     }
@@ -45,6 +49,7 @@ impl Route {
         match (head, arg) {
             ("module", Some(m)) => Route::Module(m),
             ("canvas", id) => Route::Canvas(id),
+            ("calls", id) => Route::Calls(id),
             ("structure", _) => Route::Space,
             _ => Route::Overview,
         }
@@ -71,6 +76,7 @@ fn route_of(app: &App) -> Route {
         View::Overview => Route::Overview,
         View::Module => Route::Module(app.s.module.clone()),
         View::Canvas => Route::Canvas(app.s.canvas_focus.clone()),
+        View::Calls => Route::Calls(app.s.calls.focus.clone()),
         View::Space => Route::Space,
     }
 }
@@ -113,6 +119,7 @@ fn show(app: &mut App, wanted: Route) {
         }
         Route::Module(_) => Route::Overview,
         Route::Canvas(Some(id)) if app.d.item(&id).is_none() => Route::Canvas(None),
+        Route::Calls(Some(id)) if app.d.item(&id).is_none() => Route::Calls(None),
         r => r,
     };
     CURRENT.with(|c| *c.borrow_mut() = route.clone());
@@ -128,6 +135,11 @@ fn show(app: &mut App, wanted: Route) {
         }
         Route::Canvas(Some(id)) => crate::canvas::open(app, &id, None, true),
         Route::Canvas(None) => crate::set_view(app, View::Canvas),
+        Route::Calls(Some(id)) => crate::calls::focus(app, &id),
+        Route::Calls(None) => {
+            app.s.calls = Default::default();
+            crate::set_view(app, View::Calls);
+        }
         Route::Space => crate::set_view(app, View::Space),
     }
 }
@@ -157,6 +169,11 @@ mod tests {
         assert_eq!(
             parse("#/canvas/demo%3A%3Aeval"),
             Route::Canvas(Some("demo::eval".into()))
+        );
+        assert_eq!(parse("#/calls"), Route::Calls(None));
+        assert_eq!(
+            parse("#/calls/demo%3A%3Aeval"),
+            Route::Calls(Some("demo::eval".into()))
         );
         assert_eq!(parse("#/structure"), Route::Space);
     }

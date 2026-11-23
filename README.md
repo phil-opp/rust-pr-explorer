@@ -194,6 +194,14 @@ The page holds a copy of the threads, so it can be read by everyone who can open
 - Cards of unchanged items (an unchanged callee, say) show only their signature. **docs & source ▾** expands one, **signature only ▴** folds it again.
 - **Arrange by module** lays the cards out inside nested module frames, with each module's private items in a dashed zone.
 
+### Calls
+
+The call graph one item at a time, made for phones, where the canvas needs a lot of panning and zooming. The focused item's card is in the middle, as on the canvas, with what calls it (**Called by**, and **Used by** for types and traits) above and what it calls (**Calls**) below. On a wide screen the three are side by side.
+- Tap a caller, a callee or any name in the card to focus that item. The trail at the top lists the items focused before; tap one to go back to it. Each focus is a browser history entry, so Back works too.
+- Each row shows the item's status, its module, and how many callers (↑) and callees (↓) it has in turn, so you can see where the graph goes on. Changed items come first; unchanged ones are dimmed.
+- Without a focus, the view lists the changed functions, those that no changed item calls first, as places to start.
+- Review buttons, Next ▸ and the review keys work as on the other views: after a verdict, the next unreviewed item is focused. While the view is open, **Find item** focuses the item it picks. **Open on canvas** places the focused item on the canvas.
+
 ### Structure view
 
 How the change spreads over the modules, in two modes:

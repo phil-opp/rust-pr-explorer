@@ -62,7 +62,7 @@ fn modal_open() -> bool {
 /// The open view, if it shows review controls.
 fn section(app: &App) -> Option<Element> {
     match app.s.view {
-        View::Overview | View::Module | View::Canvas => {
+        View::Overview | View::Module | View::Canvas | View::Calls => {
             dom::by_id(&format!("view-{}", app.s.view.name()))
         }
         View::Space => None,
