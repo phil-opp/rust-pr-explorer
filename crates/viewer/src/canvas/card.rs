@@ -123,7 +123,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
             true,
             d.source_seg(
                 it,
-                g.open_src.contains(id),
+                g.open_src.get(id).copied(),
                 true,
                 g.unfolded.get(id).unwrap_or(&BTreeSet::new()),
             ),
