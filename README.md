@@ -152,6 +152,16 @@ Review mode is on when the page opens, for going through a PR one item at a time
 - **Keyboard**, in review mode (unless typing in a field): `n` goes to the next unreviewed item; `a`, `r` and `c` approve, request changes on or comment on the current item (or the current hunk); `j` and `k` move to the item's next and previous hunk (`j` after the last one goes on to the next item); `Enter` follows the current item's first reference to a new or changed item that isn't reviewed yet (the ones its source diff tags), and shows that item; `?` (or the **?** button in the review bar) lists the shortcuts. The current item is the one that **Next ▸**, a verdict or a key last went to, as long as the open view shows it, else the first unreviewed one in view.
 - Nothing leaves the browser: marks are not shared between browsers or people.
 
+### Commit filter
+
+For a pull request or a `git` range, the **Commits** menu in the header shows only what one commit changed, like GitHub's view of a single commit. Every page then lists only the items and files that commit touched, and a note at the top names the commit, with **Show all commits** to go back.
+
+- Which items a commit touched is worked out with `git blame` when the page is built. An item's added lines are blamed in the PR's version (the commit that last wrote each line), and its removed lines in the base with `git blame --reverse` (the commit after the last one that still had the line). A commit counts an item if it wrote one of its added lines that is still there, or removed one of its base lines. A line that a later commit rewrote counts only for that later commit.
+- A file counts for every commit that modified it, whether or not that change survives.
+- Items keep their whole change from the PR's base to its head, not only the commit's part, since the page holds no other versions.
+- Some changed items have no changed line of their own, for example an item whose only change is a public path that a `pub use` elsewhere added. These are listed under **Changes no commit was found for**.
+- Merge commits are listed but not traced. Ranges with more than 250 commits get no filter (a warning says so), since each commit needs its own blame runs, which fetch old file versions on demand.
+
 ### Review threads
 
 For a pull request, the page also shows the PR's review threads on GitHub as they were when the page was built (fetched with `gh api graphql`, so the action's token or your own `gh` login), open and resolved:
