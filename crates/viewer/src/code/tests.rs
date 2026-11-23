@@ -798,6 +798,60 @@ fn small_new_items_start_open() {
 }
 
 #[test]
+fn reformatted_lines_are_shown_as_unchanged() {
+    use model::{Item, Reformatted, SourceLine, Status};
+    let d = empty();
+    let mut it = Item {
+        status: Status::Changed,
+        ..Default::default()
+    };
+    it.changes.body = true;
+    it.info.id = "c::f".into();
+    it.info.kind = model::Kind::Fn;
+    it.info.line = 1;
+    it.old_line = Some(1);
+    it.source = vec![
+        SourceLine(' ', "fn f() {".into()),
+        SourceLine('-', "    g(a, b);".into()),
+        SourceLine('+', "    g(".into()),
+        SourceLine('+', "        a,".into()),
+        SourceLine('+', "        b,".into()),
+        SourceLine('+', "    );".into()),
+        SourceLine('-', "    x + 1".into()),
+        SourceLine('+', "    x + 2".into()),
+        SourceLine(' ', "}".into()),
+    ];
+    it.reformatted = vec![Reformatted {
+        old: 1,
+        old_len: 1,
+        new: 1,
+        new_len: 4,
+    }];
+    let html = d.source_html(&it, Some(true), false);
+    // Only `x + 1` → `x + 2` counts; the call is shown in its new form.
+    assert!(
+        html.contains(">+1</span> <span class=\"d-del\">−1<"),
+        "{html}"
+    );
+    assert!(html.contains("(reformatting hidden)"), "{html}");
+    assert_eq!(html.matches(r#"class="ln rf""#).count(), 4, "{html}");
+    assert!(!html.contains("g(a, b)"), "{html}");
+    // The review sees one hunk only, with the real change.
+    assert!(crate::review::hunks(&it).is_empty());
+
+    crate::settings::set(crate::settings::Settings {
+        reformat: false,
+        ..Default::default()
+    });
+    let html = d.source_html(&it, Some(true), false);
+    crate::settings::set(Default::default());
+    assert!(
+        html.contains(">+5</span> <span class=\"d-del\">−2<"),
+        "{html}"
+    );
+}
+
+#[test]
 fn moved_lines_are_marked_with_where_they_went() {
     use model::{Item, MovedLines, SourceLine, Status};
     let d = empty();

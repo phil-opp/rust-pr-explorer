@@ -141,13 +141,34 @@ pub fn hunks(it: &Item) -> Vec<Hunk> {
     if it.status != Status::Changed {
         return Vec::new();
     }
-    let (mut o, mut n) = (it.old_line.unwrap_or(it.info.line), it.info.line);
+    let (o0, n0) = (it.old_line.unwrap_or(it.info.line), it.info.line);
+    let (mut o, mut n) = (o0, n0);
+    // Lines that were only reformatted are not changes to review, whether
+    // or not the source view hides them.
+    let rf = |side_old: bool, line: usize| {
+        it.reformatted.iter().any(|g| {
+            let (start, len, i) = if side_old {
+                (g.old, g.old_len, line - o0)
+            } else {
+                (g.new, g.new_len, line - n0)
+            };
+            (start as usize..(start + len) as usize).contains(&i)
+        })
+    };
     // Per hunk: its changed lines as text, and the hunk.
     let mut out: Vec<(String, Hunk)> = Vec::new();
     // Unchanged lines since the last change; a hunk starts after enough.
     let mut run = usize::MAX;
     for l in &it.source {
         let added = match l.0 {
+            '+' if rf(false, n) => {
+                n += 1;
+                continue;
+            }
+            '-' if rf(true, o) => {
+                o += 1;
+                continue;
+            }
             '+' => true,
             '-' => false,
             _ => {
@@ -255,8 +276,11 @@ pub fn hunk_controls(item: &str, old: &[usize], new: &[usize]) -> String {
             }
         })
         .map(|h| {
+            let all = hunks_of(item);
+            let k = all.iter().position(|o| o.id == h.id).map_or(0, |i| i + 1);
             format!(
-                r#"<span class="hunk-at">Change at line {}</span>{}"#,
+                r#"<span class="hunk-at">Change {k} of {} <span class="dim">· line {}</span></span>{}"#,
+                all.len(),
                 h.first_line(),
                 control_html(&h.id)
             )
@@ -828,6 +852,22 @@ fn snippet(text: &str) -> String {
     }
 }
 
+/// The verdict buttons of a unit, labelled by what they apply to: one
+/// change of an item (a hunk), the whole item when it has several, or
+/// just the unit.
+fn actions(id: &str) -> String {
+    if hunk_item(id).is_some() {
+        return r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve only this change">✓ Approve change</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change here">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on this change">✎ Comment</button>"#.to_string();
+    }
+    let n = hunks_of(id).len();
+    if n > 1 {
+        return format!(
+            r#"<span class="rv-scope" title="These buttons give the whole item one verdict. Each change also has its own buttons.">Whole item ({n} changes):</span><button class="rv-btn approve" data-rv-act="approve" title="Approve the whole item and go to the next one">✓ Approve item</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on the whole item">✎ Comment</button>"#
+        );
+    }
+    ACTIONS.to_string()
+}
+
 fn control_inner(id: &str, m: Mark) -> String {
     let n = note(id);
     let text = if n.text.trim().is_empty() {
@@ -840,7 +880,7 @@ fn control_inner(id: &str, m: Mark) -> String {
         )
     };
     match m {
-        Mark::Open => ACTIONS.to_string(),
+        Mark::Open => actions(id),
         Mark::Done => {
             let (class, label, what) = match n.verdict {
                 Verdict::Approve => ("approved", "✓ Approved", "Approved"),
@@ -859,7 +899,8 @@ fn control_inner(id: &str, m: Mark) -> String {
             )
         }
         Mark::Stale => format!(
-            r#"<button class="rv-chip stale" data-rv-undo title="Changed since you reviewed it. Click to unmark.">⚠ Changed since review</button><button class="rv-since" data-rv-since title="Diff to the reviewed version">Show changes</button>{text}{ACTIONS}"#
+            r#"<button class="rv-chip stale" data-rv-undo title="Changed since you reviewed it. Click to unmark.">⚠ Changed since review</button><button class="rv-since" data-rv-since title="Diff to the reviewed version">Show changes</button>{text}{}"#,
+            actions(id)
         ),
     }
 }
