@@ -6,12 +6,16 @@
 //! the PR and the item's diff is different, the mark no longer counts: the
 //! item shows as changed since the review.
 //!
+//! The mark also keeps the version itself (see `since`), so that a stale
+//! mark can show what changed since the review.
+//!
 //! Marks are kept in the browser's local storage, per pull request (or per
 //! pair of compared trees), when the browser allows that.
 
 use crate::code::esc;
 use crate::data::{Data, changed};
 use crate::dom;
+use crate::since::Snapshot;
 use model::stable_hash as hash;
 use model::{ChangedFile, Item, Kind};
 use std::cell::RefCell;
@@ -41,6 +45,9 @@ struct Review {
     prints: HashMap<String, u64>,
     /// Saved marks: unit → hash of its diff when it was marked.
     marks: BTreeMap<String, u64>,
+    /// The version each marked unit had when it was marked. Missing for
+    /// marks made by pages from before versions were saved.
+    versions: BTreeMap<String, Snapshot>,
 }
 
 thread_local! {
@@ -49,6 +56,7 @@ thread_local! {
 
 const MODE_KEY: &str = "rust-pr-explorer.review-mode";
 const MARKS_KEY: &str = "rust-pr-explorer.reviewed";
+const VERSIONS_KEY: &str = "rust-pr-explorer.reviewed-versions";
 
 /// The unit id of a changed file.
 pub fn file_unit(path: &str) -> String {
@@ -192,13 +200,18 @@ fn decode(s: &str) -> BTreeMap<String, u64> {
 /// Reads the saved marks for this page's PR.
 pub fn load(d: &Data) {
     let units = units_in_order(d);
-    let key = format!("{MARKS_KEY}:{}", identity(d));
+    let key = identity(d);
     let store = storage();
-    let marks = store
-        .as_ref()
-        .and_then(|s| s.get_item(&key).ok().flatten())
-        .map(|s| decode(&s))
+    let get = |prefix: &str| {
+        store
+            .as_ref()
+            .and_then(|s| s.get_item(&format!("{prefix}:{key}")).ok().flatten())
+    };
+    let marks = get(MARKS_KEY).map(|s| decode(&s)).unwrap_or_default();
+    let mut versions: BTreeMap<String, Snapshot> = get(VERSIONS_KEY)
+        .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
+    versions.retain(|id, _| marks.contains_key(id));
     let on = store
         .and_then(|s| s.get_item(MODE_KEY).ok().flatten())
         .is_some_and(|v| v == "on");
@@ -209,26 +222,39 @@ pub fn load(d: &Data) {
             prints: units.iter().cloned().collect(),
             units: units.into_iter().map(|(id, _)| id).collect(),
             marks,
+            versions,
         }
     });
     apply_mode();
 }
 
 fn save() {
-    let (key, text) = REVIEW.with(|r| {
+    let (key, marks, versions) = REVIEW.with(|r| {
         let r = r.borrow();
-        (r.key.clone(), encode(&r.marks))
-    });
-    let saved = storage().is_some_and(|s| {
-        if text.is_empty() {
-            s.remove_item(&key).is_ok()
+        let versions = if r.versions.is_empty() {
+            String::new()
         } else {
-            s.set_item(&key, &text).is_ok()
-        }
+            serde_json::to_string(&r.versions).unwrap_or_default()
+        };
+        (r.key.clone(), encode(&r.marks), versions)
     });
-    if !saved {
+    let put = |s: &web_sys::Storage, prefix: &str, text: &str| {
+        let k = format!("{prefix}:{key}");
+        if text.is_empty() {
+            s.remove_item(&k).is_ok()
+        } else {
+            s.set_item(&k, text).is_ok()
+        }
+    };
+    let Some(store) = storage().filter(|s| put(s, MARKS_KEY, &marks)) else {
         crate::toast(
             "This browser doesn't allow saving review marks: they are lost when the page is closed.",
+        );
+        return;
+    };
+    if !put(&store, VERSIONS_KEY, &versions) {
+        crate::toast(
+            "The browser's storage is full: the marks are saved, but not the reviewed versions, so a later page can't show what changed since.",
         );
     }
 }
@@ -271,7 +297,14 @@ pub fn mark(id: &str) -> Option<Mark> {
 }
 
 /// Marks a unit as reviewed in its current state, or removes the mark.
-pub fn set_mark(id: &str, done: bool) {
+pub fn set_mark(d: &Data, id: &str, done: bool) {
+    let version = done
+        .then(|| crate::since::snapshot(d, id))
+        .flatten()
+        .map(|mut s| {
+            s.at = js_sys::Date::now();
+            s
+        });
     let changed = REVIEW.with(|r| {
         let mut r = r.borrow_mut();
         let Some(&now) = r.prints.get(id) else {
@@ -282,6 +315,10 @@ pub fn set_mark(id: &str, done: bool) {
         } else {
             r.marks.remove(id);
         }
+        match version {
+            Some(v) => r.versions.insert(id.to_string(), v),
+            None => r.versions.remove(id),
+        };
         true
     });
     if changed {
@@ -292,8 +329,17 @@ pub fn set_mark(id: &str, done: bool) {
 
 /// Removes every mark of this PR.
 pub fn clear() {
-    REVIEW.with(|r| r.borrow_mut().marks.clear());
+    REVIEW.with(|r| {
+        let mut r = r.borrow_mut();
+        r.marks.clear();
+        r.versions.clear();
+    });
     save();
+}
+
+/// The version a unit had when it was marked, if it was saved.
+pub fn reviewed_version(id: &str) -> Option<Snapshot> {
+    REVIEW.with(|r| r.borrow().versions.get(id).cloned())
 }
 
 /// (reviewed, total) units.
@@ -351,7 +397,7 @@ fn control_inner(m: Mark) -> &'static str {
             r#"<button class="rv-chip" data-rv-undo title="Reviewed. Click to remove the mark">✓ Reviewed</button>"#
         }
         Mark::Stale => {
-            r#"<button class="rv-chip stale" data-rv-undo title="You reviewed an earlier version; the diff is different now. Click to remove the mark">⚠ Changed since review</button><button class="rv-btn" data-rv-done title="Mark as reviewed and go to the next unreviewed item">✓ Reviewed, next ▸</button>"#
+            r#"<button class="rv-chip stale" data-rv-undo title="You reviewed an earlier version; the diff is different now. Click to remove the mark">⚠ Changed since review</button><button class="rv-since" data-rv-since title="Show what is different from the version you reviewed">Show changes</button><button class="rv-btn" data-rv-done title="Mark as reviewed and go to the next unreviewed item">✓ Reviewed, next ▸</button>"#
         }
     }
 }
@@ -501,6 +547,7 @@ mod tests {
                 prints: units.iter().cloned().collect(),
                 units: units.into_iter().map(|(id, _)| id).collect(),
                 marks: marks.iter().map(|(id, h)| (id.to_string(), *h)).collect(),
+                versions: BTreeMap::new(),
             }
         });
     }
