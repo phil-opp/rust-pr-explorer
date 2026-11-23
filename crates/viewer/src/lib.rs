@@ -15,6 +15,7 @@ mod review;
 mod route;
 mod settings;
 mod space;
+mod yaml;
 
 use code::esc;
 use data::{Data, changed};

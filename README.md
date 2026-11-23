@@ -53,6 +53,7 @@ Every file the PR changes is accounted for:
 - **Other changed files**, at the end: each changed file the Rust analysis doesn't cover, with its +/− counts.
   - **Python** files are compared by function and class (nested ones under their `__qualname__`, e.g. `Corpus.build` or `f.<locals>.g`). For each one: added, removed, or what changed: the header (diffed), the docstring, the body; changes in only whitespace or comments are marked as such. Changes to top-level statements are noted. A small tokenizer tracks strings, comments, brackets and line continuations, so that `def` inside a string or a bracket is never taken for a definition.
   - **Markdown** files are compared section by section (headings outside code fences): changed paragraphs are marked as in doc comments, with word-level marks where safe, added sections get a bar, removed headings are struck through, and unchanged sections are counted.
+  - **YAML** files (`.yml`, `.yaml`), such as GitHub Actions workflows, show a line diff with syntax colors: keys, strings, numbers, booleans, comments, anchors and tags, and `${{ … }}` expressions wherever they appear. Block scalars (`run: |`) are followed across lines, so a script's lines aren't taken for keys.
   - **Other text files** show a line diff (shown directly when small).
   - **Binary** and very large files (over 1 MB) are listed without a diff.
   - **Generated and vendored** files (lock files, `vendor/`, `third_party/`, `node_modules/`, minified files, files marked `@generated` or "do not edit") are collapsed into one group.

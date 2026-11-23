@@ -411,7 +411,8 @@ pub struct ChangedFile {
     /// Path relative to the repository root.
     pub path: String,
     pub status: Status,
-    /// `rust`, `python`, `markdown`, `toml`, `binary` or `text`.
+    /// `rust`, `python`, `markdown`, `toml`, `yaml`, `binary`, `symlink` or
+    /// `text`.
     pub lang: String,
     /// Part of the Rust analysis (shown as items, not as a file).
     #[serde(default)]
