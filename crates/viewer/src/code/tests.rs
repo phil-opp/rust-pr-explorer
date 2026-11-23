@@ -395,12 +395,12 @@ fn source_diff_follows_the_settings() {
     );
     assert!(
         html.contains(
-            r#"<span class="no">6</span><span class="ln del wl" data-t="-">    <span class="wc">b</span>();"#
+            r#"<span class="no o">6</span><span class="ln del wl" data-t="-">    <span class="wc">b</span>();"#
         ),
         "{html}"
     );
     assert!(
-        html.contains(r#"<span class="no">12</span><span class="ln add" data-t="+">"#),
+        html.contains(r#"<span class="no n">12</span><span class="ln add" data-t="+">"#),
         "{html}"
     );
 }
@@ -467,7 +467,12 @@ fn an_added_item_has_no_part_markers() {
     out.items.insert(it.info.id.clone(), it);
     let d = Data::new(out);
     let it = d.item("c::f").unwrap();
-    let html = d.item_body_html(it, "c", true, d.source_seg(it, false, true));
+    let html = d.item_body_html(
+        it,
+        "c",
+        true,
+        d.source_seg(it, false, true, &Default::default()),
+    );
     // Marked as a whole (by the card or row), not part by part.
     assert_eq!(html.matches("class=\"mark").count(), 0, "{html}");
 }
@@ -484,25 +489,67 @@ fn small_body_changes_are_shown_directly() {
     it.info.kind = model::Kind::Fn;
     it.info.line = 1;
     it.old_line = Some(1);
-    let mut lines: Vec<SourceLine> = (0..12).map(|i| SourceLine(' ', format!("l{i};"))).collect();
-    lines.insert(6, SourceLine('-', "old();".into()));
-    lines.insert(7, SourceLine('+', "new();".into()));
+    let mut lines: Vec<SourceLine> = (0..16).map(|i| SourceLine(' ', format!("l{i};"))).collect();
+    lines.insert(8, SourceLine('-', "old();".into()));
+    lines.insert(9, SourceLine('+', "new();".into()));
     it.source = lines.clone();
     let html = d.source_html(&it, false, true);
-    // The hunk with two lines of context comes first, outside the
-    // collapsed whole source; skipped lines are marked.
-    let (hunk, whole) = html.split_once("<details").unwrap();
-    // The changed line pair has its changed word marked.
+    // Shown right away, not behind a summary to open.
+    assert!(html.contains(r#"<div class="src src-small"#), "{html}");
+    assert!(!html.contains("<details"), "{html}");
+    // The change with three lines of context; the rest folded, above and
+    // below, each behind its own button.
+    let shown = |html: &str| {
+        let mut out = String::new();
+        let mut rest = html;
+        while let Some((before, after)) = rest.split_once(r#"<span class="fold" hidden>"#) {
+            out += before;
+            let mut depth = 1;
+            let mut end = 0;
+            for (i, _) in after.match_indices('<') {
+                if after[i..].starts_with("<span") {
+                    depth += 1;
+                } else if after[i..].starts_with("</span>") {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = i + "</span>".len();
+                        break;
+                    }
+                }
+            }
+            rest = &after[end..];
+        }
+        out + rest
+    };
+    let visible = shown(&html);
     assert!(
-        hunk.contains(r#"<span class="wc">old</span>();"#)
-            && hunk.contains(r#"<span class="wc">new</span>();"#),
-        "{hunk}"
+        visible.contains(r#"<span class="wc">old</span>();"#)
+            && visible.contains(r#"<span class="wc">new</span>();"#),
+        "{visible}"
     );
-    assert!(hunk.contains("l4;") && hunk.contains("l7;"), "{hunk}");
-    assert!(!hunk.contains("l2;") && !hunk.contains("l9;"), "{hunk}");
-    assert_eq!(hunk.matches("⋯").count(), 2, "{hunk}");
-    assert!(whole.contains("l0;"), "{whole}");
-    // Five changed lines or more: collapsed as before.
+    assert!(
+        visible.contains("l5;") && visible.contains("l10;"),
+        "{visible}"
+    );
+    assert!(
+        !visible.contains("l4;") && !visible.contains("l11;"),
+        "{visible}"
+    );
+    assert!(visible.contains(r#"data-unfold="0""#), "{visible}");
+    assert!(visible.contains("↑ 5 unchanged lines"), "{visible}");
+    assert!(visible.contains("↓ 5 unchanged lines"), "{visible}");
+    assert!(visible.contains("data-unfold-all"), "{visible}");
+    // The folded lines are there, to be shown with a click.
+    assert!(html.contains("l0;") && html.contains("l15;"), "{html}");
+    // An expanded fold stays expanded when rendered again.
+    let html = marked_html(d.source_seg(&it, false, true, &[0].into()));
+    let visible = shown(&html);
+    assert!(
+        visible.contains("l0;") && !visible.contains("l15;"),
+        "{visible}"
+    );
+    assert!(!visible.contains("data-unfold-all"), "{visible}");
+    // Five changed lines or more: behind the summary, still folded.
     for k in 0..3 {
         lines.insert(1, SourceLine('+', format!("more{k}();")));
     }
@@ -512,6 +559,42 @@ fn small_body_changes_are_shown_directly() {
         html.starts_with("<div class=\"mark m-chg\"><details"),
         "{html}"
     );
+    assert!(html.contains("data-unfold="), "{html}");
+}
+
+#[test]
+fn short_unchanged_runs_are_not_folded() {
+    use model::{Item, SourceLine, Status};
+    let d = empty();
+    let mut it = Item {
+        status: Status::Changed,
+        ..Default::default()
+    };
+    it.changes.body = true;
+    it.info.kind = model::Kind::Fn;
+    it.info.line = 1;
+    it.old_line = Some(1);
+    // One line beyond the context on each side: shown, not folded.
+    let mut lines: Vec<SourceLine> = (0..8).map(|i| SourceLine(' ', format!("l{i};"))).collect();
+    lines.insert(4, SourceLine('+', "new();".into()));
+    it.source = lines;
+    let html = d.source_html(&it, false, true);
+    assert!(!html.contains("data-unfold"), "{html}");
+    // Without a change (e.g. whitespace only, hidden), nothing is folded.
+    crate::settings::set(crate::settings::Settings {
+        ignore_ws: true,
+        ..Default::default()
+    });
+    it.source = (0..20)
+        .map(|i| SourceLine(' ', format!("l{i};")))
+        .chain([
+            SourceLine('-', "  x();".into()),
+            SourceLine('+', "x();".into()),
+        ])
+        .collect();
+    let html = d.source_html(&it, true, true);
+    crate::settings::set(Default::default());
+    assert!(!html.contains("data-unfold"), "{html}");
 }
 
 #[test]

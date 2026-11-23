@@ -422,6 +422,10 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         }
         return;
     }
+    if let Some(b) = dom::closest(el, "[data-unfold], [data-unfold-all]") {
+        canvas::on_unfold(app, &b);
+        return;
+    }
     if dom::closest(el, "#view-canvas").is_some() && canvas::on_click(app, el) {
         return;
     }
