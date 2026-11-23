@@ -34,8 +34,8 @@ pub struct Group {
     pub active: String,
     pub x: f64,
     pub y: f64,
-    /// Items whose source view is expanded.
-    pub open_src: BTreeSet<String>,
+    /// Items whose source view the reader opened (`true`) or closed.
+    pub open_src: BTreeMap<String, bool>,
     /// Folds of unchanged source lines that were expanded, by item and
     /// first row.
     pub unfolded: BTreeMap<String, BTreeSet<usize>>,
@@ -119,7 +119,7 @@ impl Canvas {
             active: id.to_string(),
             x,
             y,
-            open_src: BTreeSet::new(),
+            open_src: BTreeMap::new(),
             unfolded: BTreeMap::new(),
         });
         self.next_gid += 1;
@@ -214,7 +214,7 @@ pub fn render(app: &mut App) {
             .join("::"),
         if hidden > 0 {
             format!(
-                r#"<span class="chip" title="Private to submodules of the current scope">{hidden} card{} hidden at this scope</span>"#,
+                r#"<span class="chip" title="Not visible from this scope">{hidden} card{} hidden at this scope</span>"#,
                 if hidden > 1 { "s" } else { "" }
             )
         } else {

@@ -376,7 +376,7 @@ fn source_diff_follows_the_settings() {
         SourceLine('+', "    c();".into()),
         SourceLine(' ', "}".into()),
     ];
-    let html = d.source_html(&it, true, false);
+    let html = d.source_html(&it, Some(true), false);
     assert!(
         html.contains(">+2</span> <span class=\"d-del\">−2<"),
         "{html}"
@@ -386,7 +386,7 @@ fn source_diff_follows_the_settings() {
         split: true,
         ..Default::default()
     });
-    let html = d.source_html(&it, true, false);
+    let html = d.source_html(&it, Some(true), false);
     crate::settings::set(Default::default());
     // Only `b()` → `c()` counts, shown in one row: old line 6, new line 12.
     assert!(
@@ -471,14 +471,14 @@ fn an_added_item_has_no_part_markers() {
         it,
         "c",
         true,
-        d.source_seg(it, false, true, &Default::default()),
+        d.source_seg(it, None, true, &Default::default()),
     );
     // Marked as a whole (by the card or row), not part by part.
     assert_eq!(html.matches("class=\"mark").count(), 0, "{html}");
 }
 
 #[test]
-fn small_body_changes_are_shown_directly() {
+fn small_body_changes_start_open() {
     use model::{Item, SourceLine, Status};
     let d = empty();
     let mut it = Item {
@@ -493,10 +493,17 @@ fn small_body_changes_are_shown_directly() {
     lines.insert(8, SourceLine('-', "old();".into()));
     lines.insert(9, SourceLine('+', "new();".into()));
     it.source = lines.clone();
-    let html = d.source_html(&it, false, true);
-    // Shown right away, not behind a summary to open.
-    assert!(html.contains(r#"<div class="src src-small"#), "{html}");
-    assert!(!html.contains("<details"), "{html}");
+    let html = d.source_html(&it, None, true);
+    // Open right away, not behind a summary to open.
+    assert!(
+        html.starts_with(
+            r#"<div class="mark m-chg"><details class="src src-chg" data-src="" open>"#
+        ),
+        "{html}"
+    );
+    // Unless the reader closed it.
+    let closed = d.source_html(&it, Some(false), true);
+    assert!(closed.contains(r#"data-src="" >"#), "{closed}");
     // The change with three lines of context; the rest folded, above and
     // below, each behind its own button.
     let shown = |html: &str| {
@@ -542,24 +549,28 @@ fn small_body_changes_are_shown_directly() {
     // The folded lines are there, to be shown with a click.
     assert!(html.contains("l0;") && html.contains("l15;"), "{html}");
     // An expanded fold stays expanded when rendered again.
-    let html = marked_html(d.source_seg(&it, false, true, &[0].into()));
+    let html = marked_html(d.source_seg(&it, None, true, &[0].into()));
     let visible = shown(&html);
     assert!(
         visible.contains("l0;") && !visible.contains("l15;"),
         "{visible}"
     );
     assert!(!visible.contains("data-unfold-all"), "{visible}");
-    // Five changed lines or more: behind the summary, still folded.
-    for k in 0..3 {
+    // Up to 20 changed lines start open.
+    for k in 0..18 {
         lines.insert(1, SourceLine('+', format!("more{k}();")));
     }
+    it.source = lines.clone();
+    let html = d.source_html(&it, None, true);
+    assert!(html.contains(r#"data-src="" open>"#), "{html}");
+    // More start closed, still folded, unless the reader opened them.
+    lines.insert(1, SourceLine('+', "more();".into()));
     it.source = lines;
-    let html = d.source_html(&it, false, true);
-    assert!(
-        html.starts_with("<div class=\"mark m-chg\"><details"),
-        "{html}"
-    );
+    let html = d.source_html(&it, None, true);
+    assert!(html.contains(r#"data-src="" >"#), "{html}");
     assert!(html.contains("data-unfold="), "{html}");
+    let html = d.source_html(&it, Some(true), true);
+    assert!(html.contains(r#"data-src="" open>"#), "{html}");
 }
 
 #[test]
@@ -578,7 +589,7 @@ fn short_unchanged_runs_are_not_folded() {
     let mut lines: Vec<SourceLine> = (0..8).map(|i| SourceLine(' ', format!("l{i};"))).collect();
     lines.insert(4, SourceLine('+', "new();".into()));
     it.source = lines;
-    let html = d.source_html(&it, false, true);
+    let html = d.source_html(&it, None, true);
     assert!(!html.contains("data-unfold"), "{html}");
     // Without a change (e.g. whitespace only, hidden), nothing is folded.
     crate::settings::set(crate::settings::Settings {
@@ -592,7 +603,7 @@ fn short_unchanged_runs_are_not_folded() {
             SourceLine('+', "x();".into()),
         ])
         .collect();
-    let html = d.source_html(&it, true, true);
+    let html = d.source_html(&it, Some(true), true);
     crate::settings::set(Default::default());
     assert!(!html.contains("data-unfold"), "{html}");
 }
@@ -717,7 +728,7 @@ fn source_links_both_versions_and_marks_new_items() {
     out.items
         .insert("c::new_helper".into(), item("c::new_helper", Status::Added));
     let d = Data::new(out);
-    let html = d.source_html(&it, true, false);
+    let html = d.source_html(&it, Some(true), false);
     assert!(
         html.contains(r#"<a class="ref " data-id="c::old_helper""#),
         "{html}"
