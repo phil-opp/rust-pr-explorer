@@ -136,7 +136,7 @@ pub fn start() {
     };
     settings::load();
     review::load(&app.d);
-    let title = app.d.compared_html();
+    let title = app.d.header_html();
     dom::set_html("pr-title", &title);
     APP.with(|a| *a.borrow_mut() = Some(app));
     install_listeners();
