@@ -36,6 +36,7 @@ fn stats(added: u32, removed: u32) -> String {
 pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
     let mut new_line = 0usize;
     let mut old_line = 0usize;
+    let mut max_line = 0usize;
     // YAML block scalars span lines; each side keeps its own state.
     let (mut old_yaml, mut new_yaml) = (yaml::State::default(), yaml::State::default());
     // So do JavaScript comments and template literals.
@@ -109,6 +110,12 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
             '-' => ("del", old_line),
             _ => ("", new_line),
         };
+        let gutter = crate::code::gutter(
+            (l.0 != '+').then_some(old_line),
+            (l.0 != '-').then_some(new_line),
+            l.0,
+        );
+        max_line = max_line.max(old_line).max(new_line);
         match l.0 {
             '+' => new_line += 1,
             '-' => old_line += 1,
@@ -118,7 +125,7 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
             }
         }
         body.push_str(&format!(
-            r#"<span class="ln {class}" data-t="{}" data-no="{no}">{}</span>"#,
+            r#"<span class="ln {class}" data-t="{}" data-no="{no}">{gutter}{}</span>"#,
             if l.0 == ' ' {
                 String::new()
             } else {
@@ -131,7 +138,10 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
             }
         ));
     }
-    format!(r#"<pre class="hunks">{body}</pre>"#)
+    format!(
+        r#"<pre class="hunks" {}>{body}</pre>"#,
+        crate::code::gutter_style(max_line)
+    )
 }
 
 fn manifest_html(entries: &[ManifestChange]) -> String {
@@ -545,7 +555,7 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
         )
     };
     format!(
-        r#"<div class="ientry file {}" data-file="{}"><div class="irow"><div class="ihead"><span class="title-name">{}</span><span class="kind">{}</span>{}{}</div><div class="iacts">{}{}</div></div>{outside}{structured}{lines}</div>"#,
+        r#"<div class="ientry file {}" data-file="{}"><div class="irow"><div class="ihead"><span class="title-name">{}</span><span class="kind">{}</span>{}{}</div><div class="iacts">{}{}</div></div>{outside}{structured}{lines}{}</div>"#,
         match f.status {
             Status::Added => "whole whole-added",
             Status::Removed => "whole whole-removed",
@@ -561,6 +571,7 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
             .unwrap_or_default(),
         stats(f.added, f.removed),
         crate::review::control_html(&crate::review::file_unit(&f.path)),
+        crate::threads::file_html(d, &f.path),
     )
 }
 

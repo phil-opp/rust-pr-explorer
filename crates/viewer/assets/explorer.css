@@ -451,6 +451,9 @@ a.card-badge[data-drill]:hover { border-style: solid; }
 .sig-notes:empty { display: none; }
 .sig-notes li { margin: 1px 0; border-radius: 3px; cursor: default; }
 .sig-notes code { font-size: 12px; color: var(--text); background: var(--bg-code); padding: 0 3px; border-radius: 3px; }
+.sig-notes .note-docs { color: var(--text); font-size: 13px; margin: 2px 0 6px; }
+.sig-notes .note-docs p { margin: 2px 0; }
+.sig-notes .note-more summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .sig-note { font-size: 12px; color: var(--muted); }
 .legend-bars { display: flex; gap: 10px; margin-top: 6px !important; }
 .legend-bars .lb { padding-left: 5px; }
@@ -485,7 +488,7 @@ a.card-badge[data-drill]:hover { border-style: solid; }
    extracted helper) keep their "-" or "+" but get their own color and a
    rule on the left, so that they read as moved, not as new code. */
 .ln.mv { background: var(--moved-bg) !important; box-shadow: inset 2px 0 0 var(--moved); }
-.ln.mv::before { color: var(--moved) !important; }
+.ln.mv::before, .ln.mv .sg { color: var(--moved) !important; }
 .mv-note { float: right; margin-left: 16px; font: 12px var(--sans); color: var(--moved); }
 .d-mv { color: var(--moved); }
 /* Removed lines are marked by their background and "-" alone. A changed
@@ -624,6 +627,19 @@ details.private-def .sigbox { margin-top: 4px; }
 .hunks .ln.add { background: var(--added-bg); }
 .hunks .ln.del { background: var(--removed-bg); }
 .hunks .ln.skip { color: var(--muted); font-style: italic; background: var(--panel); }
+
+/* Line numbers in inline diffs: old and new, then the sign. */
+.ln .lno, .ln .sg { display: none; }
+:root:not(.no-lno) pre .ln:has(> .lno)::before { content: none; }
+:root:not(.no-lno) .ln .lno, :root:not(.no-lno) .ln .sg { display: inline-block; user-select: none; color: var(--muted); }
+.ln .lno::before, .ln .lno::after { display: inline-block; min-width: var(--lnw, 3ch); text-align: right; }
+.ln .lno::before { content: attr(data-o); margin-left: 4px; }
+.ln .lno::after { content: attr(data-n); margin: 0 4px 0 1ch; }
+.ln .sg { width: 14px; }
+.ln .sg::before { content: attr(data-t); }
+.ln.add .sg { color: var(--added); }
+.ln.del .sg { color: var(--removed); }
+.no-lno .sbs .no { font-size: 0; padding: 0; }
 .note { font-size: 13px; color: var(--muted); }
 details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px 0; }
 .manifest { border-collapse: collapse; font-size: 13px; }
@@ -756,6 +772,33 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 body:not(.reviewing) .rv-scope { display: none; }
 .hunk-rv .rv-fold { display: none; }
 body:not(.reviewing) .hunk-rv:not(:has(.rvc.done, .rvc.stale)) { display: none; }
+/* The PR's review threads on GitHub: under their line in a source diff,
+   on file cards, and listed on the overview. */
+.rt-row { display: block; white-space: normal; font: 14px/1.45 var(--sans); padding: 4px 8px 6px 18px; position: sticky; left: 0; max-width: min(760px, 100%); }
+.sbs .rt-row { grid-column: 1 / -1; max-width: 760px; }
+.rthread { border: 1px solid var(--border); border-left: 3px solid var(--changed); border-radius: 6px; background: var(--bg); margin: 4px 0; }
+.rthread.resolved { border-left-color: var(--added); }
+.rthread > summary { cursor: pointer; padding: 4px 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; font-size: 13px; }
+.rthread > summary .rt-gh { margin-left: auto; }
+.rt-state { font-size: 12px; font-weight: 600; }
+.rt-unresolved { color: var(--changed); }
+.rt-resolved { color: var(--added); }
+.rt-outdated { color: var(--muted); border: 1px solid var(--border); border-radius: 8px; padding: 0 6px; font-weight: 400; }
+.rt-author { font-weight: 600; }
+.rt-comment { padding: 4px 12px 6px; border-top: 1px solid var(--border); }
+.rt-meta { font-size: 13px; }
+.rt-comment > .docs p { margin: 4px 0; }
+.rt-comment > .docs pre { white-space: pre-wrap; }
+.rt-count { color: var(--muted); }
+.rt-count.rt-open { color: var(--changed); font-weight: 600; }
+.rt-file { padding: 4px 12px 8px; }
+.rt-file-h { font-size: 13px; color: var(--muted); margin: 4px 0; }
+.rt-at { font-size: 12px; color: var(--muted); margin-top: 6px; }
+.rt-line { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; padding: 4px 0; border-bottom: 1px solid var(--bg-alt); font-size: 14px; }
+.rt-line.resolved .rt-snippet { color: var(--muted); }
+.rt-where { white-space: nowrap; }
+.rt-snippet { flex: 1; min-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rt-rest-h { margin: 12px 0 4px; color: var(--muted); font-size: 13px; }
 #rv-bar #rv-keys { margin-left: 6px; min-width: 26px; color: var(--muted); }
 .keys { border-collapse: collapse; margin-top: 8px; }
 .keys td { padding: 4px 12px 4px 0; vertical-align: top; }
