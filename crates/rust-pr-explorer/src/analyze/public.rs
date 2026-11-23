@@ -17,7 +17,7 @@ impl Analyzer {
         for (module, data) in &self.modules {
             for u in &data.uses {
                 // `pub use path::Item;` and `pub use path::*;`
-                if !u.public {
+                if !u.public || u.doc_hidden {
                     continue;
                 }
                 let ns = if u.alias.is_some() {
@@ -91,7 +91,7 @@ impl Analyzer {
             for child in item.info.children.clone() {
                 if items
                     .get(&child)
-                    .is_some_and(|c| c.info.vis_scope.is_none())
+                    .is_some_and(|c| c.info.vis_scope.is_none() && !c.doc_hidden)
                 {
                     mark_public(&child, items);
                 }
@@ -121,6 +121,7 @@ impl Analyzer {
                     || i.id == i.module
                     || i.vis_scope.is_some()
                     || i.kind == Kind::Impl
+                    || item.doc_hidden
                 {
                     continue;
                 }
@@ -129,6 +130,9 @@ impl Analyzer {
                 }
             }
             for (module, target, name) in reexports {
+                if items.get(target).is_some_and(|t| t.doc_hidden) {
+                    continue;
+                }
                 let Some(name) = name
                     .clone()
                     .or_else(|| items.get(target).map(|t| t.info.name.clone()))
@@ -151,7 +155,18 @@ impl Analyzer {
         }
         for (id, set) in paths {
             let mut list: Vec<String> = set.into_iter().collect();
-            list.sort_by_key(|p| (p.split("::").count(), p.clone()));
+            // Where rustdoc documents the item comes first: its definition
+            // path if that is public, else the shortest re-export.
+            let def_path = items
+                .get(&id)
+                .map(|i| format!("{}::{}", i.info.module, i.info.name));
+            list.sort_by_key(|p| {
+                (
+                    Some(p) != def_path.as_ref(),
+                    p.split("::").count(),
+                    p.clone(),
+                )
+            });
             mark_public(&id, items);
             if let Some(item) = items.get_mut(&id) {
                 item.info.public_paths = list;
@@ -173,6 +188,7 @@ fn reachable(
         None => true,
         Some(item) => {
             item.info.vis_scope.is_none()
+                && !item.doc_hidden
                 && match &item.info.vis_parent {
                     None => true,
                     Some(parent) => reachable(parent, items, memo),

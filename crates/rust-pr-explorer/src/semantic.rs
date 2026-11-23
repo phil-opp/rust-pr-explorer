@@ -78,6 +78,8 @@ pub fn refine(
         }
     }
     let mut done: BTreeSet<String> = BTreeSet::new();
+    // Crates whose public API rust-analyzer determined.
+    let mut api_done: BTreeSet<String> = BTreeSet::new();
     for dir in manifest_dirs {
         let dir = std::fs::canonicalize(dir)?;
         let (host, vfs) = match load(&dir, trust) {
@@ -104,7 +106,9 @@ pub fn refine(
         let ids: Vec<String> = analysis
             .items
             .iter()
-            .filter(|(id, item)| item.name_pos.is_some() && !done.contains(*id))
+            .filter(|(id, item)| {
+                item.info.kind.is_callable() && item.name_pos.is_some() && !done.contains(*id)
+            })
             .map(|(id, _)| id.clone())
             .collect();
         for id in ids {
@@ -208,7 +212,28 @@ pub fn refine(
                 .uses
                 .retain(|u| !calls.iter().any(|c| c.to == u.to));
         }
+        crate::public_api::apply(
+            &crate::public_api::Ctx {
+                db: host.raw_database(),
+                vfs: &vfs,
+                root: &root,
+                by_name_pos: &by_name_pos,
+            },
+            analysis,
+            &mut api_done,
+        );
         describe_externals(&ra, &vfs, &root, &mut texts, analysis, &goto_config);
+    }
+    // Re-exported items of other crates show their docs.
+    for item in analysis.items.values_mut() {
+        if let Some(ext) = item
+            .info
+            .reexport_of
+            .as_ref()
+            .and_then(|p| analysis.externals.get(p))
+        {
+            item.info.docs = ext.docs.clone();
+        }
     }
     stats.externals = analysis.externals.len();
     Ok(stats)
@@ -488,7 +513,7 @@ fn to_offset(text: &str, pos: LineCol) -> usize {
             .map_or(line.len(), |(i, _)| i)
 }
 
-fn to_linecol(text: &str, offset: u32) -> LineCol {
+pub(crate) fn to_linecol(text: &str, offset: u32) -> LineCol {
     let offset = (offset as usize).min(text.len());
     let before = &text[..offset];
     let line_start = before.rfind('\n').map_or(0, |i| i + 1);

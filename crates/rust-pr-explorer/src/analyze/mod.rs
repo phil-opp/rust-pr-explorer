@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use syn::{Attribute, Item, Visibility, parse_quote};
-use syntax::is_extra_target;
+pub use syntax::is_extra_target;
 #[cfg(feature = "semantic")]
 pub use syntax::wrap_fn_sig;
 
@@ -71,9 +71,13 @@ pub struct ItemData {
     pub body_norm: String,
     /// The item's source text.
     pub source: String,
-    /// Where the item's name is, for functions and methods.
+    /// Where the item's name is, for named items other than modules and
+    /// impls.
     #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
     pub name_pos: Option<LineCol>,
+    /// Marked `#[doc(hidden)]`: rustdoc leaves it out, and it is not part
+    /// of the public API.
+    pub doc_hidden: bool,
     #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
     pub call_sites: Vec<CallSite>,
     /// For each path outside the analyzed crates, where one occurrence
@@ -108,6 +112,9 @@ struct UseEntry {
     alias: Option<String>,
     path: Vec<String>,
     public: bool,
+    /// The `use` is marked `#[doc(hidden)]`: the name it adds is not part
+    /// of the public API.
+    doc_hidden: bool,
 }
 
 enum Node {
