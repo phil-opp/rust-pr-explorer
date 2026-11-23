@@ -757,8 +757,55 @@ fn refresh(id: &str) {
     update_progress();
 }
 
+/// An item's name in a list of changes (the overview's internal changes),
+/// with a ✓ in review mode once the item is reviewed.
+pub fn item_tag(id: &str, name: &str) -> String {
+    format!(
+        r#"<span class="rv-it{}" data-rv-it="{}">{}</span>"#,
+        if mark(id) == Some(Mark::Done) {
+            " done"
+        } else {
+            ""
+        },
+        esc(id),
+        esc(name)
+    )
+}
+
+/// The review state of a group of items, like in the sidebar: a ✓ once
+/// all are reviewed, else how many are left.
+pub fn group_html<'a>(ids: impl IntoIterator<Item = &'a str>) -> String {
+    let ids: Vec<&str> = ids.into_iter().collect();
+    match open_count(ids.iter().copied()) {
+        0 => r#"<span class="rv-all" title="All reviewed">✓ reviewed</span>"#.to_string(),
+        left => format!(
+            r#"<span class="rv-left" title="{left} of {} not reviewed yet">{left} not reviewed</span>"#,
+            ids.len()
+        ),
+    }
+}
+
+/// Updates the item names and group states of the lists of changes.
+fn update_groups() {
+    for el in dom::query_all(".rv-it") {
+        let done = dom::data(&el, "rv-it").and_then(|id| mark(&id)) == Some(Mark::Done);
+        dom::toggle_class(&el, "done", done);
+    }
+    for el in dom::query_all(".rv-group") {
+        let Some(row) = dom::closest(&el, ".irow") else {
+            continue;
+        };
+        let ids: Vec<String> = dom::query_all_in(&row, "[data-rv-it]")
+            .iter()
+            .filter_map(|it| dom::data(it, "rv-it"))
+            .collect();
+        el.set_inner_html(&group_html(ids.iter().map(String::as_str)));
+    }
+}
+
 /// The progress and the "next" button in the header.
 pub fn update_progress() {
+    update_groups();
     let (done, total) = progress();
     let html = match (done * 100).checked_div(total) {
         None => r#"<span class="dim">Nothing to review</span>"#.to_string(),
