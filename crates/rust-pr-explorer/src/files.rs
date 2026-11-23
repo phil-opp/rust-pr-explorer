@@ -1,6 +1,6 @@
 //! Every file a PR changes, with a line diff, and structured changes where
-//! the format is understood (`Cargo.toml`, lock files, Python, YAML, CSS,
-//! Markdown).
+//! the format is understood (`Cargo.toml`, lock files, Python, JavaScript,
+//! YAML, CSS, Markdown).
 
 use crate::parts::{Def, Span, compare_defs, rust_outline};
 use model::{ChangedFile, ManifestChange, PartChange, SourceLine, Status};
@@ -60,6 +60,7 @@ fn lang(path: &str, binary: bool) -> &'static str {
         "md" | "markdown" => "markdown",
         "toml" => "toml",
         "yml" | "yaml" => "yaml",
+        "js" | "mjs" | "cjs" | "jsx" => "javascript",
         "css" => "css",
         _ => "text",
     }
@@ -243,6 +244,7 @@ pub fn changed_files(base: &Path, head: &Path, skip: &[&str]) -> Vec<ChangedFile
                 file.removed = removed;
                 match file.lang.as_str() {
                     "python" => file.parts = crate::python::compare(old, new),
+                    "javascript" => file.parts = crate::javascript::compare(old, new),
                     "yaml" => {
                         use crate::parts::{compare_defs, yaml_outline};
                         file.parts = compare_defs(&yaml_outline(old), &yaml_outline(new), old, new);

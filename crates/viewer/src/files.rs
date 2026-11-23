@@ -10,6 +10,7 @@ use crate::code::{
 };
 use crate::css;
 use crate::data::Data;
+use crate::js;
 use crate::yaml;
 use model::{ChangedFile, Kind, LockChange, ManifestChange, PartChange, SourceLine, Status};
 use std::collections::{BTreeMap, BTreeSet};
@@ -29,13 +30,16 @@ fn stats(added: u32, removed: u32) -> String {
     format!(r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>"#)
 }
 
-/// Hunks of a line diff. Rust, Python, YAML and CSS get syntax colors; nothing
+/// Hunks of a line diff. Rust, Python, JavaScript, YAML and CSS get
+/// syntax colors; nothing
 /// is linked.
 pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
     let mut new_line = 0usize;
     let mut old_line = 0usize;
     // YAML block scalars span lines; each side keeps its own state.
     let (mut old_yaml, mut new_yaml) = (yaml::State::default(), yaml::State::default());
+    // So do JavaScript comments and template literals.
+    let (mut old_js, mut new_js) = (js::State::default(), js::State::default());
     // So do CSS comments.
     let (mut old_css, mut new_css) = (css::State::default(), css::State::default());
     let mut body = String::new();
@@ -43,6 +47,7 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
     for l in lines {
         if l.0 == '@' {
             (old_yaml, new_yaml) = (yaml::State::default(), yaml::State::default());
+            (old_js, new_js) = (js::State::default(), js::State::default());
             (old_css, new_css) = (css::State::default(), css::State::default());
         }
         codes.push(match lang {
@@ -53,6 +58,14 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
                 _ => {
                     yaml::line_html(&mut old_yaml, &l.1);
                     yaml::line_html(&mut new_yaml, &l.1)
+                }
+            },
+            "javascript" => match l.0 {
+                '-' => js::line_html(&mut old_js, &l.1),
+                '+' => js::line_html(&mut new_js, &l.1),
+                _ => {
+                    js::line_html(&mut old_js, &l.1);
+                    js::line_html(&mut new_js, &l.1)
                 }
             },
             "css" => match l.0 {
@@ -194,7 +207,16 @@ fn parts_summary(parts: &[PartChange]) -> String {
 /// A file's changed parts (see [`PartChange`]), one box each.
 fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
     let no_refs = BTreeMap::new();
-    let code = lang != "yaml";
+    // Rust and Python headers are highlighted (and diffed) as code; YAML
+    // and JavaScript ones with their own highlighters.
+    let code = lang == "rust" || lang == "python";
+    let plain = |text: &str| -> String {
+        if lang == "javascript" {
+            js::text_html(text)
+        } else {
+            yaml::line_html(&mut yaml::State::default(), text)
+        }
+    };
     list.iter()
         .map(|c| {
             if c.kind == "module" {
@@ -208,13 +230,13 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
                 Some(old) => format!(
                     r#"<pre class="sig"><del>{}</del>
 {}</pre>"#,
-                    yaml::line_html(&mut yaml::State::default(), old),
-                    yaml::line_html(&mut yaml::State::default(), &c.sig)
+                    plain(old),
+                    plain(&c.sig)
                 ),
                 None if code => {
                     format!(r#"<pre class="sig">{}</pre>"#, code_html(d, &c.sig, Links::None))
                 }
-                None => format!(r#"<pre class="sig">{}</pre>"#, yaml::line_html(&mut yaml::State::default(), &c.sig)),
+                None => format!(r#"<pre class="sig">{}</pre>"#, plain(&c.sig)),
             };
             let (sig_bar, sig_class) = match c.status {
                 Status::Added | Status::Removed => ("", ""),
@@ -223,7 +245,7 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
             };
             let mut segs = Vec::new();
             // A YAML key's line repeats its name, unless it changed.
-            if code || c.old_sig.is_some() {
+            if lang != "yaml" || c.old_sig.is_some() {
                 segs.push(Seg::new(
                     sig_bar,
                     format!(r#"<div class="sigbox {sig_class}">{sig}</div>"#),
@@ -234,7 +256,11 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
                     "m-chg",
                     format!(
                         r#"<div class="note">{} changed.</div>"#,
-                        if lang == "python" { "Docstring" } else { "Doc comment" }
+                        match lang {
+                            "python" => "Docstring",
+                            "javascript" => "JSDoc comment",
+                            _ => "Doc comment",
+                        }
                     ),
                 ));
             }
@@ -461,7 +487,9 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
         String::new()
     };
     let structured = match f.lang.as_str() {
-        "python" | "yaml" | "rust" if !f.parts.is_empty() => parts_html(d, &f.parts, &f.lang),
+        "python" | "javascript" | "yaml" | "rust" if !f.parts.is_empty() => {
+            parts_html(d, &f.parts, &f.lang)
+        }
         "css" if !f.styles.is_empty() => css::styles_html(&f.styles),
         // Compared, and no property changed.
         "css" if !f.hunks.is_empty() && f.status == Status::Changed => {

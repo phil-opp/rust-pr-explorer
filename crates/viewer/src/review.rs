@@ -368,13 +368,7 @@ fn units_in_order(d: &Data) -> Vec<(String, u64)> {
             continue;
         }
         if let Some(list) = by_module.get_mut(m) {
-            list.sort_by(|a, b| {
-                (&a.info.file, a.info.line, &a.info.id).cmp(&(
-                    &b.info.file,
-                    b.info.line,
-                    &b.info.id,
-                ))
-            });
+            list.sort_by(|a, b| d.reading_order(a, b));
             out.extend(list.iter().map(|it| (it.info.id.clone(), item_print(it))));
         }
     }
@@ -944,6 +938,60 @@ mod tests {
             files: vec![file, covered],
             warnings: Vec::new(),
         })
+    }
+
+    #[test]
+    fn types_come_before_their_impls_and_methods() {
+        // In the file, the impl and its method come first; a free function
+        // sits between them and the type.
+        let mut imp = item(
+            "c::<impl Display for S>",
+            Kind::Impl,
+            "c",
+            "src/lib.rs",
+            2,
+            Status::Added,
+        );
+        imp.info.self_ty = Some("c::S".into());
+        let mut method = item(
+            "c::S::new",
+            Kind::Method,
+            "c",
+            "src/lib.rs",
+            8,
+            Status::Changed,
+        );
+        method.info.self_ty = Some("c::S".into());
+        let items = [
+            item("c", Kind::Mod, "c", "src/lib.rs", 1, Status::Changed),
+            imp,
+            method,
+            item("c::free", Kind::Fn, "c", "src/lib.rs", 12, Status::Changed),
+            item("c::S", Kind::Struct, "c", "src/lib.rs", 20, Status::Changed),
+            item("c::last", Kind::Fn, "c", "src/lib.rs", 30, Status::Changed),
+        ];
+        let d = Data::new(Output {
+            meta: Meta::default(),
+            crates: vec!["c".into()],
+            items: items
+                .into_iter()
+                .map(|it| (it.info.id.clone(), it))
+                .collect(),
+            externals: BTreeMap::new(),
+            files: Vec::new(),
+            warnings: Vec::new(),
+        });
+        let order: Vec<String> = units_in_order(&d).into_iter().map(|(id, _)| id).collect();
+        assert_eq!(
+            order,
+            [
+                "c::free",
+                "c::S",
+                "c::<impl Display for S>",
+                "c::S::new",
+                "c::last"
+            ]
+        );
     }
 
     fn set(d: &Data, marks: &[(&str, u64)]) {
