@@ -65,9 +65,13 @@ pub struct ItemData {
     pub body_norm: String,
     /// The item's source text.
     pub source: String,
-    /// Where the item's name is, for functions and methods.
+    /// Where the item's name is, for named items other than modules and
+    /// impls.
     #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
     pub name_pos: Option<LineCol>,
+    /// Marked `#[doc(hidden)]`: rustdoc leaves it out, and it is not part
+    /// of the public API.
+    pub doc_hidden: bool,
     #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
     pub call_sites: Vec<CallSite>,
     /// For each path outside the analyzed crates, where one occurrence
@@ -102,6 +106,9 @@ struct UseEntry {
     alias: Option<String>,
     path: Vec<String>,
     public: bool,
+    /// The `use` is marked `#[doc(hidden)]`: the name it adds is not part
+    /// of the public API.
+    doc_hidden: bool,
 }
 
 enum Node {
@@ -626,6 +633,7 @@ impl Analyzer {
                 }),
                 Item::Use(u) => {
                     let public = matches!(u.vis, Visibility::Public(_));
+                    let doc_hidden = is_doc_hidden(&u.attrs);
                     let mut entries = Vec::new();
                     flatten_use(&u.tree, Vec::new(), &mut entries);
                     let m = self.modules.get_mut(module).unwrap();
@@ -634,6 +642,7 @@ impl Analyzer {
                             alias,
                             path,
                             public,
+                            doc_hidden,
                         });
                     }
                 }
@@ -647,6 +656,7 @@ impl Analyzer {
                         alias: Some(alias),
                         path: vec![e.ident.to_string()],
                         public: false,
+                        doc_hidden: false,
                     });
                 }
                 Item::Mod(m) => {
@@ -1270,7 +1280,7 @@ impl Analyzer {
         for (module, data) in &self.modules {
             for u in &data.uses {
                 // `pub use path::Item;` and `pub use path::*;`
-                if !u.public {
+                if !u.public || u.doc_hidden {
                     continue;
                 }
                 let ns = if u.alias.is_some() {
@@ -1342,7 +1352,7 @@ impl Analyzer {
             for child in item.info.children.clone() {
                 if items
                     .get(&child)
-                    .is_some_and(|c| c.info.vis_scope.is_none())
+                    .is_some_and(|c| c.info.vis_scope.is_none() && !c.doc_hidden)
                 {
                     mark_public(&child, items);
                 }
@@ -1372,6 +1382,7 @@ impl Analyzer {
                     || i.id == i.module
                     || i.vis_scope.is_some()
                     || i.kind == Kind::Impl
+                    || item.doc_hidden
                 {
                     continue;
                 }
@@ -1380,6 +1391,9 @@ impl Analyzer {
                 }
             }
             for (module, target, name) in &reexports {
+                if items.get(target).is_some_and(|t| t.doc_hidden) {
+                    continue;
+                }
                 let Some(name) = name
                     .clone()
                     .or_else(|| items.get(target).map(|t| t.info.name.clone()))
@@ -1402,7 +1416,18 @@ impl Analyzer {
         }
         for (id, set) in paths {
             let mut list: Vec<String> = set.into_iter().collect();
-            list.sort_by_key(|p| (p.split("::").count(), p.clone()));
+            // Where rustdoc documents the item comes first: its definition
+            // path if that is public, else the shortest re-export.
+            let def_path = items
+                .get(&id)
+                .map(|i| format!("{}::{}", i.info.module, i.info.name));
+            list.sort_by_key(|p| {
+                (
+                    Some(p) != def_path.as_ref(),
+                    p.split("::").count(),
+                    p.clone(),
+                )
+            });
             mark_public(&id, &mut items);
             if let Some(item) = items.get_mut(&id) {
                 item.info.public_paths = list;
@@ -1918,12 +1943,22 @@ impl Analyzer {
         let mut children = self.children.get(&p.id).cloned().unwrap_or_default();
         children.dedup();
 
-        let name_pos = match &p.node {
-            Node::Item(Item::Fn(f)) => Some(f.sig.ident.span().start().into()),
-            Node::ImplFn(f) => Some(f.sig.ident.span().start().into()),
-            Node::TraitFn(f) => Some(f.sig.ident.span().start().into()),
+        let ident = match &p.node {
+            Node::Item(Item::Fn(f)) => Some(&f.sig.ident),
+            Node::Item(Item::Struct(s)) => Some(&s.ident),
+            Node::Item(Item::Enum(e)) => Some(&e.ident),
+            Node::Item(Item::Union(u)) => Some(&u.ident),
+            Node::Item(Item::Trait(t)) => Some(&t.ident),
+            Node::Item(Item::Type(t)) => Some(&t.ident),
+            Node::Item(Item::Const(c)) => Some(&c.ident),
+            Node::Item(Item::Static(s)) => Some(&s.ident),
+            Node::Item(Item::Macro(m)) => m.ident.as_ref(),
+            Node::ImplFn(f) => Some(&f.sig.ident),
+            Node::TraitFn(f) => Some(&f.sig.ident),
             _ => None,
         };
+        let name_pos = ident.map(|i| i.span().start().into());
+        let doc_hidden = is_doc_hidden(&attrs);
         let info = ItemInfo {
             id: p.id.clone(),
             kind,
@@ -1953,6 +1988,7 @@ impl Analyzer {
             source_refs,
             sig_links,
             sig_public_links,
+            reexport_of: None,
         };
         Some(ItemData {
             info,
@@ -1960,6 +1996,7 @@ impl Analyzer {
             body_norm,
             source,
             name_pos,
+            doc_hidden,
             call_sites: body_col.sites,
             ext_sites,
         })
@@ -1992,6 +2029,7 @@ fn reachable(
         None => true,
         Some(item) => {
             item.info.vis_scope.is_none()
+                && !item.doc_hidden
                 && match &item.info.vis_parent {
                     None => true,
                     Some(parent) => reachable(parent, items, memo),
@@ -2563,6 +2601,17 @@ fn is_ident(s: &str) -> bool {
     !s.is_empty()
         && s.chars().all(|c| c.is_alphanumeric() || c == '_')
         && !s.starts_with(|c: char| c.is_ascii_digit())
+}
+
+/// Whether the attributes include `#[doc(hidden)]`.
+pub fn is_doc_hidden(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        a.path().is_ident("doc")
+            && a.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|list| list.iter().any(|m| m.path().is_ident("hidden")))
+    })
 }
 
 /// Attributes rustdoc shows in a definition.

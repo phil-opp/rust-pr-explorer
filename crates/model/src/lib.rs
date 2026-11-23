@@ -190,6 +190,11 @@ pub struct ItemInfo {
     /// Like `sig_links`, for `sig_public`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub sig_public_links: Vec<u32>,
+    /// For an item of another crate that this crate re-exports: the path
+    /// of its definition, e.g. `serde_core::ser::Serialize`. Such an item
+    /// stands for the re-export; its `sig` is the `pub use`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reexport_of: Option<String>,
 }
 
 fn is_zero(n: &u32) -> bool {
