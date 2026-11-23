@@ -1214,6 +1214,7 @@ mod tests {
             externals: BTreeMap::new(),
             files: vec![file, covered],
             warnings: Vec::new(),
+            semver_checks: None,
         })
     }
 
@@ -1257,6 +1258,7 @@ mod tests {
             externals: BTreeMap::new(),
             files: Vec::new(),
             warnings: Vec::new(),
+            semver_checks: None,
         });
         let order: Vec<String> = units_in_order(&d).into_iter().map(|(id, _)| id).collect();
         assert_eq!(

@@ -40,7 +40,11 @@ impl Verdict {
         } else {
             return None;
         };
-        Some(ApiChange { level, reasons })
+        Some(ApiChange {
+            level,
+            reasons,
+            confirmed_by: Vec::new(),
+        })
     }
 }
 

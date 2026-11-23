@@ -27,6 +27,7 @@ crates/rust-pr-explorer  CLI: get sources, analyze, compare, write the page
   src/merge.rs           base/head comparison, moves
   src/moved.rs           lines moved between items (extracted helpers)
   src/semver.rs          breaking / non-breaking labels for API changes
+  src/semver_checks.rs   cargo-semver-checks findings, folded into the labels
   src/sigdiff.rs         structured signature diffs
   src/reformat.rs        source lines that were only rewrapped (token diff)
   src/files.rs           every changed file: line diffs, Cargo.toml entries
@@ -211,6 +212,18 @@ The chosen design is plain `web-sys`: views render HTML strings, and one listene
 
 The tool calls the `git` binary to clone, fetch pull request refs, compute merge bases, and create worktrees or archives. [`gix`](https://docs.rs/gix) could do this in-process, in Rust. It was not worth the extra dependency for a prototype; `git` is available wherever pull requests are reviewed.
 
+### cargo-semver-checks — implemented as an opt-in
+
+`--semver-checks` takes the rustdoc JSON step above in its most useful form: [cargo-semver-checks](https://github.com/obi1kenobi/cargo-semver-checks) builds rustdoc JSON for both versions and runs over 200 lints over it. Its findings complete the SemVer labels where the definitions can't decide: auto traits, derived and macro-generated impls, `cfg`-dependent items. The syntactic model still provides the items, bodies and call graph; cargo-semver-checks only adds findings to their labels.
+
+- **How it is called.** As the `cargo semver-checks` binary, not as a library: its library API reports only the required version bump, not the individual findings. It runs `check-release --workspace --baseline-root <base> --release-type patch` in the head checkout; the release type makes it report every finding, whatever the version numbers say. `--list` gives each lint's level (major → breaking, minor → non-breaking).
+- **Its output.** It has no machine-readable format. With `-vv` it prints each finding's values as JSON (the file and line it points at, the names involved, the item's path), after the human-readable message; `semver_checks.rs` reads those. A changed report format shows up as findings that match no item, not as wrong labels.
+- **Matching.** A finding goes to the item that starts closest before its line in its file (head file for most lints, base file for removals), if that item's name is one the finding names; else to the one item with its public path. Otherwise it is listed unmatched.
+- **Toolchain.** The rustdoc JSON format changes with the toolchain, and each cargo-semver-checks release supports a range of them. The action installs the latest release next to the latest stable toolchain, since a new release adds support for new toolchains; a mismatch is reported on the page, not as a failed run.
+- **Trust.** Building rustdoc JSON runs build scripts and procedural macros, so the flag is an opt-in of its own, like `--trust-project-code`. It doesn't imply that flag: rust-analyzer's trusted mode runs `cargo check` on the whole workspace with all features, which on this repository took 13 minutes more than the untrusted run (build scripts of every dependency, including C++ ones), while cargo-semver-checks added under a minute.
+- **Cost.** Both versions of each library and its dependencies are built for docs (no code generation). See the README's GitHub Action section for measurements.
+
 ## Next steps
 
-- Opt-in rustdoc JSON in trusted mode, for an exact public API.
+- Opt-in rustdoc JSON in trusted mode, for an exact public API (cargo-semver-checks already builds it, so its JSON could be reused).
+- Share the analyzed project's build between rust-analyzer's `cargo check` and cargo-semver-checks, and cache it across runs, to cut the cost of `--semver-checks`.

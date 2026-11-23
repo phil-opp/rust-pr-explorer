@@ -16,6 +16,7 @@ mod reformat;
 #[cfg(feature = "semantic")]
 mod semantic;
 mod semver;
+mod semver_checks;
 mod sigdiff;
 mod source;
 #[cfg(test)]
@@ -47,6 +48,14 @@ struct Cli {
     /// Only use this in a sandboxed environment: the PR's code gets executed.
     #[arg(long, global = true, env = "RUST_PR_EXPLORER_TRUST_PROJECT_CODE")]
     trust_project_code: bool,
+    /// Also run cargo-semver-checks on the two versions and add what it
+    /// finds to the SemVer labels. It builds both versions' rustdoc JSON,
+    /// which runs build scripts and procedural macros: like
+    /// `--trust-project-code`, only use this in a sandboxed environment.
+    /// rust-analyzer stays in its mode (much faster without
+    /// `--trust-project-code`).
+    #[arg(long, global = true)]
+    semver_checks: bool,
     /// With `--trust-project-code`: the cargo target directory for the
     /// build scripts and proc macros, shared by both versions (and the
     /// "since" one). Keep it between runs (e.g. in a CI cache) to only
@@ -133,7 +142,24 @@ fn main() -> Result<()> {
         trust,
         target_dir,
     };
-    let (output, since) = analyze_all(&checkout, &how);
+    let (mut output, since) = analyze_all(&checkout, &how);
+    if cli.semver_checks {
+        eprintln!("running cargo-semver-checks: build scripts and proc macros may run");
+        // Base and head: the page of the changes since an earlier commit
+        // keeps the definitions' labels.
+        semver_checks::run(&checkout.base_dir, &checkout.head_dir, &mut output);
+        if let Some(r) = &output.semver_checks {
+            match &r.error {
+                Some(e) => eprintln!("warning: {e}"),
+                None => eprintln!(
+                    "cargo-semver-checks {}: {} findings in {:.0} s",
+                    r.version,
+                    r.findings.len(),
+                    r.seconds
+                ),
+            }
+        }
+    }
     write_outputs(&output, &cli.out, cli.json.as_deref())?;
     match (&checkout.since, since) {
         (Some(source::Since::Changes(s)), Some(since)) => {
