@@ -2,7 +2,7 @@
 
 use crate::analyze::{Analysis, ItemData};
 use crate::semver;
-use model::{Changes, Item, Kind, Meta, Output, SourceLine, Status};
+use model::{Changes, Item, Kind, Meta, Output, SigDiff, SourceLine, Status};
 use similar::{ChangeTag, TextDiff};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -142,6 +142,22 @@ fn compare(ctx: &semver::Context, b: ItemData, h: ItemData, moved_from: Option<S
             crate::sigdiff::diff(h.info.kind, old, new, refs)
         })
         .flatten();
+    let (sig_diff, sig_diff_public) = {
+        let docs = (member_docs(&b.source), member_docs(&h.source));
+        let fill = |d: Option<SigDiff>| {
+            d.map(|mut d| {
+                for n in &mut d.notes {
+                    n.docs = n
+                        .member
+                        .as_ref()
+                        .and_then(|m| docs.1.get(m).or_else(|| docs.0.get(m)))
+                        .cloned();
+                }
+                d
+            })
+        };
+        (fill(sig_diff), fill(sig_diff_public))
+    };
     let api = semver::classify(
         ctx,
         Some(&b),
@@ -282,4 +298,29 @@ fn rewrite_module(norm: &str, old: &str, new: &str) -> String {
         return norm.to_string();
     }
     norm.replace(&format!("\"{old}::"), &format!("\"{new}::"))
+}
+
+/// The doc comments of a struct's or union's fields and of an enum's
+/// variants, by name (tuple fields by index). Only non-empty ones.
+fn member_docs(source: &str) -> HashMap<String, String> {
+    use crate::analyze::extract_docs;
+    let mut out = HashMap::new();
+    let fields = |fields: &syn::Fields, out: &mut HashMap<String, String>| {
+        for (i, f) in fields.iter().enumerate() {
+            let name = f.ident.as_ref().map_or(i.to_string(), |n| n.to_string());
+            out.insert(name, extract_docs(&f.attrs));
+        }
+    };
+    match syn::parse_str::<syn::Item>(source.trim()) {
+        Ok(syn::Item::Struct(s)) => fields(&s.fields, &mut out),
+        Ok(syn::Item::Union(u)) => fields(&syn::Fields::Named(u.fields), &mut out),
+        Ok(syn::Item::Enum(e)) => {
+            for v in &e.variants {
+                out.insert(v.ident.to_string(), extract_docs(&v.attrs));
+            }
+        }
+        _ => {}
+    }
+    out.retain(|_, d| !d.is_empty());
+    out
 }

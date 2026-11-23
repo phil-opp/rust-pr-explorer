@@ -125,6 +125,7 @@ Every item shows what rustdoc would show: its definition or signature (private f
   - Parameters, generic parameters, where-clauses, fields and variants are matched by name, so reordering or renaming one doesn't scramble the rest.
   - Types are compared as trees: `f64` → `Result<f64, Error>` shows one green box around the new wrapper, with the kept `f64` inside; unwrapping gets a dashed red box.
   - Under the signature, one note per change says what changed, e.g. "parameter `env: &Env` added" or "return type wrapped in `Result<_, Error>`". Hovering a part of a change, or its note, highlights everything that belongs to it.
+  - A note about an added, changed or removed field or variant shows its doc comment (for a removed one, the old one): the first paragraph, with the rest behind **More**.
   - Seen from outside the defining module, the public form of the definition is diffed, and a change to private fields only is noted as such. Signatures the analysis can't parse this way (traits, type aliases, …) fall back to a token-level diff.
 - **Normalized names**: paths are shortened to what a reader needs (`crate::ast::Expr` → `Expr`). Every name links to its item, and hovering a name shows its fully qualified path.
 - **Canvas awareness**: a name whose item is already on the canvas is highlighted, and hovering it outlines that card.
