@@ -241,7 +241,7 @@ pub(super) fn path_attr(attrs: &[Attribute]) -> Option<String> {
     })
 }
 
-pub(super) fn extract_docs(attrs: &[Attribute]) -> String {
+pub fn extract_docs(attrs: &[Attribute]) -> String {
     let mut lines = Vec::new();
     for a in attrs {
         if let syn::Meta::NameValue(nv) = &a.meta
