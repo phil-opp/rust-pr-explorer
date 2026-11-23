@@ -1070,13 +1070,14 @@ impl Data {
                 };
                 let mv = tag != ' ' && moved(tag, idx).is_some();
                 format!(
-                    r#"<span class="ln {class}{}" data-t="{}" data-no="{no}">{}{}</span>"#,
+                    r#"<span class="ln {class}{}" data-t="{}" data-no="{no}">{}{}{}</span>"#,
                     if mv { " mv" } else { "" },
                     if tag == ' ' {
                         String::new()
                     } else {
                         tag.to_string()
                     },
+                    crate::code::gutter(o.map(|a| old_start + a), n.map(|b| new_start + b), tag),
                     if mv {
                         moved_note(tag, idx)
                     } else {
@@ -1158,7 +1159,10 @@ impl Data {
             if split {
                 format!(r#"<div class="sbs">{body}</div>"#)
             } else {
-                format!("<pre>{body}</pre>")
+                format!(
+                    "<pre {}>{body}</pre>",
+                    crate::code::gutter_style((old_start + old.len()).max(new_start + new.len()))
+                )
             },
             if folded > 1 {
                 format!(
