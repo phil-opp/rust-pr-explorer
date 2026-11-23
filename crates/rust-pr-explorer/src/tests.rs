@@ -1018,6 +1018,56 @@ fn renamed_modules_keep_their_items() {
 }
 
 #[test]
+fn test_only_code_is_items() {
+    let lib = "pub struct S;\n\nimpl S {\n    pub fn real(&self) {}\n\n    #[cfg(test)]\n    pub fn helper(&self) {}\n}\n\n#[cfg(test)]\npub fn only() {}\n\n#[cfg(test)]\nimpl S {\n    pub fn fixture() -> S {\n        S\n    }\n}\n\n#[cfg(test)]\nmod tests {\n    pub fn util() {}\n\n    #[test]\n    fn works() {\n        super::S.real();\n    }\n}\n";
+    let dir = write_crate(&[
+        ("src/lib.rs", lib),
+        (
+            "tests/it.rs",
+            "#[test]\nfn outside() {\n    t::S.real();\n}\n",
+        ),
+    ]);
+    let an = Analyzer::run(dir.path(), &crate::source::find_crates(dir.path()));
+    let item = |id: &str| {
+        an.items
+            .get(id)
+            .unwrap_or_else(|| panic!("{id} in {:?}", an.items.keys()))
+    };
+    for id in ["t::S", "t::S::real"] {
+        assert!(!item(id).info.test_only, "{id}");
+        assert!(item(id).info.public, "{id}");
+    }
+    let test_only: Vec<&str> = an
+        .items
+        .values()
+        .filter(|i| i.info.test_only)
+        .map(|i| i.info.id.as_str())
+        .collect();
+    for name in ["helper", "only", "fixture", "tests", "util", "works"] {
+        assert!(
+            test_only
+                .iter()
+                .any(|id| id.ends_with(&format!("::{name}"))),
+            "{name} in {test_only:?}"
+        );
+    }
+    // Test-only code is never public, even if it is `pub`.
+    assert!(
+        an.items
+            .values()
+            .filter(|i| i.info.test_only)
+            .all(|i| !i.info.public)
+    );
+    // In an integration test, tests are the subject, not test-only code.
+    let outside = an
+        .items
+        .values()
+        .find(|i| i.info.name == "outside")
+        .unwrap();
+    assert!(!outside.info.test_only);
+}
+
+#[test]
 fn changes_outside_items_are_counted() {
     let base = write_crate(&[(
         "src/lib.rs",
@@ -1032,8 +1082,9 @@ fn changes_outside_items_are_counted() {
     let out = crate::analyze_checkout(&checkout, false, Trust::Untrusted);
     let lib = out.files.iter().find(|f| f.path == "src/lib.rs").unwrap();
     assert!(lib.analyzed);
-    // `thread_local!`, the extern block and the test are parts of their
-    // own; no other line changed. The change in `f` is inside an item.
+    // `thread_local!` and the extern block are parts of their own; no
+    // other line changed. The changes in `f` and in the test are inside
+    // items.
     assert_eq!(lib.outside_items, 0, "{:#?}", lib.hunks);
     let parts: Vec<(&str, &str)> = lib
         .parts
@@ -1042,13 +1093,9 @@ fn changes_outside_items_are_counted() {
         .collect();
     assert_eq!(
         parts,
-        [
-            ("thread_local!", "macro call"),
-            ("extern \"C\"", "extern"),
-            ("tests::t", "test"),
-        ]
+        [("thread_local!", "macro call"), ("extern \"C\"", "extern"),]
     );
-    assert_eq!(lib.parts[2].sig, "#[test]\nfn t()");
+    assert!(out.items["t::tests::t"].info.test_only);
     // Imports spread over several lines and attributes of module
     // declarations are not code outside items.
     let base = write_crate(&[(

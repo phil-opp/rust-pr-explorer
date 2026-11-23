@@ -224,6 +224,12 @@ pub fn refine(
         );
         describe_externals(&ra, &vfs, &root, &mut texts, analysis, &goto_config);
     }
+    // rust-analyzer sees the code behind `#[cfg(test)]` too; it is never
+    // part of the public API.
+    for item in analysis.items.values_mut().filter(|i| i.info.test_only) {
+        item.info.public = false;
+        item.info.public_paths.clear();
+    }
     // Re-exported items of other crates show their docs.
     for item in analysis.items.values_mut() {
         if let Some(ext) = item

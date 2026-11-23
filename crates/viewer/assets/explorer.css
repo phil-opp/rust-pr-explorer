@@ -163,6 +163,7 @@ code { font-size: .92em; }
 .st-changed { color: var(--changed); background: var(--changed-bg); }
 .st-unchanged { color: var(--muted); background: var(--bg-alt); }
 .st-cosmetic { color: var(--muted); background: transparent; border: 1px dashed var(--border); }
+.st-test { color: var(--muted); background: transparent; border: 1px solid var(--border); }
 .st-inner { color: var(--changed); background: transparent; border: 1px solid var(--changed-bg); }
 .vis { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; white-space: nowrap; }
 .vis.pub { color: var(--added); border-color: var(--added-bg); }
@@ -210,6 +211,7 @@ details.src.src-chg > summary b { color: var(--changed); }
 .cm { color: var(--comment); font-style: italic; }
 .attr { color: var(--muted); }
 .yk { color: var(--mod); }
+.jfn { color: var(--fn); }
 .expr { color: var(--type); }
 .ref { color: var(--link); border-radius: 2px; }
 .ref[data-kind="struct"], .ref[data-kind="enum"], .ref[data-kind="union"], .ref[data-kind="type_alias"] { color: var(--type); }
@@ -581,9 +583,30 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 .manifest tr.m-del .mf-name code { text-decoration: line-through; text-decoration-color: var(--removed); }
 .manifest .mf-old del { color: var(--muted); text-decoration-color: var(--removed); }
 .manifest .mf-old, .manifest .mf-new { padding-left: 24px; }
+/* Lock files: updates labeled by what changed in the version. */
+.lk-bump { font-size: 12px; color: var(--muted); }
+.lk-bump.lk-major, .lk-bump.lk-down { color: var(--changed); font-weight: 600; }
+.lock .note { font-size: 12px; }
+.lock .lk-warn { color: var(--changed); }
+.lock-all { margin-top: 8px; }
+.lock-all > summary { cursor: pointer; }
 .md-h { font-weight: 600; font-size: 15px; margin: 4px 0; }
 .md-removed .md-h { text-decoration: line-through; text-decoration-color: var(--removed); color: var(--muted); }
 .irow.member.part { margin-top: 8px; }
+/* CSS files: a box per selector, its properties as a table. */
+.sel { color: var(--type); }
+.title-name.css-sel { font-weight: 600; }
+.css-rules { font-size: 12px; margin-left: auto; }
+.irow > .css-ctx, .irow > .css-props, .irow > .css-more { grid-column: 1 / -1; }
+.css-ctx { font-size: 12.5px; color: var(--muted); margin: 2px 0 4px; }
+.css-props { margin-top: 4px; justify-self: start; }
+.css-props code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.css-props .css-ln { font-size: 12px; color: var(--muted); white-space: nowrap; padding-left: 16px; }
+.css-props tr.css-same td { opacity: .6; }
+.css-props tr.css-same td:first-child, .css-props tr.css-noop td:first-child { padding-left: 11px; }
+.css-props tr.css-noop .note { font-size: 12px; margin-top: 2px; }
+.css-more { margin-top: 4px; font-size: 13px; }
+.css-more > summary { cursor: pointer; color: var(--muted); }
 .ientry > .ihead { display: flex; align-items: center; gap: 8px; }
 #panic { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; background: var(--removed); color: #fff; padding: 10px 16px; font-size: 14px; }
 

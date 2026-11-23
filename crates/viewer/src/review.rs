@@ -88,6 +88,9 @@ struct Review {
     /// Everything that can be marked, in reading order: Rust items by
     /// module (as the sidebar lists them) and position, then other files.
     units: Vec<String>,
+    /// The same units in the order that **Next** goes through them: along
+    /// the calls (see [`call_order`]).
+    order: Vec<String>,
     /// Hash of each unit's diff.
     prints: HashMap<String, u64>,
     /// Saved marks: unit → hash of its diff when it was marked.
@@ -368,13 +371,7 @@ fn units_in_order(d: &Data) -> Vec<(String, u64)> {
             continue;
         }
         if let Some(list) = by_module.get_mut(m) {
-            list.sort_by(|a, b| {
-                (&a.info.file, a.info.line, &a.info.id).cmp(&(
-                    &b.info.file,
-                    b.info.line,
-                    &b.info.id,
-                ))
-            });
+            list.sort_by(|a, b| d.reading_order(a, b));
             out.extend(list.iter().map(|it| (it.info.id.clone(), item_print(it))));
         }
     }
@@ -386,6 +383,104 @@ fn units_in_order(d: &Data) -> Vec<(String, u64)> {
             .map(|f| (file_unit(&f.path), file_print(f))),
     );
     out
+}
+
+/// The units in review order, for going through a change top-down: each
+/// changed item that no other changed item calls, in reading order, and
+/// after each one the changed items it calls, depth-first, in the order of
+/// their first call in its body. A call through unchanged items counts as
+/// a call too (`parse` calls the unchanged `parse_expr`, which calls the
+/// changed `parse_factor`: `parse_factor` comes after `parse`). An item
+/// that is reached again is not repeated. Items that only call each other
+/// (a cycle no other changed item calls into) start from the first of
+/// them in reading order. Files stay last.
+///
+/// Calls of removed items don't count: a removed function no longer calls
+/// anything, so the items it called are reached from their callers in the
+/// PR's version.
+fn call_order(d: &Data, units: &[(String, u64)]) -> Vec<String> {
+    let index: HashMap<&str, usize> = units
+        .iter()
+        .enumerate()
+        .map(|(i, (id, _))| (id.as_str(), i))
+        .collect();
+    // Changed callees of each unit, in the order of their first call.
+    let callees: Vec<Vec<usize>> = units
+        .iter()
+        .map(|(id, _)| {
+            let me = index[id.as_str()];
+            let mut list = Vec::new();
+            // Unchanged items passed through, so that each is expanded once.
+            let mut through = HashSet::new();
+            let mut stack: Vec<&str> = calls_in_order(d, id);
+            stack.reverse();
+            while let Some(to) = stack.pop() {
+                match index.get(to) {
+                    Some(&i) if i != me && !list.contains(&i) => list.push(i),
+                    Some(_) => {}
+                    None if through.insert(to) => {
+                        stack.extend(calls_in_order(d, to).into_iter().rev());
+                    }
+                    None => {}
+                }
+            }
+            list
+        })
+        .collect();
+    let mut called = vec![false; units.len()];
+    for list in &callees {
+        for &i in list {
+            called[i] = true;
+        }
+    }
+    let mut seen = vec![false; units.len()];
+    let mut out = Vec::with_capacity(units.len());
+    let mut visit = |start: usize| {
+        // Depth-first, preorder; the stack holds callees in reverse so
+        // that the first call is visited first.
+        let mut stack = vec![start];
+        while let Some(i) = stack.pop() {
+            if std::mem::replace(&mut seen[i], true) {
+                continue;
+            }
+            out.push(units[i].0.clone());
+            stack.extend(callees[i].iter().rev().filter(|&&c| !seen[c]));
+        }
+    };
+    let is_file = |i: usize| units[i].0.starts_with("file:");
+    for i in (0..units.len()).filter(|&i| !called[i] && !is_file(i)) {
+        visit(i);
+    }
+    for i in (0..units.len()).filter(|&i| !is_file(i)) {
+        visit(i);
+    }
+    for i in (0..units.len()).filter(|&i| is_file(i)) {
+        visit(i);
+    }
+    out
+}
+
+/// What an item calls, in the order of the first call in its body (as
+/// far as the positions of names tell; else by id). Nothing for removed
+/// items.
+fn calls_in_order<'a>(d: &'a Data, id: &str) -> Vec<&'a str> {
+    let Some(it) = d.item(id).filter(|it| it.status != Status::Removed) else {
+        return Vec::new();
+    };
+    // Where each callee is first named in the body.
+    let mut first: HashMap<&str, (usize, usize)> = HashMap::new();
+    for (at, r) in &it.info.source_refs {
+        let Some(to) = r.id.as_deref() else {
+            continue;
+        };
+        let (l, c) = at.split_once(':').unwrap_or((at, "0"));
+        let pos = (l.parse().unwrap_or(usize::MAX), c.parse().unwrap_or(0));
+        let e = first.entry(to).or_insert(pos);
+        *e = (*e).min(pos);
+    }
+    let mut list: Vec<&str> = it.info.calls.iter().map(|c| c.to.as_str()).collect();
+    list.sort_by_key(|to| (first.get(to).copied().unwrap_or((usize::MAX, 0)), *to));
+    list
 }
 
 /// The hunks of the units, and the prints of units and hunks. A hunk's id
@@ -450,12 +545,14 @@ pub fn load(d: &Data) {
         .and_then(|s| s.get_item(MODE_KEY).ok().flatten())
         .is_some_and(|v| v == "on");
     let (hunks, prints) = hunks_and_prints(d, &units);
+    let order = call_order(d, &units);
     REVIEW.with(|r| {
         *r.borrow_mut() = Review {
             on,
             key,
             prints,
             units: units.into_iter().map(|(id, _)| id).collect(),
+            order,
             marks,
             versions,
             notes,
@@ -638,15 +735,15 @@ pub fn open_count<'a>(ids: impl IntoIterator<Item = &'a str>) -> usize {
         .count()
 }
 
-/// The first unit after `after` (or from the start) that still needs a
-/// review, wrapping around.
+/// The first unit after `after` (or from the start) in review order (see
+/// [`call_order`]) that still needs a review, wrapping around.
 pub fn next_open(after: Option<&str>) -> Option<String> {
     next_open_where(after, |_| true)
 }
 
 /// Like [`next_open`], among the units that `keep` accepts.
 pub fn next_open_where(after: Option<&str>, keep: impl Fn(&str) -> bool) -> Option<String> {
-    let units = REVIEW.with(|r| r.borrow().units.clone());
+    let units = REVIEW.with(|r| r.borrow().order.clone());
     let start = after
         .and_then(|a| units.iter().position(|u| u == a))
         .map_or(0, |i| i + 1);
@@ -952,15 +1049,71 @@ mod tests {
         })
     }
 
+    #[test]
+    fn types_come_before_their_impls_and_methods() {
+        // In the file, the impl and its method come first; a free function
+        // sits between them and the type.
+        let mut imp = item(
+            "c::<impl Display for S>",
+            Kind::Impl,
+            "c",
+            "src/lib.rs",
+            2,
+            Status::Added,
+        );
+        imp.info.self_ty = Some("c::S".into());
+        let mut method = item(
+            "c::S::new",
+            Kind::Method,
+            "c",
+            "src/lib.rs",
+            8,
+            Status::Changed,
+        );
+        method.info.self_ty = Some("c::S".into());
+        let items = [
+            item("c", Kind::Mod, "c", "src/lib.rs", 1, Status::Changed),
+            imp,
+            method,
+            item("c::free", Kind::Fn, "c", "src/lib.rs", 12, Status::Changed),
+            item("c::S", Kind::Struct, "c", "src/lib.rs", 20, Status::Changed),
+            item("c::last", Kind::Fn, "c", "src/lib.rs", 30, Status::Changed),
+        ];
+        let d = Data::new(Output {
+            meta: Meta::default(),
+            crates: vec!["c".into()],
+            items: items
+                .into_iter()
+                .map(|it| (it.info.id.clone(), it))
+                .collect(),
+            externals: BTreeMap::new(),
+            files: Vec::new(),
+            warnings: Vec::new(),
+        });
+        let order: Vec<String> = units_in_order(&d).into_iter().map(|(id, _)| id).collect();
+        assert_eq!(
+            order,
+            [
+                "c::free",
+                "c::S",
+                "c::<impl Display for S>",
+                "c::S::new",
+                "c::last"
+            ]
+        );
+    }
+
     fn set(d: &Data, marks: &[(&str, u64)]) {
         let units = units_in_order(d);
         let (hunks, prints) = hunks_and_prints(d, &units);
+        let order = call_order(d, &units);
         REVIEW.with(|r| {
             *r.borrow_mut() = Review {
                 on: true,
                 key: String::new(),
                 prints,
                 units: units.into_iter().map(|(id, _)| id).collect(),
+                order,
                 marks: marks.iter().map(|(id, h)| (id.to_string(), *h)).collect(),
                 versions: BTreeMap::new(),
                 notes: BTreeMap::new(),
@@ -990,6 +1143,75 @@ mod tests {
                 "c::gone::f",
                 // Files outside the analysis; analyzed ones are covered by
                 // their items.
+                "file:README.md",
+            ]
+        );
+    }
+
+    /// Makes `from` call `to`, first named at `at` (`line:column`).
+    fn call(out: &mut Output, from: &str, to: &str, at: &str) {
+        let info = &mut out.items.get_mut(from).unwrap().info;
+        info.calls.insert(model::Call { to: to.into() });
+        info.source_refs.insert(
+            at.into(),
+            model::Ref {
+                id: Some(to.into()),
+                path: to.into(),
+            },
+        );
+    }
+
+    fn order_of(d: &Data) -> Vec<String> {
+        call_order(d, &units_in_order(d))
+    }
+
+    #[test]
+    fn review_order_follows_the_calls() {
+        let mut out = data().out;
+        // `root_fn` calls `new_fn` on line 10, and before that, on line 9,
+        // the unchanged `same`, which calls `late` (lines compare as
+        // numbers: as text, "10" would come first).
+        call(&mut out, "c::root_fn", "c::a::new_fn", "10:30");
+        call(&mut out, "c::root_fn", "c::a::same", "9:4");
+        call(&mut out, "c::a::same", "c::b::late", "6:4");
+        // `late` calls `new_fn` too: it is reached once, under `late`.
+        call(&mut out, "c::b::late", "c::a::new_fn", "21:8");
+        // Calls of a removed item don't count.
+        call(&mut out, "c::b::early", "c::gone::f", "4:4");
+        let d = Data::new(out);
+        assert_eq!(
+            order_of(&d),
+            [
+                "c::root_fn",
+                "c::b::late",
+                "c::a::new_fn",
+                "c::b::early",
+                "c::gone::f",
+                "file:README.md",
+            ]
+        );
+        set(&d, &[]);
+        assert_eq!(next_open(Some("c::root_fn")).as_deref(), Some("c::b::late"));
+        // The summary of **Finish review** keeps reading order.
+        let units = REVIEW.with(|r| r.borrow().units.clone());
+        assert_eq!(units[1], "c::a::new_fn");
+    }
+
+    #[test]
+    fn items_that_only_call_each_other_start_from_the_first() {
+        let mut out = data().out;
+        call(&mut out, "c::b::late", "c::a::new_fn", "21:8");
+        call(&mut out, "c::a::new_fn", "c::b::late", "3:4");
+        let d = Data::new(out);
+        assert_eq!(
+            order_of(&d),
+            [
+                "c::root_fn",
+                "c::b::early",
+                "c::gone::f",
+                // The cycle, from its first item in reading order.
+                "c::a::new_fn",
+                "c::b::late",
                 "file:README.md",
             ]
         );
