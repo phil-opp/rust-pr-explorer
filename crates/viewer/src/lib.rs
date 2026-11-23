@@ -11,6 +11,7 @@ mod data;
 mod dom;
 mod files;
 mod js;
+mod keys;
 mod map;
 mod nav;
 mod pages;
@@ -73,6 +74,9 @@ pub struct State {
     /// The unit last shown by "next unreviewed", where the next search
     /// continues.
     rv_current: Option<String>,
+    /// The hunk of `rv_current` that `j` and `k` last moved to, which the
+    /// verdict keys then act on.
+    rv_hunk: Option<String>,
 }
 
 pub struct App {
@@ -133,6 +137,7 @@ pub fn start() {
             search: Vec::new(),
             search_sel: 0,
             rv_current: None,
+            rv_hunk: None,
         },
         d,
     };
@@ -215,6 +220,13 @@ pub fn open_modal(title: &str, body: &str) {
 pub fn close_modal() {
     if let Some(m) = dom::by_id("modal") {
         dom::toggle_class(&m, "hidden", true);
+        // Keys go to the page again, not to the hidden comment field.
+        if let Some(f) = dom::document().active_element()
+            && m.contains(Some(&f))
+            && let Some(f) = f.dyn_ref::<web_sys::HtmlElement>()
+        {
+            let _ = f.blur();
+        }
     }
 }
 
@@ -338,18 +350,11 @@ fn install_listeners() {
     });
     // Not passive: Ctrl+Enter in the comment editor prevents the newline.
     dom::listen_with(&doc, "keydown", false, false, |ev| {
-        // `n`: the next unreviewed item, in review mode, unless typing.
+        // Review keys (`n`, `a`, `j`, `?`, …), unless typing.
         if let Some(k) = ev.dyn_ref::<KeyboardEvent>()
-            && k.key() == "n"
-            && !(k.ctrl_key() || k.meta_key() || k.alt_key())
-            && review::is_on()
-            && !dom::target_element(&ev)
-                .is_some_and(|t| matches!(t.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT"))
+            && with_app(|app| keys::on_key(app, k)) == Some(true)
         {
-            with_app(|app| {
-                let from = app.s.rv_current.clone();
-                go_next(app, from, false);
-            });
+            ev.prevent_default();
             return;
         }
         // Ctrl+Enter in the comment editor saves with its verdict.
@@ -565,6 +570,10 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
         pages::render_sidebar(app);
         return true;
     }
+    if dom::closest(el, "#rv-keys").is_some() {
+        open_modal("Keyboard shortcuts", &keys::cheat_sheet_html());
+        return true;
+    }
     if dom::closest(el, "#rv-next").is_some() {
         let from = app.s.rv_current.clone();
         go_next(app, from, false);
@@ -595,7 +604,8 @@ fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String)
     review::set_mark(&app.d, id, Some(review::Note { verdict, text }));
     if let Some(item) = review::hunk_item(id) {
         app.s.rv_current = Some(item.clone());
-        if let Some(next) = review::next_open_hunk(id) {
+        app.s.rv_hunk = review::next_open_hunk(id);
+        if let Some(next) = app.s.rv_hunk.clone() {
             // The canvas doesn't scroll like a page; the hunk is in its card.
             if app.s.view != View::Canvas {
                 reveal_unit(&format!("view-{}", app.s.view.name()), &next);
@@ -790,6 +800,7 @@ fn go_next(app: &mut App, from: Option<String>, stay: bool) {
             Some(next) => {
                 if let Some(c) = control(&next) {
                     app.s.rv_current = Some(next);
+                    app.s.rv_hunk = None;
                     reveal(&c);
                 }
             }
@@ -813,28 +824,38 @@ fn go_next(app: &mut App, from: Option<String>, stay: bool) {
         toast(&all_reviewed());
         return;
     };
-    app.s.rv_current = Some(next.clone());
-    if let Some(c) = control(&next) {
-        reveal(&c);
+    show_unit(app, &next, from.as_deref());
+}
+
+/// Makes `unit` the current unit and shows it: on the overview or module
+/// page that is open if it is listed there, else on its module's page (a
+/// file on the overview), or as a card next to `from` when the canvas is
+/// open.
+fn show_unit(app: &mut App, unit: &str, from: Option<&str>) {
+    app.s.rv_current = Some(unit.to_string());
+    app.s.rv_hunk = None;
+    if matches!(app.s.view, View::Overview | View::Module)
+        && reveal_unit(&format!("view-{}", app.s.view.name()), unit)
+    {
         return;
     }
-    if next.starts_with("file:") {
+    if unit.starts_with("file:") {
         set_view(app, View::Overview);
-        reveal_unit("view-overview", &next);
+        reveal_unit("view-overview", unit);
         return;
     }
     if app.s.view == View::Canvas {
-        canvas::open_for_review(app, &next, from.as_deref());
+        canvas::open_for_review(app, unit, from);
         return;
     }
-    let Some(module) = app.d.item(&next).map(|it| app.d.mod_of(it).to_string()) else {
+    let Some(module) = app.d.item(unit).map(|it| app.d.mod_of(it).to_string()) else {
         return;
     };
     app.s.module = module;
     set_view(app, View::Module);
-    if !reveal_unit("view-module", &next) {
+    if !reveal_unit("view-module", unit) {
         // Not listed on a page (shouldn't happen): the canvas shows anything.
-        canvas::open(app, &next, None, true);
+        canvas::open(app, unit, None, true);
     }
 }
 
