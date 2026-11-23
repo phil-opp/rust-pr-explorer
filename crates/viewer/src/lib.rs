@@ -596,7 +596,7 @@ fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String)
             review::set_mark(&app.d, &item, Some(note));
         }
         pages::render_sidebar(app);
-        go_next(app, Some(item));
+        go_next(app, Some(item), true);
         return;
     }
     pages::render_sidebar(app);
