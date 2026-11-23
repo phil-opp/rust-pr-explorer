@@ -231,6 +231,7 @@ mod tests {
             externals: BTreeMap::new(),
             files: Vec::new(),
             warnings: Vec::new(),
+            semver_checks: None,
         })
     }
 
