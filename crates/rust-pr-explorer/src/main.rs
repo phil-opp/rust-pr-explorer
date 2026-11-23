@@ -8,6 +8,7 @@ mod public_api;
 mod python;
 #[cfg(feature = "semantic")]
 mod semantic;
+mod semver;
 mod sigdiff;
 mod source;
 #[cfg(test)]

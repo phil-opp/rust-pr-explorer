@@ -186,7 +186,7 @@ fn spans_html(
 }
 
 /// Text of a diff note: backticks become code.
-fn note_html(text: &str) -> String {
+pub fn note_html(text: &str) -> String {
     let mut out = String::new();
     for (i, part) in text.split('`').enumerate() {
         if i % 2 == 1 {

@@ -1134,3 +1134,18 @@ fn doc_hidden_is_not_public_api() {
     assert!(info("t::S::m").public);
     assert!(!info("t::S::h").public);
 }
+
+#[test]
+fn semver_labels_in_demo() {
+    use model::ApiLevel;
+    let out = demo();
+    let level = |id: &str| out.items[id].api.as_ref().map(|a| a.level);
+    // New variants of an exhaustive enum, a new parameter, a lost path.
+    assert_eq!(level("tinycalc::Error"), Some(ApiLevel::Breaking));
+    assert_eq!(level("tinycalc::eval::evaluate"), Some(ApiLevel::Breaking));
+    assert_eq!(level("tinycalc::parser::Parser"), Some(ApiLevel::Breaking));
+    assert_eq!(level("tinycalc::ast::Op"), Some(ApiLevel::Compatible));
+    assert_eq!(level("tinycalc::env::Env"), Some(ApiLevel::Compatible));
+    // Not public: no label.
+    assert_eq!(level("tinycalc::eval::apply"), None);
+}
