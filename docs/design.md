@@ -28,6 +28,7 @@ crates/rust-pr-explorer  CLI: get sources, analyze, compare, write the page
   src/moved.rs           lines moved between items (extracted helpers)
   src/semver.rs          breaking / non-breaking labels for API changes
   src/sigdiff.rs         structured signature diffs
+  src/reformat.rs        source lines that were only rewrapped (token diff)
   src/files.rs           every changed file: line diffs, Cargo.toml entries
   src/lockfile.rs        lock files (Cargo.lock, uv.lock, poetry.lock) by package
   src/parts.rs           files split into parts compared one by one: YAML keys,
