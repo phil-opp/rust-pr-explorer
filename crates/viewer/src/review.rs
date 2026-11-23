@@ -141,13 +141,34 @@ pub fn hunks(it: &Item) -> Vec<Hunk> {
     if it.status != Status::Changed {
         return Vec::new();
     }
-    let (mut o, mut n) = (it.old_line.unwrap_or(it.info.line), it.info.line);
+    let (o0, n0) = (it.old_line.unwrap_or(it.info.line), it.info.line);
+    let (mut o, mut n) = (o0, n0);
+    // Lines that were only reformatted are not changes to review, whether
+    // or not the source view hides them.
+    let rf = |side_old: bool, line: usize| {
+        it.reformatted.iter().any(|g| {
+            let (start, len, i) = if side_old {
+                (g.old, g.old_len, line - o0)
+            } else {
+                (g.new, g.new_len, line - n0)
+            };
+            (start as usize..(start + len) as usize).contains(&i)
+        })
+    };
     // Per hunk: its changed lines as text, and the hunk.
     let mut out: Vec<(String, Hunk)> = Vec::new();
     // Unchanged lines since the last change; a hunk starts after enough.
     let mut run = usize::MAX;
     for l in &it.source {
         let added = match l.0 {
+            '+' if rf(false, n) => {
+                n += 1;
+                continue;
+            }
+            '-' if rf(true, o) => {
+                o += 1;
+                continue;
+            }
             '+' => true,
             '-' => false,
             _ => {

@@ -152,6 +152,24 @@ fn rewritten_items_with_the_same_name_are_not_a_move() {
 }
 
 #[test]
+fn rewrapped_lines_are_found_in_the_demo() {
+    let out = demo();
+    // `Ok(Parser { tokens: …, pos: 0 })` was rewrapped onto four lines.
+    let new = &out.items["tinycalc::parser::Parser::new"];
+    assert_eq!(
+        new.reformatted,
+        [model::Reformatted {
+            old: 2,
+            old_len: 1,
+            new: 2,
+            new_len: 4,
+        }]
+    );
+    // Items without a rewrap have none.
+    assert!(out.items["tinycalc::calc"].reformatted.is_empty());
+}
+
+#[test]
 fn calls_and_uses() {
     let out = demo();
     let calc = &out.items["tinycalc::calc"].info;

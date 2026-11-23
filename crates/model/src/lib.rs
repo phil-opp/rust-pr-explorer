@@ -296,6 +296,17 @@ pub struct SigDiff {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SourceLine(pub char, pub String);
 
+/// Lines of an item's base version (`old`, `old_len`) that its head
+/// version has, only reformatted, at `new`, `new_len`. Lines are counted in
+/// each version's lines: `source` without the lines of the other side.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reformatted {
+    pub old: u32,
+    pub old_len: u32,
+    pub new: u32,
+    pub new_len: u32,
+}
+
 /// An item as compared between base and head.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Item {
@@ -330,6 +341,10 @@ pub struct Item {
     /// item, `info` is the base version and has them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub old_source_refs: BTreeMap<String, Ref>,
+    /// Lines of `source` that were only reformatted (rewrapped, as rustfmt
+    /// does): the same tokens apart from trailing commas.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reformatted: Vec<Reformatted>,
     /// How the item's public API changed, if it is public on either side
     /// and its API changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]

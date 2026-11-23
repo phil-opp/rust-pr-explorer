@@ -2,7 +2,8 @@
 
 use crate::code::{Seg, esc, marked_html};
 use model::{ApiLevel, External, Item, ItemInfo, Kind, Output, Status, UseCtx};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ops::Range;
 
 /// Body diffs with up to this many changed lines start open.
 pub const SMALL_BODY: usize = 20;
@@ -805,39 +806,85 @@ impl Data {
         // Changed lines that pair up (the first old one with the first new
         // one, and so on), to have their changed words marked.
         let mut pairs: Vec<(usize, usize)> = Vec::new();
-        for op in capture_diff_slices(Algorithm::Myers, &ok, &nk) {
-            let (o, n) = (op.old_range(), op.new_range());
-            if let DiffOp::Replace { .. } = op {
-                pairs.extend(o.clone().zip(n.clone()));
-            }
-            match op {
-                DiffOp::Equal { .. } => rows.extend(o.zip(n).map(|(a, b)| (Some(a), Some(b)))),
-                DiffOp::Replace { .. } if split => {
-                    let len = o.len().max(n.len());
-                    rows.extend((0..len).map(|k| {
-                        (
-                            (k < o.len()).then(|| o.start + k),
-                            (k < n.len()).then(|| n.start + k),
-                        )
-                    }));
+        // Lines that were only reformatted (see `Item::reformatted`): their
+        // groups are shown as unchanged, the lines between them are diffed.
+        let mut rf_old: HashSet<usize> = HashSet::new();
+        let mut rf_new: HashSet<usize> = HashSet::new();
+        let mut segments: Vec<(Range<usize>, Range<usize>, bool)> = Vec::new();
+        let (mut po, mut pn) = (0, 0);
+        if opts.reformat && matches!(it.status, Status::Changed | Status::Unchanged) {
+            for g in &it.reformatted {
+                let o = g.old as usize..(g.old + g.old_len) as usize;
+                let n = g.new as usize..(g.new + g.new_len) as usize;
+                if o.start < po || n.start < pn || o.end > old.len() || n.end > new.len() {
+                    continue;
                 }
-                _ => {
-                    rows.extend(o.map(|a| (Some(a), None)));
-                    rows.extend(n.map(|b| (None, Some(b))));
+                segments.push((po..o.start, pn..n.start, false));
+                (po, pn) = (o.end, n.end);
+                rf_old.extend(o.clone());
+                rf_new.extend(n.clone());
+                segments.push((o, n, true));
+            }
+        }
+        segments.push((po..old.len(), pn..new.len(), false));
+        for (so, sn, reformatted) in segments {
+            if reformatted {
+                // Inline, only the new version; side by side, both.
+                let len = if split {
+                    so.len().max(sn.len())
+                } else {
+                    sn.len()
+                };
+                rows.extend((0..len).map(|k| {
+                    (
+                        (split && k < so.len()).then(|| so.start + k),
+                        (k < sn.len()).then(|| sn.start + k),
+                    )
+                }));
+                continue;
+            }
+            for op in capture_diff_slices(Algorithm::Myers, &ok[so.clone()], &nk[sn.clone()]) {
+                let o = op.old_range().start + so.start..op.old_range().end + so.start;
+                let n = op.new_range().start + sn.start..op.new_range().end + sn.start;
+                if let DiffOp::Replace { .. } = op {
+                    pairs.extend(o.clone().zip(n.clone()));
+                }
+                match op {
+                    DiffOp::Equal { .. } => rows.extend(o.zip(n).map(|(a, b)| (Some(a), Some(b)))),
+                    DiffOp::Replace { .. } if split => {
+                        let len = o.len().max(n.len());
+                        rows.extend((0..len).map(|k| {
+                            (
+                                (k < o.len()).then(|| o.start + k),
+                                (k < n.len()).then(|| n.start + k),
+                            )
+                        }));
+                    }
+                    _ => {
+                        rows.extend(o.map(|a| (Some(a), None)));
+                        rows.extend(n.map(|b| (None, Some(b))));
+                    }
                 }
             }
         }
+        // A row of reformatted lines.
+        let rf_row = |&(o, n): &(Option<usize>, Option<usize>)| {
+            (o.is_some() || n.is_some())
+                && o.is_none_or(|a| rf_old.contains(&a))
+                && n.is_none_or(|b| rf_new.contains(&b))
+        };
+        let changed_row = |r: &(Option<usize>, Option<usize>)| match *r {
+            _ if rf_row(r) => false,
+            (Some(a), Some(b)) => ok[a] != nk[b],
+            _ => true,
+        };
         let added = rows
             .iter()
-            .filter(|r| {
-                r.1.is_some() && (r.0.is_none() || split && ok[r.0.unwrap()] != nk[r.1.unwrap()])
-            })
+            .filter(|r| r.1.is_some() && (r.0.is_none() || split) && changed_row(r))
             .count();
         let removed = rows
             .iter()
-            .filter(|r| {
-                r.0.is_some() && (r.1.is_none() || split && ok[r.0.unwrap()] != nk[r.1.unwrap()])
-            })
+            .filter(|r| r.0.is_some() && (r.1.is_none() || split) && changed_row(r))
             .count();
         // Line numbers in the files the two versions come from.
         let (old_start, new_start) = match it.status {
@@ -893,15 +940,12 @@ impl Data {
                 .unwrap_or_else(|| code_html(self, old[o], old_links(o)))
         };
         let nonempty = |s: String| if s.is_empty() { " ".to_string() } else { s };
-        let changed_row = |&(o, n): &(Option<usize>, Option<usize>)| match (o, n) {
-            (Some(a), Some(b)) => ok[a] != nk[b],
-            _ => true,
-        };
         // One row of the diff.
         let row_html = |r: usize| -> String {
             let (o, n) = rows[r];
             if split {
-                let same = matches!((o, n), (Some(a), Some(b)) if ok[a] == nk[b]);
+                let same = !changed_row(&(o, n));
+                let rf = rf_row(&(o, n));
                 let cell = |idx: Option<usize>,
                             start: usize,
                             class: &str,
@@ -910,7 +954,13 @@ impl Data {
                     Some(i) => format!(
                         r#"<span class="no {side}">{}</span><span class="ln {}" data-t="{}">{}</span>"#,
                         start + i,
-                        if same { "" } else { class },
+                        if rf {
+                            "rf"
+                        } else if same {
+                            ""
+                        } else {
+                            class
+                        },
                         if same {
                             ""
                         } else if class.starts_with("del") {
@@ -929,6 +979,9 @@ impl Data {
             } else {
                 let (class, tag, no, code) = match (o, n) {
                     (_, Some(b)) if o.is_some() => ("", ' ', new_start + b, new_code(b)),
+                    (None, Some(b)) if rf_new.contains(&b) => {
+                        ("rf", ' ', new_start + b, new_code(b))
+                    }
                     (None, Some(b)) => ("add", '+', new_start + b, new_code(b)),
                     (Some(a), _) => ("del", '-', old_start + a, old_code(a)),
                     (None, None) => unreachable!(),
@@ -1038,10 +1091,12 @@ impl Data {
         let open = open.unwrap_or(small);
         let stats = format!(
             r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>{}"#,
-            if opts.ignore_ws {
-                r#" <span class="dim">(whitespace hidden)</span>"#
-            } else {
-                ""
+            // A formatting-only item says so below.
+            match (opts.ignore_ws, !rf_new.is_empty() && !it.changes.cosmetic) {
+                (true, true) => r#" <span class="dim">(whitespace and reformatting hidden)</span>"#,
+                (true, false) => r#" <span class="dim">(whitespace hidden)</span>"#,
+                (false, true) => r#" <span class="dim">(reformatting hidden)</span>"#,
+                (false, false) => "",
             }
         );
         let where_ = format!("{}:{}", esc(&it.info.file), it.info.line);
