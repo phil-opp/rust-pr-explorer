@@ -47,7 +47,11 @@ The repository is also a GitHub Action that builds the page for every pull reque
 ```yaml
 # .github/workflows/pr-explorer.yml
 name: PR Explorer
-on: pull_request
+on:
+  pull_request:
+  # Optional, to fill the build cache that new pull requests start from.
+  push:
+    branches: [main]
 permissions:
   contents: read
   pull-requests: write
@@ -58,7 +62,9 @@ jobs:
       - uses: phil-opp/diff-viewer@main
 ```
 
-The action builds the tool (cached after the first run), runs `pr` on the pull request and uploads the page as a workflow artifact. The artifact is a single unzipped HTML file, so the link opens the page directly in the browser. The comment is posted once and updated on every push, with a one-line summary of the changed items. The link is also in the job summary.
+The action builds the tool, runs `pr` on the pull request and uploads the page as a workflow artifact. The artifact is a single unzipped HTML file, so the link opens the page directly in the browser. The comment is posted once and updated on every push, with a one-line summary of the changed items. The link is also in the job summary.
+
+Build time: the built tool is cached under a hash of its sources, so once a run has built it, later runs skip the build (in a repository that only uses the action, that is every run after the first). The build's dependencies, mainly rust-analyzer, are cached on the default branch, the only branch whose caches every pull request can read, so the `push` trigger above keeps new pull requests from building them from scratch (about 5 minutes). On a push, the action only builds and caches the tool. The tool is built with the `action` profile (see `Cargo.toml`): dependencies optimized, the tool's own crates not, which builds faster than `--release` and analyzes as fast.
 
 Who can open the page: anyone logged in to GitHub with access to the repository, the same people who can see the workflow run. It expires with the run's artifacts (90 days unless the repository sets otherwise, or the `retention-days` input).
 
