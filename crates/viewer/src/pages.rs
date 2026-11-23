@@ -486,6 +486,9 @@ pub fn render_overview(app: &App) {
             .or_default()
             .push(it);
     }
+    for list in internal.values_mut() {
+        list.sort_by(|a, b| d.reading_order(a, b));
+    }
     let internal_html: String = internal
         .iter()
         .map(|(m, list)| {
