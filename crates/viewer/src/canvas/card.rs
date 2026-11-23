@@ -4,7 +4,7 @@ use super::{Canvas, Group};
 use crate::code::{Links, code_html, docs_html, esc};
 use crate::data::{Data, changed, kind_order};
 use model::{Item, Kind, Status, UseCtx};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 fn hidden_note(d: &Data, scope: &str, list: &[String], label: &str) -> String {
     let hidden: Vec<&String> = list
@@ -121,7 +121,12 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
             it,
             scope,
             true,
-            d.source_seg(it, g.open_src.contains(id), true),
+            d.source_seg(
+                it,
+                g.open_src.contains(id),
+                true,
+                g.unfolded.get(id).unwrap_or(&BTreeSet::new()),
+            ),
         )
     };
     let external = d.external(id).map(|e| {

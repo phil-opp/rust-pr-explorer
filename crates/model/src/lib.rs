@@ -325,6 +325,48 @@ pub struct Item {
     /// item, `info` is the base version and has them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub old_source_refs: BTreeMap<String, Ref>,
+    /// How the item's public API changed, if it is public on either side
+    /// and its API changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api: Option<ApiChange>,
+}
+
+/// Whether a public API change is breaking, by Cargo's SemVer rules.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ApiChange {
+    pub level: ApiLevel,
+    /// Why, one entry per change, e.g. "variant `B` added: exhaustive
+    /// `match`es outside the crate break". Code in backticks.
+    pub reasons: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiLevel {
+    /// Needs a major version bump.
+    Breaking,
+    /// What the definitions show isn't enough to tell.
+    Unknown,
+    /// Needs at most a minor version bump.
+    Compatible,
+}
+
+impl ApiLevel {
+    pub fn label(self) -> &'static str {
+        match self {
+            ApiLevel::Breaking => "breaking",
+            ApiLevel::Unknown => "check by hand",
+            ApiLevel::Compatible => "non-breaking",
+        }
+    }
+
+    pub fn css(self) -> &'static str {
+        match self {
+            ApiLevel::Breaking => "breaking",
+            ApiLevel::Unknown => "unknown",
+            ApiLevel::Compatible => "compatible",
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -384,6 +426,14 @@ pub struct PrMeta {
     pub head_owner: Option<String>,
     /// The compared head commit (abbreviated).
     pub head_rev: String,
+    /// The compared head commit in full, for a review posted to GitHub.
+    /// Empty for pages from before it was recorded.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub head_commit: String,
+    /// The base was given with `--base` instead of being the merge base,
+    /// so the page's diff may not be the one GitHub shows.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub custom_base: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -453,9 +503,12 @@ pub struct ChangedFile {
     /// Structured changes of a `Cargo.toml`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub manifest: Vec<ManifestChange>,
-    /// Changed definitions of a Python file.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub python: Vec<PyChange>,
+    /// The file's changed parts, each shown as a box: functions and
+    /// classes of a Python file, keys of a YAML file, and for an analyzed
+    /// Rust file the code that belongs to no item (tests, macro calls,
+    /// `extern` blocks).
+    #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "python")]
+    pub parts: Vec<PartChange>,
     /// Both versions of a Markdown file, compared section by section in
     /// the viewer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -478,16 +531,21 @@ pub struct ManifestChange {
     pub new: Option<String>,
 }
 
-/// A Python function or class that changed.
+/// A part of a file that changed: a Python function or class, a YAML
+/// key, or a piece of Rust code outside the analyzed items.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PyChange {
-    /// Qualified name, as Python's `__qualname__` (`Class.method`,
-    /// `outer.<locals>.inner`), or `<module>` for top-level code.
+pub struct PartChange {
+    /// Qualified name: for Python as `__qualname__` (`Class.method`,
+    /// `outer.<locals>.inner`) or `<module>` for top-level code, for YAML
+    /// the key path (`jobs.test`), for Rust the path in the file
+    /// (`tests::adds`).
     pub name: String,
-    /// `def`, `async def`, `class` or `module`.
+    /// Python: `def`, `async def`, `class` or `module`. YAML: `key`. Rust:
+    /// `test`, `bench`, `fn`, `struct`, `impl`, `macro call`, `extern`, ….
     pub kind: String,
     pub status: Status,
-    /// The header (`def f(a, b) -> int`), decorators included.
+    /// The header (`def f(a, b) -> int`, `#[test] fn adds()`), decorators
+    /// and attributes included.
     pub sig: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_sig: Option<String>,

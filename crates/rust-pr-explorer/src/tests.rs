@@ -202,6 +202,28 @@ fn shadowing_and_name_spaces() {
 }
 
 #[test]
+fn a_local_does_not_hide_a_module_path() {
+    let dir = write_crate(&[(
+        "src/lib.rs",
+        "pub mod files { pub fn lines() {} }\n\
+         pub fn f() { let files = 1; let _ = files; files::lines(); }\n",
+    )]);
+    let out = analyze_dirs(dir.path(), dir.path());
+    let f = &out.items["t::f"].info;
+    assert!(
+        f.calls.iter().any(|c| c.to == "t::files::lines"),
+        "{:?}",
+        f.calls
+    );
+    // The call site links to the function.
+    assert!(
+        f.source_refs
+            .values()
+            .any(|r| r.id.as_deref() == Some("t::files::lines"))
+    );
+}
+
+#[test]
 fn unknown_globs_hide_the_prelude() {
     let dir = write_crate(&[(
         "src/lib.rs",
@@ -1010,9 +1032,23 @@ fn changes_outside_items_are_counted() {
     let out = crate::analyze_checkout(&checkout, false, Trust::Untrusted);
     let lib = out.files.iter().find(|f| f.path == "src/lib.rs").unwrap();
     assert!(lib.analyzed);
-    // `thread_local!`, the extern fn and the test assertion: 3 lines on
-    // each side. The change in `f` is inside an item.
-    assert_eq!(lib.outside_items, 6);
+    // `thread_local!`, the extern block and the test are parts of their
+    // own; no other line changed. The change in `f` is inside an item.
+    assert_eq!(lib.outside_items, 0, "{:#?}", lib.hunks);
+    let parts: Vec<(&str, &str)> = lib
+        .parts
+        .iter()
+        .map(|p| (p.name.as_str(), p.kind.as_str()))
+        .collect();
+    assert_eq!(
+        parts,
+        [
+            ("thread_local!", "macro call"),
+            ("extern \"C\"", "extern"),
+            ("tests::t", "test"),
+        ]
+    );
+    assert_eq!(lib.parts[2].sig, "#[test]\nfn t()");
     // Imports spread over several lines and attributes of module
     // declarations are not code outside items.
     let base = write_crate(&[(
@@ -1154,4 +1190,19 @@ fn doc_hidden_is_not_public_api() {
     assert!(!info("t::secret").public);
     assert!(info("t::S::m").public);
     assert!(!info("t::S::h").public);
+}
+
+#[test]
+fn semver_labels_in_demo() {
+    use model::ApiLevel;
+    let out = demo();
+    let level = |id: &str| out.items[id].api.as_ref().map(|a| a.level);
+    // New variants of an exhaustive enum, a new parameter, a lost path.
+    assert_eq!(level("tinycalc::Error"), Some(ApiLevel::Breaking));
+    assert_eq!(level("tinycalc::eval::evaluate"), Some(ApiLevel::Breaking));
+    assert_eq!(level("tinycalc::parser::Parser"), Some(ApiLevel::Breaking));
+    assert_eq!(level("tinycalc::ast::Op"), Some(ApiLevel::Compatible));
+    assert_eq!(level("tinycalc::env::Env"), Some(ApiLevel::Compatible));
+    // Not public: no label.
+    assert_eq!(level("tinycalc::eval::apply"), None);
 }

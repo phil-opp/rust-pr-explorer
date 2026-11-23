@@ -14,9 +14,13 @@ permissions:
   contents: read
   pull-requests: write
 
+# A new push to a PR cancels the PR's running job. Runs on `main` are never
+# cancelled: when merges come faster than a cold build (about 7 minutes),
+# each one would cancel the previous, and the cache would never be saved.
+# They queue instead, and a newer queued run replaces an older one.
 concurrency:
   group: pr-explorer-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   explore:

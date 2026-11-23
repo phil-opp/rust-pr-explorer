@@ -4,7 +4,7 @@
 use crate::code::esc;
 use crate::data::Data;
 use crate::{App, dom};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use web_sys::Element;
 
 mod card;
@@ -12,14 +12,15 @@ mod edges;
 mod events;
 mod layout;
 mod open;
+mod reflow;
 
 pub use edges::draw_edges;
 pub use events::{
     active_item_of_card, highlight_card_of, on_click, on_details_toggle, on_pointer_down,
-    on_pointer_move, on_pointer_up, on_wheel,
+    on_pointer_move, on_pointer_up, on_unfold, on_wheel,
 };
 pub use layout::show_module_graph;
-pub use open::open;
+pub use open::{open, open_for_review};
 
 use card::card_html;
 
@@ -35,6 +36,9 @@ pub struct Group {
     pub y: f64,
     /// Items whose source view is expanded.
     pub open_src: BTreeSet<String>,
+    /// Folds of unchanged source lines that were expanded, by item and
+    /// first row.
+    pub unfolded: BTreeMap<String, BTreeSet<usize>>,
 }
 
 #[derive(Clone, Copy)]
@@ -51,6 +55,12 @@ pub enum Drag {
         sy: f64,
         gx: f64,
         gy: f64,
+    },
+    /// The cards of a module and its submodules, moved by the module's frame.
+    Frame {
+        sx: f64,
+        sy: f64,
+        cards: Vec<(u32, f64, f64)>,
     },
     Pan {
         sx: f64,
@@ -70,6 +80,8 @@ pub struct Canvas {
     pub pan: Pan,
     pub frames: bool,
     pub drag: Option<Drag>,
+    /// The last rendered height of each card, to tell how much it changed.
+    heights: HashMap<u32, f64>,
 }
 
 impl Canvas {
@@ -86,6 +98,7 @@ impl Canvas {
             },
             frames: false,
             drag: None,
+            heights: HashMap::new(),
         }
     }
 
@@ -107,6 +120,7 @@ impl Canvas {
             x,
             y,
             open_src: BTreeSet::new(),
+            unfolded: BTreeMap::new(),
         });
         self.next_gid += 1;
         self.groups.len() - 1
@@ -216,6 +230,7 @@ pub fn render(app: &mut App) {
         .map(|g| card_html(&d, c, g))
         .collect();
     dom::set_html("cards", &cards);
+    reflow::observe_cards();
     let any = c.groups.iter().any(|g| visible(&d, c, g));
     dom::set_html(
         "canvas-empty",

@@ -6,8 +6,8 @@
 //! `def` inside a string or inside brackets is never taken for a
 //! definition. Blocks follow indentation, as in Python itself.
 
-use model::{PyChange, SourceLine, Status};
-use similar::{ChangeTag, TextDiff};
+use crate::parts::{Def, compare_defs};
+use model::{PartChange, Status};
 use std::collections::BTreeMap;
 
 /// A logical line: physical lines `start..=end` (0-based).
@@ -173,29 +173,6 @@ fn ends_with_word(s: &str) -> bool {
         .is_some_and(|c| c.is_alphanumeric() || c == '_')
 }
 
-/// A function or class with its extent.
-#[derive(Debug, Clone)]
-struct Def {
-    /// Qualified name, plus `#n` for the n-th repetition of a name.
-    key: String,
-    name: String,
-    kind: String,
-    /// Header with decorators, normalized.
-    sig: String,
-    /// The header's tokens, for comparing.
-    sig_norm: String,
-    /// The docstring literal, if any.
-    doc: Option<String>,
-    /// Own logical lines (nested definitions left out), with their
-    /// indentation relative to the definition.
-    body: String,
-    /// Physical lines of the whole block, decorators included.
-    first: usize,
-    last: usize,
-    /// Physical lines that belong to nested definitions.
-    nested: Vec<(usize, usize)>,
-}
-
 fn header(norm: &str) -> Option<(&'static str, String)> {
     for (prefix, kind) in [
         ("async def ", "async def"),
@@ -323,106 +300,22 @@ fn outline(text: &str) -> (Vec<Def>, String) {
     (defs, module)
 }
 
-/// The physical lines of a definition, without its nested definitions.
-fn own_lines(text: &[&str], d: &Def) -> String {
-    (d.first..=d.last.min(text.len().saturating_sub(1)))
-        .filter(|i| !d.nested.iter().any(|(a, b)| a <= i && i <= b))
-        .map(|i| format!("{}\n", text[i]))
-        .collect()
-}
-
-fn diff_lines(old: &str, new: &str) -> Vec<SourceLine> {
-    TextDiff::from_lines(old, new)
-        .iter_all_changes()
-        .map(|c| {
-            let tag = match c.tag() {
-                ChangeTag::Equal => ' ',
-                ChangeTag::Insert => '+',
-                ChangeTag::Delete => '-',
-            };
-            SourceLine(tag, c.value().trim_end_matches('\n').to_string())
-        })
-        .collect()
-}
-
 /// Compares two versions of a Python file. Returns the definitions that
 /// changed, in the order of the head version (removed ones last), plus a
 /// `<module>` entry if top-level code outside definitions changed.
-pub fn compare(old: &str, new: &str) -> Vec<PyChange> {
+pub fn compare(old: &str, new: &str) -> Vec<PartChange> {
     let (a, a_mod) = outline(old);
     let (b, b_mod) = outline(new);
-    let (old_lines, new_lines): (Vec<&str>, Vec<&str>) =
-        (old.split('\n').collect(), new.split('\n').collect());
-    let by_key: BTreeMap<&str, &Def> = a.iter().map(|d| (d.key.as_str(), d)).collect();
     let mut out = Vec::new();
     if a_mod != b_mod {
-        out.push(PyChange {
+        out.push(PartChange {
             name: "<module>".into(),
             kind: "module".into(),
             status: Status::Changed,
             ..Default::default()
         });
     }
-    for d in &b {
-        let src = own_lines(&new_lines, d);
-        match by_key.get(d.key.as_str()) {
-            None => out.push(PyChange {
-                name: d.name.clone(),
-                kind: d.kind.clone(),
-                status: Status::Added,
-                sig: d.sig.clone(),
-                line: d.first + 1,
-                lines: diff_lines("", &src),
-                ..Default::default()
-            }),
-            Some(o) => {
-                let old_src = own_lines(&old_lines, o);
-                let sig_changed = o.sig_norm != d.sig_norm || o.kind != d.kind;
-                let doc_changed = o.doc != d.doc;
-                let body_changed = o.body != d.body;
-                // Blank lines between nested definitions don't count.
-                let solid = |t: &str| {
-                    t.lines()
-                        .filter(|l| !l.trim().is_empty())
-                        .collect::<Vec<_>>()
-                        .join("\n")
-                };
-                let cosmetic =
-                    !sig_changed && !doc_changed && !body_changed && solid(&old_src) != solid(&src);
-                if !(sig_changed || doc_changed || body_changed || cosmetic) {
-                    continue;
-                }
-                out.push(PyChange {
-                    name: d.name.clone(),
-                    kind: d.kind.clone(),
-                    status: if cosmetic {
-                        Status::Unchanged
-                    } else {
-                        Status::Changed
-                    },
-                    sig: d.sig.clone(),
-                    old_sig: sig_changed.then(|| o.sig.clone()),
-                    doc_changed,
-                    body_changed,
-                    cosmetic,
-                    line: d.first + 1,
-                    lines: diff_lines(&old_src, &src),
-                });
-            }
-        }
-    }
-    let new_keys: std::collections::BTreeSet<&str> = b.iter().map(|d| d.key.as_str()).collect();
-    for o in a.iter().filter(|o| !new_keys.contains(o.key.as_str())) {
-        out.push(PyChange {
-            name: o.name.clone(),
-            kind: o.kind.clone(),
-            status: Status::Removed,
-            sig: o.sig.clone(),
-            line: o.first + 1,
-            lines: diff_lines(&own_lines(&old_lines, o), ""),
-            ..Default::default()
-        });
-    }
+    out.extend(compare_defs(&a, &b, old, new));
     out
 }
 
@@ -479,7 +372,7 @@ class Store:
         return count(self.data)
 "#;
 
-    fn find<'a>(c: &'a [PyChange], name: &str) -> &'a PyChange {
+    fn find<'a>(c: &'a [PartChange], name: &str) -> &'a PartChange {
         c.iter()
             .find(|x| x.name == name)
             .unwrap_or_else(|| panic!("{name}: {c:#?}"))

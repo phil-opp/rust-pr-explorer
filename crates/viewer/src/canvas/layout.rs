@@ -7,8 +7,8 @@ use super::{
 };
 use crate::data::{Data, changed, within};
 use crate::{App, View, dom, toast};
-use model::{Item, Kind};
-use std::collections::HashMap;
+use model::{Item, Kind, Status};
+use std::collections::{BTreeSet, HashMap};
 
 /// Lays out the visible cards in nested module regions: exposed items on
 /// top, private items below them, submodules underneath.
@@ -151,7 +151,8 @@ pub fn fit_view() {
     });
 }
 
-/// Opens a module's changed items and their direct neighbours in it.
+/// Opens a module's changed items, and the unchanged items in it that
+/// their changed lines call.
 pub fn show_module_graph(app: &mut App, m: &str) {
     let d = app.d.clone();
     let own: Vec<&Item> = d
@@ -165,14 +166,11 @@ pub fn show_module_graph(app: &mut App, m: &str) {
         return;
     }
     let mut ids: Vec<String> = own.iter().map(|it| it.info.id.clone()).collect();
+    // Changed neighbours are among `own` already. Unchanged ones are added
+    // only where a changed line calls them: callers are unchanged, so their
+    // calls are too, and so are calls in unchanged parts of a changed body.
     for it in &own {
-        let neighbours = it
-            .info
-            .calls
-            .iter()
-            .map(|c| c.to.clone())
-            .chain(d.callers.get(&it.info.id).into_iter().flatten().cloned());
-        for n in neighbours {
+        for n in called_on_changed_lines(it) {
             if let Some(ni) = d.item(&n)
                 && d.mod_of(ni) == m
                 && ni.info.kind != Kind::Impl
@@ -194,4 +192,37 @@ pub fn show_module_graph(app: &mut App, m: &str) {
     arrange_by_module(app);
     render(app);
     fit_view();
+}
+
+/// The items that `it` calls on added or changed lines of its source.
+fn called_on_changed_lines(it: &Item) -> BTreeSet<String> {
+    if it.status == Status::Removed {
+        // Calls are only known for the head version.
+        return BTreeSet::new();
+    }
+    let calls: BTreeSet<&str> = it.info.calls.iter().map(|c| c.to.as_str()).collect();
+    let mut line = it.info.line;
+    let mut lines = BTreeSet::new();
+    for l in &it.source {
+        match l.0 {
+            '-' => continue,
+            '+' => {
+                lines.insert(line);
+            }
+            _ => {}
+        }
+        line += 1;
+    }
+    it.info
+        .source_refs
+        .iter()
+        .filter(|(pos, _)| {
+            pos.split_once(':')
+                .and_then(|(l, _)| l.parse::<usize>().ok())
+                .is_some_and(|l| lines.contains(&l))
+        })
+        .filter_map(|(_, r)| r.id.as_deref())
+        .filter(|id| calls.contains(id))
+        .map(str::to_string)
+        .collect()
 }
