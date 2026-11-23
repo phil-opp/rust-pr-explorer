@@ -974,12 +974,13 @@ impl Data {
                     (None, None) => unreachable!(),
                 };
                 format!(
-                    r#"<span class="ln {class}" data-t="{}" data-no="{no}">{}</span>"#,
+                    r#"<span class="ln {class}" data-t="{}" data-no="{no}">{}{}</span>"#,
                     if tag == ' ' {
                         String::new()
                     } else {
                         tag.to_string()
                     },
+                    crate::code::gutter(o.map(|a| old_start + a), n.map(|b| new_start + b), tag),
                     nonempty(code)
                 )
             }
@@ -1056,7 +1057,10 @@ impl Data {
             if split {
                 format!(r#"<div class="sbs">{body}</div>"#)
             } else {
-                format!("<pre>{body}</pre>")
+                format!(
+                    "<pre {}>{body}</pre>",
+                    crate::code::gutter_style((old_start + old.len()).max(new_start + new.len()))
+                )
             },
             if folded > 1 {
                 format!(

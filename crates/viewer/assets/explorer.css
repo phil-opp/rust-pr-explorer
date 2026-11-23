@@ -605,6 +605,19 @@ details.private-def .sigbox { margin-top: 4px; }
 .hunks .ln.add { background: var(--added-bg); }
 .hunks .ln.del { background: var(--removed-bg); }
 .hunks .ln.skip { color: var(--muted); font-style: italic; background: var(--panel); }
+
+/* Line numbers in inline diffs: old and new, then the sign. */
+.ln .lno, .ln .sg { display: none; }
+:root:not(.no-lno) pre .ln:has(> .lno)::before { content: none; }
+:root:not(.no-lno) .ln .lno, :root:not(.no-lno) .ln .sg { display: inline-block; user-select: none; color: var(--muted); }
+.ln .lno::before, .ln .lno::after { display: inline-block; min-width: var(--lnw, 3ch); text-align: right; opacity: .8; }
+.ln .lno::before { content: attr(data-o); }
+.ln .lno::after { content: attr(data-n); margin: 0 4px 0 1ch; }
+.ln .sg { width: 14px; }
+.ln .sg::before { content: attr(data-t); }
+.ln.add .sg { color: var(--added); }
+.ln.del .sg { color: var(--removed); }
+.no-lno .sbs .no { font-size: 0; padding: 0; }
 .note { font-size: 13px; color: var(--muted); }
 details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px 0; }
 .manifest { border-collapse: collapse; font-size: 13px; }
