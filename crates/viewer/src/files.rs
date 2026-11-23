@@ -35,8 +35,6 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
     // YAML block scalars span lines; each side keeps its own state.
     let (mut old_yaml, mut new_yaml) = (yaml::State::default(), yaml::State::default());
     let mut body = String::new();
-    // Removed lines whose changed words are marked.
-    let mut paired = vec![false; lines.len()];
     let mut codes: Vec<String> = Vec::with_capacity(lines.len());
     for l in lines {
         if l.0 == '@' {
@@ -66,12 +64,11 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
             if let Some((a, b)) = mark_changed_tokens(&codes[o], &codes[n]) {
                 codes[o] = a;
                 codes[n] = b;
-                paired[o] = true;
             }
         }
         i += (dels + adds).max(1);
     }
-    for ((l, code), paired) in lines.iter().zip(codes).zip(paired) {
+    for (l, code) in lines.iter().zip(codes) {
         if l.0 == '@' {
             let mut it = l.1.split(' ').filter_map(|n| n.parse::<usize>().ok());
             old_line = it.next().unwrap_or(1);
@@ -83,7 +80,6 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
         }
         let (class, no) = match l.0 {
             '+' => ("add", new_line),
-            '-' if paired => ("del wl", old_line),
             '-' => ("del", old_line),
             _ => ("", new_line),
         };
@@ -540,7 +536,11 @@ pub fn manifests_html(d: &Data) -> String {
         })
         .collect();
     format!(
-        r#"<h2>Dependencies and package settings</h2><p class="sub">Changes in <code>Cargo.toml</code>: dependencies, features, workspace members, and the package's version, edition and minimum Rust version.</p>{cards}"#
+        r#"<h2>Dependencies and package settings {}</h2>{cards}"#,
+        crate::pages::help_html(
+            "Changes in Cargo.toml: dependencies, features, workspace members, and the \
+             package's version, edition and minimum Rust version."
+        )
     )
 }
 
@@ -562,21 +562,26 @@ pub fn other_files_html(d: &Data) -> String {
         .count();
     let (generated, own): (Vec<&ChangedFile>, Vec<&ChangedFile>) =
         others.into_iter().partition(|f| f.generated.is_some());
-    let mut html = format!(
-        r#"<h2>Other changed files</h2><p class="sub">Files the Rust analysis doesn't cover{}. Python files are compared by function and class, YAML files by key, Markdown files by section, and Rust code outside items (tests, macro calls, <code>extern</code> blocks) one item at a time; other files line by line.</p>"#,
-        if covered > 0 {
-            format!(
-                " ({covered} changed Rust file{} are shown as items above)",
-                if covered == 1 { "" } else { "s" }
-            )
-        } else {
-            String::new()
-        }
-    );
     if own.is_empty() && generated.is_empty() {
-        html.push_str(r#"<div class="empty-state">None: every changed file is part of the Rust analysis.</div>"#);
-        return html;
+        return String::new();
     }
+    let mut html = format!(
+        r#"<h2>Other changed files {}</h2>"#,
+        crate::pages::help_html(&format!(
+            "Files the Rust analysis doesn't cover{}. Python files are compared by function \
+             and class, YAML files by key, Markdown files by section, and Rust code outside \
+             items (tests, macro calls, extern blocks) one item at a time; other files line \
+             by line.",
+            if covered > 0 {
+                format!(
+                    " ({covered} changed Rust file{} are shown as items above)",
+                    if covered == 1 { "" } else { "s" }
+                )
+            } else {
+                String::new()
+            }
+        ))
+    );
     html.extend(own.iter().map(|f| file_card(d, f)));
     if !generated.is_empty() {
         html.push_str(&format!(

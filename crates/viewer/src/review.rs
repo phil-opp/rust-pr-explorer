@@ -12,6 +12,13 @@
 //! The mark also keeps the version itself (see `since`), so that a stale
 //! mark can show what changed since the review.
 //!
+//! A changed item whose diff has several separate changes ("hunks", as
+//! the source view shows them between folded unchanged lines) can also be
+//! reviewed hunk by hunk. A hunk's mark is keyed by its changed lines, so
+//! it survives new commits that leave the hunk alone: after a push, only
+//! the new hunks need a review. When every hunk has a verdict, the item
+//! gets one too.
+//!
 //! Marks are kept in the browser's local storage, per pull request (or per
 //! pair of compared trees), when the browser allows that.
 
@@ -20,7 +27,7 @@ use crate::data::{Data, changed};
 use crate::dom;
 use crate::since::Snapshot;
 use model::stable_hash as hash;
-use model::{ChangedFile, Item, Kind};
+use model::{ChangedFile, Item, Kind, Status};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -93,6 +100,165 @@ struct Review {
     notes: BTreeMap<String, Note>,
     /// Reviewed units the reviewer unfolded again, for this page only.
     unfolded: HashSet<String>,
+    /// The hunks of items that have more than one, by item.
+    hunks: HashMap<String, Vec<Hunk>>,
+}
+
+/// One separate change in an item's diff.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Hunk {
+    /// `item#hash of its changed lines`.
+    pub id: String,
+    /// Line numbers of its added lines, in the PR's version of the file.
+    pub new: Vec<usize>,
+    /// Line numbers of its removed lines, in the base version.
+    pub old: Vec<usize>,
+    /// Whether it starts with an added line (else with a removed one).
+    pub starts_added: bool,
+}
+
+impl Hunk {
+    /// Its first changed line.
+    pub fn first_line(&self) -> usize {
+        if self.starts_added {
+            self.new[0]
+        } else {
+            self.old[0]
+        }
+    }
+}
+
+/// Unchanged lines that separate two hunks: as many as the source view
+/// folds between two changes (three lines of context on each side, and at
+/// least two folded lines).
+const HUNK_GAP: usize = 8;
+
+/// The hunks of a changed item, if it has more than one.
+pub fn hunks(it: &Item) -> Vec<Hunk> {
+    if it.status != Status::Changed {
+        return Vec::new();
+    }
+    let (mut o, mut n) = (it.old_line.unwrap_or(it.info.line), it.info.line);
+    // Per hunk: its changed lines as text, and the hunk.
+    let mut out: Vec<(String, Hunk)> = Vec::new();
+    // Unchanged lines since the last change; a hunk starts after enough.
+    let mut run = usize::MAX;
+    for l in &it.source {
+        let added = match l.0 {
+            '+' => true,
+            '-' => false,
+            _ => {
+                o += 1;
+                n += 1;
+                run = run.saturating_add(1);
+                continue;
+            }
+        };
+        if run >= HUNK_GAP {
+            out.push((
+                String::new(),
+                Hunk {
+                    id: String::new(),
+                    new: Vec::new(),
+                    old: Vec::new(),
+                    starts_added: added,
+                },
+            ));
+        }
+        run = 0;
+        let (text, h) = out.last_mut().expect("a hunk was started");
+        text.push(l.0);
+        text.push_str(&l.1);
+        text.push('\n');
+        if added {
+            h.new.push(n);
+            n += 1;
+        } else {
+            h.old.push(o);
+            o += 1;
+        }
+    }
+    if out.len() < 2 {
+        return Vec::new();
+    }
+    let mut seen = HashSet::new();
+    out.into_iter()
+        .map(|(text, mut h)| {
+            let base = format!("{}#{:016x}", it.info.id, hash(&text));
+            // The same change twice in one item: number the repeats.
+            let mut id = base.clone();
+            let mut k = 1;
+            while !seen.insert(id.clone()) {
+                k += 1;
+                id = format!("{base}-{k}");
+            }
+            h.id = id;
+            h
+        })
+        .collect()
+}
+
+/// The item a hunk belongs to.
+pub fn hunk_item(id: &str) -> Option<String> {
+    let (item, _) = id.split_once('#')?;
+    REVIEW.with(|r| {
+        r.borrow()
+            .hunks
+            .contains_key(item)
+            .then(|| item.to_string())
+    })
+}
+
+/// The hunks of an item (none unless it has more than one).
+pub fn hunks_of(item: &str) -> Vec<Hunk> {
+    REVIEW.with(|r| r.borrow().hunks.get(item).cloned().unwrap_or_default())
+}
+
+/// The next hunk of the same item after `after` that has no verdict,
+/// wrapping around.
+pub fn next_open_hunk(after: &str) -> Option<String> {
+    let list = hunks_of(&hunk_item(after)?);
+    let i = list.iter().position(|h| h.id == after)?;
+    (1..list.len())
+        .map(|k| &list[(i + k) % list.len()])
+        .find(|h| mark(&h.id) != Some(Mark::Done))
+        .map(|h| h.id.clone())
+}
+
+/// The verdict that an item's hunks add up to: changes if any needs
+/// them, else a comment if any has one, else an approval.
+pub fn hunks_verdict(item: &str) -> Verdict {
+    let verdicts: Vec<Verdict> = hunks_of(item).iter().map(|h| note(&h.id).verdict).collect();
+    if verdicts.contains(&Verdict::Changes) {
+        Verdict::Changes
+    } else if verdicts.contains(&Verdict::Comment) {
+        Verdict::Comment
+    } else {
+        Verdict::Approve
+    }
+}
+
+/// The review controls of the hunks of `item` that start on one of the
+/// given lines (removed lines by their base line number, added lines by
+/// their new one): what goes at the top of one hunk of the source view.
+pub fn hunk_controls(item: &str, old: &[usize], new: &[usize]) -> String {
+    hunks_of(item)
+        .iter()
+        .filter(|h| {
+            if h.starts_added {
+                new.contains(&h.new[0])
+            } else {
+                old.contains(&h.old[0])
+            }
+        })
+        .map(|h| {
+            format!(
+                r#"<span class="hunk-at">Change at line {}</span>{}"#,
+                h.first_line(),
+                control_html(&h.id)
+            )
+        })
+        .collect()
 }
 
 thread_local! {
@@ -222,6 +388,24 @@ fn units_in_order(d: &Data) -> Vec<(String, u64)> {
     out
 }
 
+/// The hunks of the units, and the prints of units and hunks. A hunk's id
+/// says what it changes, so its print is that.
+fn hunks_and_prints(
+    d: &Data,
+    units: &[(String, u64)],
+) -> (HashMap<String, Vec<Hunk>>, HashMap<String, u64>) {
+    let mut prints: HashMap<String, u64> = units.iter().cloned().collect();
+    let mut all = HashMap::new();
+    for (id, _) in units {
+        let list = d.item(id).map(hunks).unwrap_or_default();
+        if !list.is_empty() {
+            prints.extend(list.iter().map(|h| (h.id.clone(), hash(&h.id))));
+            all.insert(id.clone(), list);
+        }
+    }
+    (all, prints)
+}
+
 fn storage() -> Option<web_sys::Storage> {
     dom::window().local_storage().ok().flatten()
 }
@@ -265,16 +449,18 @@ pub fn load(d: &Data) {
     let on = store
         .and_then(|s| s.get_item(MODE_KEY).ok().flatten())
         .is_some_and(|v| v == "on");
+    let (hunks, prints) = hunks_and_prints(d, &units);
     REVIEW.with(|r| {
         *r.borrow_mut() = Review {
             on,
             key,
-            prints: units.iter().cloned().collect(),
+            prints,
             units: units.into_iter().map(|(id, _)| id).collect(),
             marks,
             versions,
             notes,
             unfolded: HashSet::new(),
+            hunks,
         }
     });
     apply_mode();
@@ -369,6 +555,10 @@ pub fn notes() -> Vec<(String, Mark, Note)> {
     let units = REVIEW.with(|r| r.borrow().units.clone());
     units
         .into_iter()
+        .flat_map(|u| {
+            let hunks = hunks_of(&u).into_iter().map(|h| h.id);
+            std::iter::once(u).chain(hunks)
+        })
         .filter_map(|u| {
             let m = mark(&u)?;
             (m != Mark::Open).then(|| {
@@ -572,8 +762,55 @@ fn refresh(id: &str) {
     update_progress();
 }
 
+/// An item's name in a list of changes (the overview's internal changes),
+/// with a ✓ in review mode once the item is reviewed.
+pub fn item_tag(id: &str, name: &str) -> String {
+    format!(
+        r#"<span class="rv-it{}" data-rv-it="{}">{}</span>"#,
+        if mark(id) == Some(Mark::Done) {
+            " done"
+        } else {
+            ""
+        },
+        esc(id),
+        esc(name)
+    )
+}
+
+/// The review state of a group of items, like in the sidebar: a ✓ once
+/// all are reviewed, else how many are left.
+pub fn group_html<'a>(ids: impl IntoIterator<Item = &'a str>) -> String {
+    let ids: Vec<&str> = ids.into_iter().collect();
+    match open_count(ids.iter().copied()) {
+        0 => r#"<span class="rv-all" title="All reviewed">✓ reviewed</span>"#.to_string(),
+        left => format!(
+            r#"<span class="rv-left" title="{left} of {} not reviewed yet">{left} not reviewed</span>"#,
+            ids.len()
+        ),
+    }
+}
+
+/// Updates the item names and group states of the lists of changes.
+fn update_groups() {
+    for el in dom::query_all(".rv-it") {
+        let done = dom::data(&el, "rv-it").and_then(|id| mark(&id)) == Some(Mark::Done);
+        dom::toggle_class(&el, "done", done);
+    }
+    for el in dom::query_all(".rv-group") {
+        let Some(row) = dom::closest(&el, ".irow") else {
+            continue;
+        };
+        let ids: Vec<String> = dom::query_all_in(&row, "[data-rv-it]")
+            .iter()
+            .filter_map(|it| dom::data(it, "rv-it"))
+            .collect();
+        el.set_inner_html(&group_html(ids.iter().map(String::as_str)));
+    }
+}
+
 /// The progress and the "next" button in the header.
 pub fn update_progress() {
+    update_groups();
     let (done, total) = progress();
     let html = match (done * 100).checked_div(total) {
         None => r#"<span class="dim">Nothing to review</span>"#.to_string(),
@@ -691,16 +928,18 @@ mod tests {
 
     fn set(d: &Data, marks: &[(&str, u64)]) {
         let units = units_in_order(d);
+        let (hunks, prints) = hunks_and_prints(d, &units);
         REVIEW.with(|r| {
             *r.borrow_mut() = Review {
                 on: true,
                 key: String::new(),
-                prints: units.iter().cloned().collect(),
+                prints,
                 units: units.into_iter().map(|(id, _)| id).collect(),
                 marks: marks.iter().map(|(id, h)| (id.to_string(), *h)).collect(),
                 versions: BTreeMap::new(),
                 notes: BTreeMap::new(),
                 unfolded: HashSet::new(),
+                hunks,
             }
         });
     }
@@ -795,6 +1034,85 @@ mod tests {
         assert_eq!(decode(&encode(&m)), m);
         // Damaged lines are skipped.
         assert_eq!(decode("zz t::f\n\n").len(), 0);
+    }
+
+    fn sl(tag: char, text: &str) -> model::SourceLine {
+        model::SourceLine(tag, text.into())
+    }
+
+    /// A changed function at line 10 (12 in the base) with a change at
+    /// its start and one 9 unchanged lines further down.
+    fn two_hunks() -> Item {
+        let mut it = item("c::f", Kind::Fn, "c", "src/lib.rs", 10, Status::Changed);
+        it.old_line = Some(12);
+        it.source = vec![
+            sl(' ', "fn f() {"),
+            sl('-', "    a();"),
+            sl('+', "    a(1);"),
+        ];
+        it.source
+            .extend((0..9).map(|i| sl(' ', &format!("    x{i}();"))));
+        it.source.extend([sl('-', "    b();"), sl(' ', "}")]);
+        it
+    }
+
+    #[test]
+    fn hunks_split_where_the_view_folds() {
+        let it = two_hunks();
+        let h = hunks(&it);
+        assert_eq!(h.len(), 2);
+        assert_eq!((h[0].old.clone(), h[0].new.clone()), (vec![13], vec![11]));
+        assert!(!h[0].starts_added);
+        // 12 + 1 + 1 + 9 lines further in the base; nothing added.
+        assert_eq!((h[1].old.clone(), h[1].new.clone()), (vec![23], vec![]));
+        assert_eq!(h[1].first_line(), 23);
+        // Ids say what changed, not where.
+        let mut moved = it.clone();
+        moved.info.line = 50;
+        moved.old_line = Some(60);
+        assert_eq!(
+            hunks(&moved).iter().map(|h| &h.id).collect::<Vec<_>>(),
+            h.iter().map(|h| &h.id).collect::<Vec<_>>()
+        );
+        // 7 unchanged lines apart, which the view doesn't fold, the two
+        // changes are one hunk: no hunks then.
+        let mut close = it.clone();
+        close.source.drain(5..7);
+        assert!(hunks(&close).is_empty());
+        // Added and removed items have no hunks.
+        let mut added = it;
+        added.status = Status::Added;
+        assert!(hunks(&added).is_empty());
+    }
+
+    #[test]
+    fn hunks_have_their_own_marks() {
+        let mut d = data();
+        d.out.items.insert("c::root_fn".into(), {
+            let mut it = two_hunks();
+            it.info.id = "c::root_fn".into();
+            it.info.module = "c".into();
+            it
+        });
+        let d = Data::new(d.out);
+        set(&d, &[]);
+        let h = hunks_of("c::root_fn");
+        assert_eq!(h.len(), 2);
+        assert_eq!(mark(&h[0].id), Some(Mark::Open));
+        assert_eq!(hunk_item(&h[1].id).as_deref(), Some("c::root_fn"));
+        assert_eq!(hunk_item("c::root_fn"), None);
+        let first = print_of(&h[0].id);
+        set(&d, &[(&h[0].id, first)]);
+        assert_eq!(mark(&h[0].id), Some(Mark::Done));
+        // The next hunk without a verdict, wrapping around.
+        assert_eq!(next_open_hunk(&h[0].id).as_deref(), Some(h[1].id.as_str()));
+        assert_eq!(next_open_hunk(&h[1].id), None);
+        // Hunks don't count as units of their own.
+        assert_eq!(progress(), (0, 6));
+        // Each hunk's controls go at its first changed line.
+        assert!(hunk_controls("c::root_fn", &[13], &[]).contains(&esc(&h[0].id)));
+        assert!(!hunk_controls("c::root_fn", &[13], &[]).contains(&esc(&h[1].id)));
+        assert!(hunk_controls("c::root_fn", &[23], &[11]).contains(&esc(&h[1].id)));
     }
 
     #[test]

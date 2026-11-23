@@ -347,6 +347,27 @@ fn only_real_paths_are_linked() {
 }
 
 #[test]
+fn removed_lines_keep_what_their_names_referred_to() {
+    let out = demo();
+    // `evaluate`'s old body called `apply` on base line 8, column 41.
+    let evaluate = &out.items["tinycalc::eval::evaluate"];
+    assert_eq!(
+        evaluate
+            .old_source_refs
+            .get("8:41")
+            .map(|r| r.path.as_str()),
+        Some("tinycalc::eval::apply")
+    );
+    // Unchanged source needs no second set.
+    assert!(
+        out.items
+            .values()
+            .filter(|it| it.source.iter().all(|l| l.0 == ' '))
+            .all(|it| it.old_source_refs.is_empty())
+    );
+}
+
+#[test]
 fn signatures_use_short_names_with_full_paths_on_hover() {
     let out = demo();
     let evaluate = &out.items["tinycalc::eval::evaluate"].info;

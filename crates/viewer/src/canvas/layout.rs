@@ -40,13 +40,16 @@ pub fn arrange_by_module(app: &mut App) {
         }
         fn row(&mut self, mut list: Vec<usize>, x: f64, cy: &mut f64, w: &mut f64) {
             let d = self.d;
+            let depth = call_depths(d, self.c, &list);
             list.sort_by(|&a, &b| {
                 let (ia, ib) = (
                     d.item(&self.c.groups[a].active),
                     d.item(&self.c.groups[b].active),
                 );
                 let (ca, cb) = (ia.is_some_and(changed), ib.is_some_and(changed));
-                cb.cmp(&ca).then_with(|| {
+                // Callers before (left of and above) what they call, then
+                // changed items first.
+                depth[&a].cmp(&depth[&b]).then(cb.cmp(&ca)).then_with(|| {
                     let na = ia.map(|i| d.display_name(i)).unwrap_or_default();
                     let nb = ib.map(|i| d.display_name(i)).unwrap_or_default();
                     na.cmp(&nb)
@@ -112,6 +115,41 @@ pub fn arrange_by_module(app: &mut App) {
             x += w + 80.0;
         }
     }
+}
+
+/// For each card of `list`, the length of the longest chain of calls that
+/// leads to it from the other cards of `list`: 0 for a card none of them
+/// calls. In a cycle, depths stop growing after `list.len()` rounds.
+fn call_depths(d: &Data, c: &Canvas, list: &[usize]) -> HashMap<usize, usize> {
+    let mut depth: HashMap<usize, usize> = list.iter().map(|&i| (i, 0)).collect();
+    let edges: Vec<(usize, usize)> = list
+        .iter()
+        .flat_map(|&a| list.iter().map(move |&b| (a, b)))
+        .filter(|&(a, b)| {
+            a != b
+                && d.item(&c.groups[a].active).is_some_and(|it| {
+                    it.info
+                        .calls
+                        .iter()
+                        .any(|call| call.to == c.groups[b].active)
+                })
+        })
+        .collect();
+    // Longest paths; at most `list.len()` rounds, which also ends cycles.
+    for _ in 0..list.len() {
+        let mut moved = false;
+        for &(a, b) in &edges {
+            let da = depth[&a];
+            if depth[&b] < da + 1 && da + 1 < list.len() {
+                depth.insert(b, da + 1);
+                moved = true;
+            }
+        }
+        if !moved {
+            break;
+        }
+    }
+    depth
 }
 
 pub fn fit_view() {
