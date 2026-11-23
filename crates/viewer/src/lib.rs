@@ -321,10 +321,17 @@ fn install_listeners() {
                     .dyn_ref::<web_sys::HtmlInputElement>()
                     .is_some_and(|i| i.checked());
                 pages::render_sidebar(app);
+            } else if el.id() == "rv-body" || dom::closest(&el, ".rv-ev").is_some() {
+                update_finish(app);
             } else {
                 let _ = space::on_change(app, &el);
             }
         });
+    });
+    dom::listen(&doc, "input", |ev| {
+        if dom::target_element(&ev).is_some_and(|el| el.id() == "rv-body") {
+            with_app(|app| update_finish(app));
+        }
     });
     // Not passive: Ctrl+Enter in the comment editor prevents the newline.
     dom::listen_with(&doc, "keydown", false, false, |ev| {
@@ -643,14 +650,29 @@ fn save_from_editor(app: &mut App, verdict: review::Verdict) {
     save_verdict(app, &id, verdict, text.trim().to_string());
 }
 
-/// The buttons of the "Finish review" dialog: download, or copy, the
-/// review in one form.
-fn finish_output(app: &App, what: &str) {
+/// The verdict and summary chosen in the "Finish review" dialog.
+fn finish_choice() -> (review::Verdict, String) {
     let event = dom::query(r#"input[name="rv-event"]:checked"#)
         .and_then(|i| i.dyn_into::<web_sys::HtmlInputElement>().ok())
         .and_then(|i| review::Verdict::from_name(&i.value()))
         .unwrap_or(review::Verdict::Comment);
-    let own = textarea_value("rv-body");
+    (event, textarea_value("rv-body"))
+}
+
+/// Says again what the command posts, after the verdict or the summary
+/// changed.
+fn update_finish(app: &App) {
+    if dom::by_id("rv-what").is_none() {
+        return;
+    }
+    let (event, own) = finish_choice();
+    let comments = post::summary(&app.d).comments;
+    dom::set_html("rv-what", &post::posts_html(&comments, &own, event));
+}
+
+/// The buttons of the "Finish review" dialog: copy the review in one form.
+fn finish_output(app: &App, what: &str) {
+    let (event, own) = finish_choice();
     let comments = post::summary(&app.d).comments;
     let commit = app
         .d
@@ -664,14 +686,17 @@ fn finish_output(app: &App, what: &str) {
             post::review_markdown(&comments, &own, event),
             "The review as Markdown",
         ),
-        "cmd" => (post::command(&app.d).unwrap_or_default(), "The command"),
+        "cmd" => (
+            post::command(&app.d, &comments, &own, event).unwrap_or_default(),
+            "The command",
+        ),
         _ => (
             post::review_json(&comments, &own, event, commit),
             "The review's JSON",
         ),
     };
     // Also shown, selected, in case the browser doesn't allow the
-    // download or the clipboard.
+    // clipboard.
     if let Some(out) =
         dom::by_id("rv-out").and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
     {
@@ -679,42 +704,7 @@ fn finish_output(app: &App, what: &str) {
         dom::toggle_class(&out, "hidden", false);
         out.select();
     }
-    if what == "download" {
-        if download(&post::file_name(&app.d), &text) {
-            toast("Downloaded. Run the command to post it.");
-        } else {
-            toast("The browser didn't allow the download: save the text below as the file.");
-        }
-        return;
-    }
     copy(&text, label);
-}
-
-/// Offers a text as a file to save.
-fn download(name: &str, text: &str) -> bool {
-    let parts = js_sys::Array::of1(&wasm_bindgen::JsValue::from_str(text));
-    let opts = web_sys::BlobPropertyBag::new();
-    opts.set_type("application/json");
-    let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&parts, &opts) else {
-        return false;
-    };
-    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
-        return false;
-    };
-    let Some(a) = dom::document()
-        .create_element("a")
-        .ok()
-        .and_then(|a| a.dyn_into::<web_sys::HtmlAnchorElement>().ok())
-    else {
-        return false;
-    };
-    a.set_href(&url);
-    a.set_download(name);
-    a.click();
-    dom::timeout(1000, move || {
-        let _ = web_sys::Url::revoke_object_url(&url);
-    });
-    true
 }
 
 /// Copies a text to the clipboard and says whether that worked.
