@@ -146,6 +146,7 @@ fn analyze_checkout(
         if f.analyzed {
             let text = |dir: &Path| std::fs::read_to_string(dir.join(&f.path)).unwrap_or_default();
             let (old, new) = (text(&checkout.base_dir), text(&checkout.head_dir));
+            (f.added_lines, f.removed_lines) = files::changed_lines(&f.hunks);
             // The items show the other changes: keep only these.
             (f.outside_items, f.hunks, f.parts) =
                 files::outside_items(f, output.items.values(), (&old, &new));
