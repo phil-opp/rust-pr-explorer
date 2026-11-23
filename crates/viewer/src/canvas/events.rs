@@ -39,6 +39,14 @@ pub fn on_click(app: &mut App, el: &Element) -> bool {
             Some("callers") => expand(app, &id, Related::Callers),
             Some("uses") => expand(app, &id, Related::UsedBy),
             Some("tabs") => members_as_tabs(app, &id),
+            Some("expand") => {
+                app.s.canvas.groups[gi].expanded.insert(id);
+                render(app);
+            }
+            Some("fold") => {
+                app.s.canvas.groups[gi].expanded.remove(&id);
+                render(app);
+            }
             Some("drill") => {
                 app.s.canvas.scope = id;
                 render(app);

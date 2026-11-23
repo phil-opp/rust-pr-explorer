@@ -147,10 +147,11 @@ Every item shows what rustdoc would show: its definition or signature (private f
 ### Canvas
 
 - Click any name to place its item next to the current card, with a connector between the two.
-- **calls ▸** shows callees and **◂ callers** shows callers. **◂ used by** shows where a type or trait is used, broken down into signatures, fields, impls and bodies.
-- Edges: solid for calls, dotted for uses. Every edge is resolved, never guessed. A card lists how many call sites in its body could not be resolved, so a missing edge is visible.
+- **◂ callers** shows callers, to the left of the card, and **calls ▸** shows callees, to the right. **◂ used by** shows where a type or trait is used, broken down into signatures, fields, impls and bodies.
+- Edges: solid for calls, dotted for uses. Every edge is resolved, never guessed. A badge in a card's footer ("3 unresolved") counts the call sites in its body that could not be resolved, so a missing edge is visible; its tooltip says why.
 - Drag a card by its header onto another card's header to combine them into **tabs**. *members as tabs* opens all methods of a type in one tabbed card.
-- **Viewing from** sets the module the canvas is looking from. Only items that are visible from that module, under Rust's privacy rules, are shown. Hidden callers and callees are summarized ("2 callers are private to `mod lexer`") with a link to drill into that module.
+- **Viewing from** sets the module the canvas is looking from. Only items that are visible from that module, under Rust's privacy rules, are shown. Hidden callers and callees are counted in a badge ("2 private callers"); its tooltip names the modules they are private to, and a click views the canvas from that module.
+- Cards of unchanged items (an unchanged callee, say) show only their signature. **docs & source ▾** expands one, **signature only ▴** folds it again.
 - **Arrange by module** lays the cards out inside nested module frames, with each module's private items in a dashed zone.
 
 ### Structure view
