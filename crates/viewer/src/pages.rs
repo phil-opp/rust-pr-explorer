@@ -274,8 +274,12 @@ fn item_row(
         ),
         _ => d.title_html(it, false),
     };
-    // What changed in the body, expandable to the diff.
-    let src = if it.changes.body || it.changes.cosmetic {
+    // What changed in the body, expandable to the diff; the whole source
+    // of new and removed items.
+    let src = if it.changes.body
+        || it.changes.cosmetic
+        || matches!(it.status, Status::Added | Status::Removed)
+    {
         d.source_seg(it, None, false, &Default::default())
     } else {
         None
@@ -488,6 +492,9 @@ pub fn render_overview(app: &App) {
             .entry(d.mod_of(it).to_string())
             .or_default()
             .push(it);
+    }
+    for list in internal.values_mut() {
+        list.sort_by(|a, b| d.reading_order(a, b));
     }
     let internal_html: String = internal
         .iter()

@@ -195,6 +195,11 @@ pub struct ItemInfo {
     /// stands for the re-export; its `sig` is the `pub use`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reexport_of: Option<String>,
+    /// Code that exists only in tests of a library or binary: marked
+    /// `#[test]` or `#[cfg(test)]`, or inside a test-only module, impl or
+    /// trait. Never part of the public API.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub test_only: bool,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -291,6 +296,24 @@ pub struct SigDiff {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SourceLine(pub char, pub String);
 
+/// A block of removed or added lines of an item's source that was moved.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MovedLines {
+    /// `-` for removed lines (moved away), `+` for added ones (moved here).
+    pub side: char,
+    /// The block's first line and its number of lines, counted in that
+    /// side's version of the source: `source` without the lines of the
+    /// other side.
+    pub start: u32,
+    pub len: u32,
+    /// The item the lines were moved to (for removed lines) or from (for
+    /// added ones). It can be this item itself.
+    pub other: String,
+    /// The block's first line there, as a line number in that version's
+    /// file.
+    pub other_line: u32,
+}
+
 /// An item as compared between base and head.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Item {
@@ -325,6 +348,12 @@ pub struct Item {
     /// item, `info` is the base version and has them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub old_source_refs: BTreeMap<String, Ref>,
+    /// Blocks of `source`'s removed or added lines that were moved: they
+    /// appear, the same apart from whitespace, among the added or removed
+    /// lines of another item (e.g. an extracted helper) or elsewhere in
+    /// this one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moved_lines: Vec<MovedLines>,
     /// How the item's public API changed, if it is public on either side
     /// and its API changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -475,8 +504,8 @@ pub struct ChangedFile {
     /// Path relative to the repository root.
     pub path: String,
     pub status: Status,
-    /// `rust`, `python`, `markdown`, `toml`, `yaml`, `binary`, `symlink` or
-    /// `text`.
+    /// `rust`, `python`, `markdown`, `toml`, `yaml`, `css`, `binary`,
+    /// `symlink` or `text`.
     pub lang: String,
     /// Part of the Rust analysis (shown as items, not as a file).
     #[serde(default)]
@@ -512,12 +541,19 @@ pub struct ChangedFile {
     /// Structured changes of a `Cargo.toml`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub manifest: Vec<ManifestChange>,
+    /// The packages whose locked versions changed, for `Cargo.lock`,
+    /// `uv.lock` and `poetry.lock`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lock: Vec<LockChange>,
     /// The file's changed parts, each shown as a box: functions and
     /// classes of a Python file, keys of a YAML file, and for an analyzed
     /// Rust file the code that belongs to no item (tests, macro calls,
     /// `extern` blocks).
     #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "python")]
     pub parts: Vec<PartChange>,
+    /// What changed in a CSS file, selector by selector.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub styles: Vec<StyleChange>,
     /// Both versions of a Markdown file, compared section by section in
     /// the viewer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -538,6 +574,87 @@ pub struct ManifestChange {
     pub old: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new: Option<String>,
+}
+
+/// A package of a lock file whose locked versions, source or checksum
+/// changed.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LockChange {
+    pub name: String,
+    /// The locked versions before and after: usually one, several when
+    /// the package is locked in more than one version, none when absent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub old: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new: Vec<String>,
+    /// Where it comes from, when that changed (or for an added package),
+    /// unless that is the default registry (crates.io, PyPI): a git
+    /// repository, another registry, a path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_source: Option<String>,
+    /// A version that is locked on both sides, from the same source, has
+    /// another checksum: the published package itself differs.
+    #[serde(default)]
+    pub checksum_changed: bool,
+}
+
+/// A selector of a stylesheet whose properties changed. Its properties
+/// are those of every rule for it in the file (in the same context),
+/// merged by the cascade: what applies to an element it matches, as far as
+/// this file decides.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StyleChange {
+    /// The selector, normalized (`.a > .b`). Several when they changed in
+    /// the same way, as the selectors of one rule `h1, h2 { … }` do.
+    /// Nested rules are resolved (`.a { &:hover { … } }` is `.a:hover`).
+    /// For a statement (`@import …;`), the statement.
+    pub selectors: Vec<String>,
+    /// The at-rules around it, outermost first: `@media (width < 600px)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<String>,
+    pub status: Status,
+    /// A statement at-rule (`@import`, `@charset`, `@layer a, b;`), which
+    /// has no properties.
+    #[serde(default)]
+    pub statement: bool,
+    /// First line of each rule for the selector, in the head version (base
+    /// for a removed one).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<usize>,
+    /// Properties added, removed or changed, and those whose declarations
+    /// changed while the value that applies didn't (with a `note`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub props: Vec<PropChange>,
+    /// The selector's other properties, as they apply in the head version
+    /// (`new` only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unchanged: Vec<PropChange>,
+}
+
+/// One property of a selector, before and after.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropChange {
+    /// `color`, `--accent`.
+    pub name: String,
+    /// The value that applies, `None` if the property isn't set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old: Option<PropValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new: Option<PropValue>,
+    /// Why the declarations changed without effect, e.g. "Line 12 sets
+    /// `red`, but line 20 overrides it: no effect."
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// A property's value (whitespace normalized, `!important` included) and
+/// the line of the declaration it comes from.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropValue {
+    pub value: String,
+    pub line: usize,
 }
 
 /// A part of a file that changed: a Python function or class, a YAML

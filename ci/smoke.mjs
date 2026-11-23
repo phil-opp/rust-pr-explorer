@@ -7,11 +7,18 @@
 // uncaught error, console error or failed request, on an empty view, and if
 // both themes render with the same background. Screenshots of every view go
 // to <out-dir>.
+//
+// Every state is also checked with axe-core's color-contrast rule (WCAG 2 AA:
+// 4.5:1 for normal text, 3:1 for large text). Needs `axe-core` installed
+// next to `playwright`.
 
 import { chromium } from "playwright";
 import { mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+
+const axe_path = createRequire(import.meta.url).resolve("axe-core/axe.min.js");
 
 const [page_path, out_dir] = process.argv.slice(2);
 if (!page_path || !out_dir) {
@@ -23,6 +30,39 @@ const url = pathToFileURL(resolve(page_path)).href;
 
 const VIEWS = ["overview", "module", "canvas", "space"];
 const failures = [];
+// Contrast violations, keyed by theme and color pair, so that a pair that
+// shows on many elements is reported once.
+const contrast = new Map();
+
+// Runs axe's color-contrast rule on the page as it is now shown.
+async function check_contrast(page, scheme, where) {
+  await page.addScriptTag({ path: axe_path });
+  const nodes = await page.evaluate(async () => {
+    const r = await window.axe.run(document, {
+      runOnly: { type: "rule", values: ["color-contrast"] },
+      resultTypes: ["violations"],
+    });
+    return r.violations.flatMap((v) =>
+      v.nodes.map((n) => ({
+        html: n.html.slice(0, 120),
+        data: n.any[0]?.data ?? {},
+      })),
+    );
+  });
+  for (const n of nodes) {
+    const d = n.data;
+    const key = `[${scheme}] ${d.fgColor} on ${d.bgColor}`;
+    const seen = contrast.get(key);
+    if (seen) {
+      seen.count += 1;
+    } else {
+      contrast.set(key, {
+        text: `${key}: ${d.contrastRatio}:1, needs ${d.expectedContrastRatio} (${where}, e.g. ${n.html})`,
+        count: 1,
+      });
+    }
+  }
+}
 const backgrounds = {};
 
 const browser = await chromium.launch();
@@ -62,6 +102,7 @@ try {
       const empty = await section.evaluate((el) => el.innerText.trim() === "" && el.querySelector("svg, canvas, .card") === null);
       if (empty) fail(`view "${view}" is empty`);
       await page.screenshot({ path: `${out_dir}/${scheme}-${view}.png` });
+      await check_contrast(page, scheme, `${view} view`);
     }
 
     // Open an item from the overview on the canvas.
@@ -74,9 +115,18 @@ try {
       try {
         await page.locator("#cards .card").first().waitFor({ state: "visible", timeout: 5_000 });
         await page.screenshot({ path: `${out_dir}/${scheme}-canvas-card.png` });
+        await check_contrast(page, scheme, "canvas card");
       } catch {
         fail("opening an item shows no card on the canvas");
       }
+    }
+
+    // Review mode: the review bar and the verdict controls on the cards.
+    const review = page.locator("#rv-mode");
+    if ((await review.count()) > 0 && (await review.isVisible())) {
+      await review.click();
+      await page.screenshot({ path: `${out_dir}/${scheme}-review.png` });
+      await check_contrast(page, scheme, "review mode");
     }
     await context.close();
   }
@@ -87,8 +137,15 @@ try {
 if (backgrounds.light === backgrounds.dark) {
   failures.push(`light and dark themes have the same background (${backgrounds.light})`);
 }
+if (contrast.size > 0) {
+  failures.push(
+    `${contrast.size} text color pair(s) below the WCAG AA contrast ratio:\n${[...contrast.values()]
+      .map((c) => `      ${c.text} (${c.count} element${c.count > 1 ? "s" : ""})`)
+      .join("\n")}`,
+  );
+}
 if (failures.length > 0) {
   console.error(`Smoke test failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`);
   process.exit(1);
 }
-console.log(`Smoke test passed: ${VIEWS.length} views in light and dark (backgrounds ${backgrounds.light}, ${backgrounds.dark}).`);
+console.log(`Smoke test passed: ${VIEWS.length} views in light and dark, contrast checked (backgrounds ${backgrounds.light}, ${backgrounds.dark}).`);

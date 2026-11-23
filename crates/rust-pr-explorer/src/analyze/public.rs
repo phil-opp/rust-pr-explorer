@@ -89,10 +89,9 @@ impl Analyzer {
             }
             item.info.public = true;
             for child in item.info.children.clone() {
-                if items
-                    .get(&child)
-                    .is_some_and(|c| c.info.vis_scope.is_none() && !c.doc_hidden)
-                {
+                if items.get(&child).is_some_and(|c| {
+                    c.info.vis_scope.is_none() && !c.doc_hidden && !c.info.test_only
+                }) {
                     mark_public(&child, items);
                 }
             }
@@ -122,6 +121,7 @@ impl Analyzer {
                     || i.vis_scope.is_some()
                     || i.kind == Kind::Impl
                     || item.doc_hidden
+                    || item.info.test_only
                 {
                     continue;
                 }
@@ -130,7 +130,10 @@ impl Analyzer {
                 }
             }
             for (module, target, name) in reexports {
-                if items.get(target).is_some_and(|t| t.doc_hidden) {
+                if items
+                    .get(target)
+                    .is_some_and(|t| t.doc_hidden || t.info.test_only)
+                {
                     continue;
                 }
                 let Some(name) = name
@@ -189,6 +192,7 @@ fn reachable(
         Some(item) => {
             item.info.vis_scope.is_none()
                 && !item.doc_hidden
+                && !item.info.test_only
                 && match &item.info.vis_parent {
                     None => true,
                     Some(parent) => reachable(parent, items, memo),

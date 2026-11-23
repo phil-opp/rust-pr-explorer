@@ -428,6 +428,7 @@ fn member_public(
         Some(item) => {
             item.info.vis_scope.is_none()
                 && !item.doc_hidden
+                && !item.info.test_only
                 && match &item.info.vis_parent {
                     None => true,
                     Some(p) => member_public(p, items, memo),
