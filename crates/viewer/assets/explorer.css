@@ -107,8 +107,16 @@ code { font-size: .92em; }
 .top-row.sub { height: 39px; border-top: 1px solid var(--border); gap: 14px; }
 #settings-btn { white-space: nowrap; }
 .brand { font-weight: 700; white-space: nowrap; }
-#pr-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 14px; }
-#pr-title b { color: var(--text); }
+#pr-title { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; line-height: 1.25; }
+#pr-title > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#pr-title .hd-main { font-size: 15px; color: var(--muted); }
+#pr-title .hd-main { display: flex; gap: 6px; }
+/* The title shrinks; the PR number stays visible. */
+#pr-title .hd-main b { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#pr-title .hd-main a { font-weight: 600; flex: none; }
+#pr-title .hd-sub { font-size: 12px; color: var(--muted); }
+#pr-title .hd-sub:empty { display: none; }
+#pr-title .hd-sub code { font-size: 11px; }
 #views { display: flex; gap: 4px; }
 #views button { padding: 4px 12px; }
 .search { position: relative; }
