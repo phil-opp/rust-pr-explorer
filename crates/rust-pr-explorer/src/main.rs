@@ -4,6 +4,7 @@ mod analyze;
 mod css;
 mod files;
 mod javascript;
+mod lockfile;
 mod merge;
 mod parts;
 #[cfg(feature = "semantic")]
