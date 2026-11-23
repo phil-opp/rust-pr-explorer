@@ -31,6 +31,7 @@ crates/rust-pr-explorer  CLI: get sources, analyze, compare, write the page
   src/parts.rs           files split into parts compared one by one: YAML keys,
                          Rust code outside items (tests, macro calls, extern)
   src/python.rs          Python files compared by function and class
+  src/javascript.rs      JavaScript files compared by function, class, method, test
   src/css.rs             CSS files compared by selector, rules merged by the cascade
   build.rs               compiles crates/viewer to wasm, runs wasm-bindgen
 crates/viewer            the page's front end (wasm, web-sys, pulldown-cmark)
