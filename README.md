@@ -69,6 +69,8 @@ The action builds the tool, runs `pr` on the pull request and uploads the page a
 
 Build time: the built tool is cached under a hash of its sources, so once a run has built it, later runs skip the build (in a repository that only uses the action, that is every run after the first). The build's dependencies, mainly rust-analyzer, are cached on the default branch, the only branch whose caches every pull request can read, so the `push` trigger above keeps new pull requests from building them from scratch (about 5 minutes). On a push, the action only builds and caches the tool. The tool is built with the `action` profile (see `Cargo.toml`): dependencies optimized, the tool's own crates not, which builds faster than `--release` and analyzes as fast.
 
+To keep the action out of the repository's cache storage (10 GB per repository, shared with other workflows), set `cache: false`: every run then builds the tool from scratch, about 7 minutes. `save-cache: false` caches only the built tool (about 12 MB) and not the dependencies (about 200 MB).
+
 Who can open the page: anyone logged in to GitHub with access to the repository, the same people who can see the workflow run. It expires with the run's artifacts (90 days unless the repository sets otherwise, or the `retention-days` input).
 
 Inputs: `comment: false` leaves out the comment, `syntax-only: true` skips rust-analyzer, and `pr` and `repository` pick another pull request (by default the one that triggered the workflow). The `page-url` output is the link.
