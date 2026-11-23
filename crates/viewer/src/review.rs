@@ -565,9 +565,10 @@ pub fn load(d: &Data) {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     notes.retain(|id, _| marks.contains_key(id));
+    // On unless the reader turned it off before.
     let on = store
         .and_then(|s| s.get_item(MODE_KEY).ok().flatten())
-        .is_some_and(|v| v == "on");
+        .is_none_or(|v| v != "off");
     let (hunks, prints) = hunks_and_prints(d, &units);
     let order = call_order(d, &units);
     REVIEW.with(|r| {
@@ -778,6 +779,27 @@ pub fn next_open_where(after: Option<&str>, keep: impl Fn(&str) -> bool) -> Opti
         .cloned()
 }
 
+/// The first item that the source of item `of` tags as new or changed
+/// (see `code::ref_tag`) and that still needs a review, in the order the
+/// source names them: where `Enter` goes in review mode.
+pub fn next_open_call(d: &Data, of: &str) -> Option<String> {
+    let it = d.item(of)?;
+    let mut refs: Vec<((usize, usize), &str)> = it
+        .info
+        .source_refs
+        .iter()
+        .filter_map(|(at, r)| {
+            let (l, c) = at.split_once(':')?;
+            Some(((l.parse().ok()?, c.parse().ok()?), r.id.as_deref()?))
+        })
+        .collect();
+    refs.sort();
+    refs.into_iter()
+        .map(|(_, id)| id)
+        .find(|id| crate::code::ref_tag(d, id, of).is_some() && mark(id) != Some(Mark::Done))
+        .map(str::to_string)
+}
+
 /// Shows a reviewed unit whole again, or folds it back to one line.
 pub fn toggle_unfolded(id: &str) {
     REVIEW.with(|r| {
@@ -818,7 +840,7 @@ fn control_class(id: &str, m: Mark) -> String {
 
 /// The verdict buttons, as on GitHub. Approving moves on right away; the
 /// other two ask for a comment first.
-const ACTIONS: &str = r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve and go to the next item">✓ Approve</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Add a comment">✎ Comment</button>"#;
+const ACTIONS: &str = r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve and go to the next item (a)">✓ Approve</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Add a comment (c)">✎ Comment</button>"#;
 
 /// One line of a comment, shortened, for the button that edits it.
 fn snippet(text: &str) -> String {
@@ -836,12 +858,12 @@ fn snippet(text: &str) -> String {
 /// just the unit.
 fn actions(id: &str) -> String {
     if hunk_item(id).is_some() {
-        return r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve only this change">✓ Approve change</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change here">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on this change">✎ Comment</button>"#.to_string();
+        return r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve only this change (a, after j/k)">✓ Approve change</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change here (r, after j/k)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on this change (c, after j/k)">✎ Comment</button>"#.to_string();
     }
     let n = hunks_of(id).len();
     if n > 1 {
         return format!(
-            r#"<span class="rv-scope" title="These buttons give the whole item one verdict. Each change also has its own buttons.">Whole item ({n} changes):</span><button class="rv-btn approve" data-rv-act="approve" title="Approve the whole item and go to the next one">✓ Approve item</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on the whole item">✎ Comment</button>"#
+            r#"<span class="rv-scope" title="These buttons give the whole item one verdict. Each change also has its own buttons.">Whole item ({n} changes):</span><button class="rv-btn approve" data-rv-act="approve" title="Approve the whole item and go to the next one (a)">✓ Approve item</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on the whole item (c)">✎ Comment</button>"#
         );
     }
     ACTIONS.to_string()
@@ -897,6 +919,12 @@ fn refresh(id: &str) {
             el.set_inner_html(&inner);
         }
     }
+    // References to the unit in source views get or lose their ✓.
+    for el in dom::query_all("a.ref.new, a.ref.chg") {
+        if dom::data(&el, "id").as_deref() == Some(id) {
+            dom::toggle_class(&el, "rv-ok", m == Mark::Done);
+        }
+    }
     update_progress();
 }
 
@@ -947,7 +975,7 @@ fn update_groups() {
 }
 
 /// Leaves review mode; the marks stay.
-const EXIT: &str = r#"<button id="rv-exit" title="Hide the review controls; your marks stay">Exit review</button>"#;
+const EXIT: &str = r#"<button id="rv-keys" title="Keyboard shortcuts (?)">?</button><button id="rv-exit" title="Hide the review controls; your marks stay">Exit review</button>"#;
 
 /// The progress and the review actions in the header: "Next" while
 /// something is left, then "Finish review…" as the main action. "Clear"
@@ -1396,6 +1424,77 @@ mod tests {
         assert!(hunk_controls("c::root_fn", &[13], &[]).contains(&esc(&h[0].id)));
         assert!(!hunk_controls("c::root_fn", &[13], &[]).contains(&esc(&h[1].id)));
         assert!(hunk_controls("c::root_fn", &[23], &[11]).contains(&esc(&h[1].id)));
+    }
+
+    #[test]
+    fn references_to_reviewed_items_get_a_check() {
+        let mut out = data().out;
+        let f = out.items.get_mut("c::root_fn").unwrap();
+        f.changes.body = true;
+        f.source = vec![sl('+', "    late();"), sl('+', "    new_fn();")];
+        for (at, to) in [("9:4", "c::b::late"), ("10:4", "c::a::new_fn")] {
+            f.info.source_refs.insert(
+                at.into(),
+                model::Ref {
+                    id: Some(to.into()),
+                    path: to.into(),
+                },
+            );
+        }
+        let d = Data::new(out);
+        let late = print_of_in(&d, "c::b::late");
+        set(&d, &[("c::b::late", late)]);
+        let html = d.source_html(d.item("c::root_fn").unwrap(), Some(true), false);
+        assert!(
+            html.contains(r#"<a class="ref chg rv-ok" data-id="c::b::late""#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<a class="ref new" data-id="c::a::new_fn""#),
+            "{html}"
+        );
+    }
+
+    #[test]
+    fn enter_follows_the_first_unreviewed_tagged_call() {
+        let mut out = data().out;
+        let f = out.items.get_mut("c::root_fn").unwrap();
+        // In source order: `late` (changed), `same` (unchanged), `new_fn`
+        // (added), and `root_fn` itself. Positions compare as numbers.
+        for (at, to) in [
+            ("10:4", "c::a::new_fn"),
+            ("9:30", "c::a::same"),
+            ("9:12", "c::root_fn"),
+            ("9:4", "c::b::late"),
+        ] {
+            f.info.source_refs.insert(
+                at.into(),
+                model::Ref {
+                    id: Some(to.into()),
+                    path: to.into(),
+                },
+            );
+        }
+        let d = Data::new(out);
+        set(&d, &[]);
+        assert_eq!(
+            next_open_call(&d, "c::root_fn").as_deref(),
+            Some("c::b::late")
+        );
+        let late = print_of("c::b::late");
+        set(&d, &[("c::b::late", late)]);
+        assert_eq!(
+            next_open_call(&d, "c::root_fn").as_deref(),
+            Some("c::a::new_fn")
+        );
+        let new_fn = print_of("c::a::new_fn");
+        set(&d, &[("c::b::late", late), ("c::a::new_fn", new_fn)]);
+        assert_eq!(next_open_call(&d, "c::root_fn"), None);
+    }
+
+    fn print_of_in(d: &Data, id: &str) -> u64 {
+        set(d, &[]);
+        print_of(id)
     }
 
     #[test]

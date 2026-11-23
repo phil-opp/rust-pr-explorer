@@ -1409,3 +1409,24 @@ fn notes_on_fields_and_variants_carry_their_docs() {
         Some("The new mode.".to_string())
     );
 }
+
+#[test]
+fn derives_count_and_their_order_does_not() {
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "#[derive(Clone, Debug, Hash)]\npub struct Key(pub u8);\n#[derive(Debug, Clone)]\npub struct Same;\n",
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        "#[derive(Clone, Debug)]\npub struct Key(pub u8);\n#[derive(Clone, Debug)]\npub struct Same;\n",
+    )]);
+    let out = analyze_dirs(base.path(), head.path());
+    let key = &out.items["t::Key"];
+    assert_eq!(key.status, Status::Changed);
+    assert!(key.changes.signature);
+    let api = key.api.as_ref().unwrap();
+    assert_eq!(api.level, model::ApiLevel::Breaking);
+    assert!(api.reasons[0].contains("`Hash`"), "{:?}", api.reasons);
+    // Reordered, not changed.
+    assert_eq!(out.items["t::Same"].status, Status::Unchanged);
+}

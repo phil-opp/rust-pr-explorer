@@ -310,6 +310,37 @@ fn type_attrs(old: &[syn::Attribute], new: &[syn::Attribute], v: &mut Verdict) {
     if repr(old) != repr(new) {
         v.unknown("`#[repr]` changed");
     }
+    let (before, after) = (derives(old), derives(new));
+    for d in before.iter().filter(|d| !after.contains(d)) {
+        v.breaking(format!(
+            "no longer derives `{d}`: code that relies on the impl breaks"
+        ));
+    }
+    for d in after.iter().filter(|d| !before.contains(d)) {
+        v.compatible(format!("now derives `{d}`"));
+    }
+}
+
+/// The traits in `#[derive(…)]`, as written (`Clone`, `serde::Serialize`).
+fn derives(attrs: &[syn::Attribute]) -> Vec<String> {
+    attrs
+        .iter()
+        .filter(|a| a.path().is_ident("derive"))
+        .filter_map(|a| {
+            a.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+            )
+            .ok()
+        })
+        .flatten()
+        .map(|p| {
+            p.segments
+                .iter()
+                .map(|s| s.ident.to_string())
+                .collect::<Vec<_>>()
+                .join("::")
+        })
+        .collect()
 }
 
 fn generics(old: &syn::Generics, new: &syn::Generics, v: &mut Verdict) {
@@ -635,6 +666,23 @@ mod tests {
                 Kind::Struct,
                 "#[non_exhaustive]\npub struct S { pub a: u8 }",
                 "#[non_exhaustive]\npub struct S { pub a: u8, pub b: u8 }"
+            ),
+            Compatible
+        );
+        // Derived impls are part of the API too.
+        assert_eq!(
+            level(
+                Kind::Struct,
+                "#[derive(Clone, Hash)]\npub struct S;",
+                "#[derive(Clone)]\npub struct S;"
+            ),
+            Breaking
+        );
+        assert_eq!(
+            level(
+                Kind::Enum,
+                "#[derive(Clone)]\npub enum E { A }",
+                "#[derive(Clone, serde::Serialize)]\npub enum E { A }"
             ),
             Compatible
         );

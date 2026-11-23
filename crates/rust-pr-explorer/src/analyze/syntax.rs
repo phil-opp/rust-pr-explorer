@@ -310,17 +310,35 @@ pub(super) fn is_doc_hidden(attrs: &[Attribute]) -> bool {
     })
 }
 
-/// Attributes rustdoc shows in a definition.
+/// Attributes rustdoc shows in a definition, plus `#[derive]`: rustdoc
+/// lists derived traits as impls, which the syntactic pass doesn't see, so
+/// the definition is where a derive that was added or removed shows.
 pub(super) fn shown_attrs(attrs: &[Attribute]) -> Vec<Attribute> {
     attrs
         .iter()
         .filter(|a| {
-            ["repr", "non_exhaustive", "must_use", "deprecated"]
+            ["repr", "non_exhaustive", "must_use", "deprecated", "derive"]
                 .iter()
                 .any(|n| a.path().is_ident(n))
         })
-        .cloned()
+        .map(sorted_derive)
         .collect()
+}
+
+/// A `#[derive]` with its traits sorted, so that reordering them is no
+/// change. Other attributes are returned as they are.
+fn sorted_derive(a: &Attribute) -> Attribute {
+    if !a.path().is_ident("derive") {
+        return a.clone();
+    }
+    let Ok(list) = a.parse_args_with(
+        syn::punctuated::Punctuated::<syn::Path, syn::Token![,]>::parse_terminated,
+    ) else {
+        return a.clone();
+    };
+    let mut paths: Vec<syn::Path> = list.into_iter().collect();
+    paths.sort_by_key(|p| p.to_token_stream().to_string());
+    parse_quote!(#[derive(#(#paths),*)])
 }
 
 pub(super) fn strip_field_docs(fields: &mut syn::Fields) {
