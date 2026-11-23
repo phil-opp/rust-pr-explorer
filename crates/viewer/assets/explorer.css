@@ -155,6 +155,16 @@ code { font-size: .92em; }
 .vis { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; white-space: nowrap; }
 .vis.pub { color: var(--added); border-color: var(--added-bg); }
 .kind { font: 600 11px var(--sans); text-transform: lowercase; color: var(--muted); }
+/* SemVer labels: differ in border style and icon too, not only in color. */
+.api { display: inline-block; font: 600 11px/16px var(--sans); padding: 0 6px; border-radius: 3px; white-space: nowrap; cursor: help; }
+.api-breaking { color: var(--removed); border: 1.5px solid var(--removed); }
+.api-unknown { color: var(--changed); border: 1.5px dashed var(--changed); }
+.api-compatible { color: var(--muted); border: 1px dotted var(--muted); }
+.api-why { margin: 0; padding-left: 18px; font-size: 13px; }
+.api-why.api-breaking, .api-why.api-unknown, .api-why.api-compatible { border: none; padding: 0 0 0 18px; display: block; cursor: auto; font: 13px var(--sans); color: var(--text); }
+.api-why.api-breaking li::marker { color: var(--removed); }
+.api-why.api-compatible { color: var(--muted); }
+.semver-sum { margin: 0 0 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
 /* Code */
 /* Signatures are laid out by the analysis (rustfmt style); never soft-wrap. */

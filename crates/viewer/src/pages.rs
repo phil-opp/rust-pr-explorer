@@ -135,10 +135,14 @@ fn item_row(
     } else {
         None
     };
-    let body = d.item_body_html(it, scope, false, src);
+    let body = format!(
+        "{}{}",
+        d.api_reasons_html(it),
+        d.item_body_html(it, scope, false, src)
+    );
     format!(
         r#"<div class="irow {} {} {} {}" data-id="{}">
-        <div class="ihead"><span class="kind">{}</span>{} {} {}</div>
+        <div class="ihead"><span class="kind">{}</span>{} {} {} {}</div>
         <div class="iacts">{}<button data-open="{}" title="Open on the canvas">Open ▸</button></div>
         {body}</div>"#,
         it.status.css(),
@@ -154,6 +158,7 @@ fn item_row(
         } else {
             String::new()
         },
+        d.api_badge(it),
         crate::review::control_html(&it.info.id),
         esc(&it.info.id),
     )
@@ -367,10 +372,11 @@ pub fn render_overview(app: &App) {
         format!(
             r#"<h2>Public API changes</h2>
         <p class="sub">Items reachable from outside the crate that were added, changed or removed, in rustdoc form. Types appear as context when only their members changed.</p>
-        {}
+        {}{}
         <h2>Internal changes</h2>
         <p class="sub">Items not reachable from outside the crate (private, pub(crate), pub(super), …), and the code of binaries, tests, examples and build scripts. Open a module to see them and its internal call graph.</p>
         {}"#,
+            semver_summary(d),
             if public_html.is_empty() {
                 r#"<div class="empty-state">This pull request does not change the public API.</div>"#
                     .to_string()
@@ -402,6 +408,48 @@ pub fn render_overview(app: &App) {
         crate::files::other_files_html(d),
     );
     dom::set_html("view-overview", &html);
+}
+
+/// How many public API changes are breaking, and the version bump that
+/// follows from that.
+fn semver_summary(d: &Data) -> String {
+    use model::ApiLevel;
+    let mut counts = [0usize; 3];
+    for it in d.items().filter(|it| d.in_public_api(it)) {
+        if let Some(api) = &it.api {
+            counts[match api.level {
+                ApiLevel::Breaking => 0,
+                ApiLevel::Unknown => 1,
+                ApiLevel::Compatible => 2,
+            }] += 1;
+        }
+    }
+    let [breaking, unknown, compatible] = counts;
+    if breaking + unknown + compatible == 0 {
+        return String::new();
+    }
+    let bump = if breaking > 0 {
+        "a major version bump (minor before 1.0)"
+    } else if unknown > 0 {
+        "at least a minor version bump, depending on the changes to check by hand"
+    } else {
+        "a minor version bump (patch before 1.0)"
+    };
+    let part = |n: usize, what: &str, css: &str| {
+        (n > 0).then(|| format!(r#"<span class="api api-{css}">{n} {what}</span>"#))
+    };
+    let parts: Vec<String> = [
+        part(breaking, "breaking", "breaking"),
+        part(unknown, "to check by hand", "unknown"),
+        part(compatible, "non-breaking", "compatible"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    format!(
+        r#"<div class="semver-sum">{} <span class="dim">By Cargo's SemVer rules, this needs {bump}. Hover a label for why.</span></div>"#,
+        parts.join(" ")
+    )
 }
 
 /// Module page: a module as a privacy boundary.
