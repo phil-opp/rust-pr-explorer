@@ -88,6 +88,10 @@ try {
       })
       .catch(() => fail("the viewer did not start (sidebar stays empty)"));
 
+    if (!(await page.evaluate(() => document.body.classList.contains("reviewing")))) {
+      fail("review mode is not on when the page opens");
+    }
+
     backgrounds[scheme] = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
 
     for (const view of VIEWS) {
@@ -121,12 +125,14 @@ try {
       }
     }
 
-    // Review mode: the review bar and the verdict controls on the cards.
-    const review = page.locator("#rv-mode");
-    if ((await review.count()) > 0 && (await review.isVisible())) {
-      await review.click();
-      await page.screenshot({ path: `${out_dir}/${scheme}-review.png` });
-      await check_contrast(page, scheme, "review mode");
+    // Review mode is on by default, so the views above were checked with
+    // the review bar and the verdict controls. Check the canvas once more
+    // with it turned off.
+    const exit = page.locator("#rv-exit");
+    if ((await exit.count()) > 0 && (await exit.isVisible())) {
+      await exit.click();
+      await page.screenshot({ path: `${out_dir}/${scheme}-review-off.png` });
+      await check_contrast(page, scheme, "review mode off");
     }
     await context.close();
   }
