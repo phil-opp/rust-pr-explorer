@@ -412,6 +412,7 @@ a.ref:hover { text-decoration: underline; }
 .card-acts { display: flex; gap: 4px; flex-wrap: wrap; }
 .card-acts button { font-size: 12px; padding: 1px 7px; }
 .card-acts button .n { color: var(--muted); }
+.card-acts button.on .n { color: inherit; }
 .card-acts { align-items: center; }
 .card-acts .grow { flex: 1; }
 /* What a card doesn't show (unresolved call sites, private callees): a small
