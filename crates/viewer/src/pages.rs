@@ -291,14 +291,15 @@ fn item_row(
         None
     };
     let body = format!(
-        "{}{}",
+        "{}{}{}",
         d.api_reasons_html(it),
+        crate::impact::line_html(d, it),
         d.item_body_html(it, scope, false, src)
     );
     format!(
         r#"<div class="irow {} {} {} {}" data-id="{}">
         <div class="ihead"><span class="kind">{}</span>{} {} {} {}</div>
-        <div class="iacts">{}<button data-open="{}" title="Open on the canvas">Open ▸</button></div>
+        <div class="iacts">{}{}<button data-open="{}" title="Open on the canvas">Open ▸</button></div>
         {body}</div>"#,
         it.status.css(),
         if context { "context" } else { "" },
@@ -315,6 +316,13 @@ fn item_row(
         },
         d.api_badge(it),
         crate::review::control_html(&it.info.id),
+        crate::post::github_link(
+            d,
+            crate::post::item_loc(&d.out.files, it),
+            "gh-link",
+            "GitHub ↗",
+            "this item",
+        ),
         esc(&it.info.id),
     )
 }
@@ -503,7 +511,7 @@ pub fn render_overview(app: &App) {
             format!(
                 r#"<div class="irow"><div class="ihead"><a data-mod="{}" class="title-name"><span class="k-mod">{}</span></a>
                 <span class="dim">{} changed item{} not in the public API: {}</span><span class="rv-group">{}</span></div>
-                <div class="iacts"><button data-graph="{}">Internal call graph ▸</button></div></div>"#,
+                <div class="iacts"><button data-graph="{}">Internal call graph ▸</button></div>{}</div>"#,
                 esc(m),
                 esc(&d.mod_label(m)),
                 list.len(),
@@ -513,7 +521,8 @@ pub fn render_overview(app: &App) {
                     .collect::<Vec<_>>()
                     .join(", "),
                 crate::review::group_html(list.iter().map(|it| it.info.id.as_str())),
-                esc(m)
+                esc(m),
+                crate::impact::list_html(d, list),
             )
         })
         .collect();
