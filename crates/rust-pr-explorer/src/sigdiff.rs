@@ -29,6 +29,7 @@ pub fn diff(
         new_refs,
         retargets: Vec::new(),
         member: None,
+        variant: None,
     };
     let (po, pn) = (Parsed::new(kind, old)?, Parsed::new(kind, new)?);
     let (old_sections, new_sections) = (po.sections()?, pn.sections()?);
@@ -106,6 +107,8 @@ struct Piece<'a> {
     range: Range<usize>,
     /// The piece's type, if it has one (parameters, fields, return type).
     ty: Option<&'a syn::Type>,
+    /// A variant's fields, diffed one by one when only they changed.
+    fields: Option<&'a syn::Fields>,
 }
 
 /// A list of pieces: e.g. the parameters of a function.
@@ -152,6 +155,7 @@ fn fn_sections<'a>(f: &'a syn::ItemFn, text: &str) -> Vec<Section<'a>> {
             key: "head".into(),
             range: 0..ident_end,
             ty: None,
+            fields: None,
         }],
         anchor: 0,
         end: ident_end,
@@ -176,6 +180,7 @@ fn fn_sections<'a>(f: &'a syn::ItemFn, text: &str) -> Vec<Section<'a>> {
                 },
                 range: range_of(p.span()),
                 ty: None,
+                fields: None,
             })
             .collect(),
         anchor: ident_end,
@@ -193,6 +198,7 @@ fn fn_sections<'a>(f: &'a syn::ItemFn, text: &str) -> Vec<Section<'a>> {
                     key: "self".into(),
                     range: range_of(r.span()),
                     ty: None,
+                    fields: None,
                 },
                 syn::FnArg::Typed(pt) => Piece {
                     // The binding, without `mut`: that is not part of the
@@ -202,6 +208,7 @@ fn fn_sections<'a>(f: &'a syn::ItemFn, text: &str) -> Vec<Section<'a>> {
                         .to_string(),
                     range: range_of(pt.span()),
                     ty: Some(&pt.ty),
+                    fields: None,
                 },
             })
             .collect(),
@@ -220,6 +227,7 @@ fn fn_sections<'a>(f: &'a syn::ItemFn, text: &str) -> Vec<Section<'a>> {
                     key: "return type".into(),
                     range: r,
                     ty: Some(ty),
+                    fields: None,
                 }],
                 end,
             )
@@ -248,6 +256,7 @@ fn fn_sections<'a>(f: &'a syn::ItemFn, text: &str) -> Vec<Section<'a>> {
                     },
                     range: range_of(p.span()),
                     ty: None,
+                    fields: None,
                 })
                 .collect(),
             range_of(w.span()).end,
@@ -291,6 +300,7 @@ fn data_sections<'a>(item: &'a syn::Item, text: &str) -> Option<Vec<Section<'a>>
                 key: f.ident.as_ref().map(|i| i.to_string()).unwrap_or_default(),
                 range: line_range(text, range_of(f.span())),
                 ty: Some(&f.ty),
+                fields: None,
             })
             .collect();
         let open = range_of(named.brace_token.span.open()).end;
@@ -317,6 +327,7 @@ fn data_sections<'a>(item: &'a syn::Item, text: &str) -> Option<Vec<Section<'a>>
                     key: i.to_string(),
                     range: range_of(f.span()),
                     ty: Some(&f.ty),
+                    fields: None,
                 })
                 .collect();
             (
@@ -354,6 +365,7 @@ fn data_sections<'a>(item: &'a syn::Item, text: &str) -> Option<Vec<Section<'a>>
                     key: v.ident.to_string(),
                     range: line_range(text, range_of(v.span())),
                     ty: None,
+                    fields: Some(&v.fields),
                 })
                 .collect();
             (open - 1, line_section("variant", pieces, text, open, close))
@@ -366,6 +378,7 @@ fn data_sections<'a>(item: &'a syn::Item, text: &str) -> Option<Vec<Section<'a>>
             key: "head".into(),
             range: 0..body_start,
             ty: None,
+            fields: None,
         }],
         anchor: 0,
         end: body_start,
@@ -373,6 +386,52 @@ fn data_sections<'a>(item: &'a syn::Item, text: &str) -> Option<Vec<Section<'a>>
         strip: "",
     };
     Some(vec![head, section])
+}
+
+/// The fields of a variant, as a section of their own.
+fn fields_section<'a>(text: &str, fields: &'a syn::Fields) -> Option<Section<'a>> {
+    let (open, close) = match fields {
+        syn::Fields::Named(f) => (f.brace_token.span.open(), f.brace_token.span.close()),
+        syn::Fields::Unnamed(f) => (f.paren_token.span.open(), f.paren_token.span.close()),
+        syn::Fields::Unit => return None,
+    };
+    let (open, close) = (range_of(open).end, range_of(close).start);
+    let multi_line = text[open..close].contains('\n');
+    let pieces = fields
+        .iter()
+        .enumerate()
+        .map(|(i, f)| Piece {
+            key: f.ident.as_ref().map_or(i.to_string(), |n| n.to_string()),
+            range: if multi_line {
+                line_range(text, range_of(f.span()))
+            } else {
+                range_of(f.span())
+            },
+            ty: Some(&f.ty),
+            fields: None,
+        })
+        .collect();
+    Some(line_section("field", pieces, text, open, close))
+}
+
+/// The field sections of two versions of a variant, if they can be diffed
+/// on their own: the fields are of the same kind (named or tuple) and the
+/// text around them is the same.
+fn variant_fields<'a>(
+    old: &str,
+    new: &str,
+    op: &Piece<'a>,
+    np: &Piece<'a>,
+) -> Option<(Section<'a>, Section<'a>)> {
+    let (ofs, nfs) = (op.fields?, np.fields?);
+    if std::mem::discriminant(ofs) != std::mem::discriminant(nfs) {
+        return None;
+    }
+    let (o, n) = (fields_section(old, ofs)?, fields_section(new, nfs)?);
+    // The delimiters stay outside the compared text: `{`/`(` and `}`/`)`.
+    let same_around = old[op.range.start..o.anchor] == new[np.range.start..n.anchor]
+        && old[o.end..op.range.end] == new[n.end..np.range.end];
+    same_around.then_some((o, n))
 }
 
 /// A section of one piece per line (fields or variants of a multi-line
@@ -416,6 +475,8 @@ struct Cx<'r> {
     retargets: Vec<String>,
     /// The field or variant the notes being made are about.
     member: Option<String>,
+    /// The variant whose fields are being diffed, if any.
+    variant: Option<String>,
 }
 
 /// How a type changed, for notes.
@@ -457,6 +518,10 @@ impl Cx<'_> {
     }
 
     fn note(&mut self, text: String, groups: Vec<u32>) {
+        let text = match &self.variant {
+            Some(v) => format!("variant `{v}`: {text}"),
+            None => text,
+        };
         self.notes.push(DiffNote {
             text,
             groups,
@@ -471,9 +536,12 @@ impl Cx<'_> {
     }
 
     /// Notes about a field or variant name it, so that its docs can be
-    /// shown with them.
+    /// shown with them. A variant's field is named `Variant.field`.
     fn about(&mut self, label: &str, key: &str) {
-        self.member = matches!(label, "field" | "variant").then(|| key.to_string());
+        self.member = matches!(label, "field" | "variant").then(|| match &self.variant {
+            Some(v) => format!("{v}.{key}"),
+            None => key.to_string(),
+        });
     }
 
     fn section_pieces(
@@ -580,6 +648,15 @@ impl Cx<'_> {
                         for c in changed {
                             self.note(format!("{what}: {c}"), vec![g]);
                         }
+                        continue;
+                    }
+                    // A variant whose fields changed, but not its name,
+                    // attributes or discriminant: diffed field by field, so
+                    // that the notes name only the fields that changed.
+                    if let Some((of, nf)) = variant_fields(old, new, op, np) {
+                        self.variant = Some(np.key.clone());
+                        self.section_pieces(old, new, &of, &nf, edits);
+                        self.variant = None;
                         continue;
                     }
                     let (spans, groups, change) = self.piece(old, new, op, np);
@@ -1182,6 +1259,60 @@ mod tests {
             show(&d.spans),
             "pub enum Error {\n    A(char),\n    [-B,-]\n    C { pos: [-usize-][+u32+] },\n    [+D(String),+]\n}"
         );
+        assert_eq!(
+            notes(&d),
+            [
+                "variant `C`: field `pos`: `usize` → `u32`",
+                "variant `D(String)` added",
+                "variant `B` removed"
+            ]
+        );
+    }
+
+    #[test]
+    fn variant_fields_one_by_one() {
+        let old = "pub enum Command {\n    Pr { pr: String, #[arg(long)] base: Option<String> },\n    Local(PathBuf),\n}";
+        let new = "pub enum Command {\n    Pr { pr: String, #[arg(long)] base: Option<String>, #[arg(long, conflicts_with = \"base\")] commit: Option<String> },\n    Local(PathBuf, bool),\n}";
+        let d = diff(Kind::Enum, old, new).unwrap();
+        assert_eq!(
+            show(&d.spans),
+            "pub enum Command {\n    Pr { pr: String, #[arg(long)] base: Option<String>, [+#[arg(long, conflicts_with = \"base\")] commit: Option<String>+] },\n    Local(PathBuf, [+bool+]),\n}"
+        );
+        assert_eq!(
+            notes(&d),
+            [
+                "variant `Pr`: field `#[arg(long, conflicts_with = \"base\")] commit: Option<String>` added",
+                "variant `Local`: field `bool` added"
+            ]
+        );
+        let members: Vec<_> = d.notes.iter().map(|n| n.member.as_deref()).collect();
+        assert_eq!(members, [Some("Pr.commit"), Some("Local.1")]);
+    }
+
+    #[test]
+    fn variant_fields_multi_line() {
+        let old = "pub enum E {\n    V {\n        a: u8,\n        b: u8,\n    },\n}";
+        let new = "pub enum E {\n    V {\n        a: u16,\n    },\n}";
+        let d = diff(Kind::Enum, old, new).unwrap();
+        assert_eq!(
+            notes(&d),
+            [
+                "variant `V`: field `a`: `u8` → `u16`",
+                "variant `V`: field `b: u8` removed"
+            ]
+        );
+    }
+
+    #[test]
+    fn variant_kind_change_stays_whole() {
+        // Named to tuple fields: not comparable field by field.
+        let d = diff(
+            Kind::Enum,
+            "pub enum E {\n    V { a: u8 },\n}",
+            "pub enum E {\n    V(u8),\n}",
+        )
+        .unwrap();
+        assert_eq!(notes(&d), ["variant `V`: `V { a: u8 }` → `V(u8)`"]);
     }
 
     #[test]

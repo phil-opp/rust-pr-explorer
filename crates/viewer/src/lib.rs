@@ -4,6 +4,7 @@
 //! HTML strings; one listener per event type on the document dispatches
 //! on `data-*` attributes of the element that was clicked or dragged.
 
+mod bump;
 mod canvas;
 mod code;
 mod commit_filter;
@@ -375,6 +376,21 @@ fn install_listeners() {
             && with_app(|app| keys::on_key(app, k)) == Some(true)
         {
             ev.prevent_default();
+            return;
+        }
+        // Ctrl+Z on the canvas closes what the last "calls" or "callers"
+        // click opened, unless typing (where it undoes the text).
+        if let Some(k) = ev.dyn_ref::<KeyboardEvent>()
+            && k.key().eq_ignore_ascii_case("z")
+            && (k.ctrl_key() || k.meta_key())
+            && !k.shift_key()
+            && !dom::target_element(&ev)
+                .is_some_and(|t| matches!(t.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT"))
+        {
+            let undone = with_app(|app| app.s.view == View::Canvas && canvas::undo_expansion(app));
+            if undone == Some(true) {
+                ev.prevent_default();
+            }
             return;
         }
         // Ctrl+Enter in the comment editor saves with its verdict.

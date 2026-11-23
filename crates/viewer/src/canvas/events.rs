@@ -102,6 +102,7 @@ pub fn on_click(app: &mut App, el: &Element) -> bool {
         Some("cv-clear") => {
             app.s.canvas.groups.clear();
             app.s.canvas.links.clear();
+            app.s.canvas.expansions.clear();
             render(app);
         }
         _ => return false,

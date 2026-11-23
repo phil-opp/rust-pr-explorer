@@ -1,7 +1,8 @@
 //! Opening and closing cards and tabs, and expanding an item's relatives.
 
 use super::{
-    CARD_W, EXPAND_LIMIT, apply_pan, card_el, edges::draw_edges, height_of, place, render, visible,
+    CARD_W, EXPAND_LIMIT, Expansion, apply_pan, card_el, edges::draw_edges, height_of, place,
+    render, visible,
 };
 use crate::data::changed;
 use crate::{App, View, dom, toast};
@@ -221,16 +222,23 @@ pub(super) fn close_tab(app: &mut App, gi: usize, id: &str) {
 }
 
 #[derive(Clone, Copy, PartialEq)]
-pub enum Related {
+pub(crate) enum Related {
     Callees,
     Callers,
     UsedBy,
 }
 
 /// Opens callees, callers or users of an item next to its card.
-pub fn expand(app: &mut App, id: &str, kind: Related) {
+/// A second click closes what the first one opened.
+pub(crate) fn expand(app: &mut App, id: &str, kind: Related) {
     let d = app.d.clone();
     let Some(it) = d.item(id) else { return };
+    if let Some(i) = app.s.canvas.live_expansion(id, kind) {
+        let n = app.s.canvas.collapse(i);
+        render(app);
+        toast(&format!("Closed {n} {}", kind.noun(n)));
+        return;
+    }
     let mut targets: Vec<String> = match kind {
         Related::Callees => it.info.calls.iter().map(|c| c.to.clone()).collect(),
         Related::Callers => d.callers.get(id).map_or(Vec::new(), |v| v.to_vec()),
@@ -269,6 +277,12 @@ pub fn expand(app: &mut App, id: &str, kind: Related) {
     let mut offset = 0.0;
     let mut opened = 0;
     let mut skipped = 0;
+    let mut record = Expansion {
+        item: id.to_string(),
+        kind,
+        cards: Vec::new(),
+        links: Vec::new(),
+    };
     for t in &vis {
         let c = &mut app.s.canvas;
         let (from, to) = if side > 0.0 {
@@ -277,7 +291,9 @@ pub fn expand(app: &mut App, id: &str, kind: Related) {
             (t.as_str(), id)
         };
         if c.group_of(t).is_some() {
-            c.add_link(from, to);
+            if c.add_link(from, to) {
+                record.links.push((from.to_string(), to.to_string()));
+            }
             continue;
         }
         if opened == EXPAND_LIMIT {
@@ -288,6 +304,7 @@ pub fn expand(app: &mut App, id: &str, kind: Related) {
         place(&d, c, gi);
         c.add_link(from, to);
         let gid = c.groups[gi].gid;
+        record.cards.push((gid, t.clone()));
         opened += 1;
         // Render now, so the next card is placed using this card's real height.
         render(app);
@@ -296,8 +313,18 @@ pub fn expand(app: &mut App, id: &str, kind: Related) {
             offset = c.groups[gi].y - fy + height_of(&d, &c.groups[gi]) + 30.0;
         }
     }
+    let added = !record.cards.is_empty() || !record.links.is_empty();
+    if added {
+        app.s.canvas.expansions.push(record);
+    }
     render(app);
     let mut notes = Vec::new();
+    if opened > 0 {
+        notes.push(format!(
+            "Opened {opened} {} (click again or press Ctrl+Z to close them)",
+            kind.noun(opened)
+        ));
+    }
     if skipped > 0 {
         notes.push(format!(
             "{skipped} more not opened (use Find item to open them)"
@@ -313,6 +340,37 @@ pub fn expand(app: &mut App, id: &str, kind: Related) {
     if !notes.is_empty() {
         toast(&notes.join(" · "));
     }
+}
+
+impl Related {
+    fn noun(self, n: usize) -> &'static str {
+        match (self, n) {
+            (Related::Callees, 1) => "callee",
+            (Related::Callees, _) => "callees",
+            (Related::Callers, 1) => "caller",
+            (Related::Callers, _) => "callers",
+            (Related::UsedBy, 1) => "item that uses it",
+            (Related::UsedBy, _) => "items that use it",
+        }
+    }
+}
+
+/// Ctrl+Z on the canvas: closes what the last "calls", "callers" or "used
+/// by" click opened. `false` if there is nothing to undo.
+pub fn undo_expansion(app: &mut App) -> bool {
+    let c = &mut app.s.canvas;
+    let Some(i) = (0..c.expansions.len())
+        .rev()
+        .find(|&i| c.expansion_live(&c.expansions[i]))
+    else {
+        return false;
+    };
+    c.expansions.truncate(i + 1);
+    let kind = c.expansions[i].kind;
+    let n = c.collapse(i);
+    render(app);
+    toast(&format!("Closed {n} {}", kind.noun(n)));
+    true
 }
 
 /// Opens all members of a type in one tabbed card.
