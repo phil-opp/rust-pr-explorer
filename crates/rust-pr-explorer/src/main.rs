@@ -8,6 +8,7 @@ mod public_api;
 mod python;
 #[cfg(feature = "semantic")]
 mod semantic;
+mod semver;
 mod sigdiff;
 mod source;
 #[cfg(test)]
@@ -142,7 +143,15 @@ fn analyze_checkout(
     for f in &mut files {
         f.analyzed = analyzed.contains(f.path.as_str());
         if f.analyzed {
-            f.outside_items = files::outside_items(f, output.items.values());
+            let decls = |dir: &Path| {
+                std::fs::read_to_string(dir.join(&f.path))
+                    .map(|t| files::declaration_lines(&t))
+                    .unwrap_or_default()
+            };
+            let (old, new) = (decls(&checkout.base_dir), decls(&checkout.head_dir));
+            // The items show the other changes: keep only these.
+            (f.outside_items, f.hunks) =
+                files::outside_items(f, output.items.values(), (&old, &new));
         }
     }
     output.files = files;

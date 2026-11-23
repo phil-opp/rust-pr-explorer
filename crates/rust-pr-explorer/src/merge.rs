@@ -1,9 +1,10 @@
 //! Compares the base and head analyses item by item.
 
 use crate::analyze::{Analysis, ItemData};
+use crate::semver;
 use model::{Changes, Item, Kind, Meta, Output, SourceLine, Status};
 use similar::{ChangeTag, TextDiff};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
     let mut base_items = base.items;
@@ -12,6 +13,14 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
 
     // Items that only changed location count as moved, not removed + added.
     let moves = find_moves(&base_items, &head_items);
+    let base_public: HashSet<String> = base_items
+        .iter()
+        .filter(|(_, b)| b.info.public)
+        .map(|(id, _)| id.clone())
+        .collect();
+    let ctx = semver::Context {
+        base_public: &base_public,
+    };
 
     for (id, h) in std::mem::take(&mut head_items) {
         let b = match moves.get(&id) {
@@ -19,8 +28,9 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
             None => base_items.remove(&id),
         };
         let item = match b {
-            Some(b) => compare(b, h, moves.get(&id).cloned()),
+            Some(b) => compare(&ctx, b, h, moves.get(&id).cloned()),
             None => Item {
+                api: semver::classify(&ctx, None, Some(&h), &[], &[], None),
                 source: lines(&h.source, '+'),
                 info: h.info,
                 status: Status::Added,
@@ -33,6 +43,7 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
         items.insert(
             id,
             Item {
+                api: semver::classify(&ctx, Some(&b), None, &[], &[], None),
                 source: lines(&b.source, '-'),
                 old_line: Some(b.info.line),
                 info: b.info,
@@ -67,7 +78,7 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
     }
 }
 
-fn compare(b: ItemData, h: ItemData, moved_from: Option<String>) -> Item {
+fn compare(ctx: &semver::Context, b: ItemData, h: ItemData, moved_from: Option<String>) -> Item {
     // Names of items that moved along point into the new module: compare
     // with the old module's paths rewritten, as `find_moves` does.
     let (om, nm) = (&b.info.module, &h.info.module);
@@ -131,7 +142,16 @@ fn compare(b: ItemData, h: ItemData, moved_from: Option<String>) -> Item {
             crate::sigdiff::diff(h.info.kind, old, new, refs)
         })
         .flatten();
+    let api = semver::classify(
+        ctx,
+        Some(&b),
+        Some(&h),
+        &exports_added,
+        &exports_removed,
+        sig_diff.as_ref(),
+    );
     Item {
+        api,
         sig_diff,
         sig_diff_public,
         old_sig_public: (b.info.sig != h.info.sig)

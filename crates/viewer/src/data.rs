@@ -1,7 +1,7 @@
 //! The embedded analysis plus derived indexes and privacy rules.
 
 use crate::code::{Seg, esc, marked_html};
-use model::{External, Item, ItemInfo, Kind, Output, Status, UseCtx};
+use model::{ApiLevel, External, Item, ItemInfo, Kind, Output, Status, UseCtx};
 use std::collections::HashMap;
 
 pub struct Data {
@@ -160,6 +160,51 @@ impl Data {
         it.info.parent.is_none()
             && it.info.kind != Kind::Mod
             && self.public_path(it).is_some_and(|p| p != def)
+    }
+
+    /// The item's SemVer label: breaking, non-breaking or "check by hand",
+    /// with the reasons on hover.
+    pub fn api_badge(&self, it: &Item) -> String {
+        let Some(api) = &it.api else {
+            return String::new();
+        };
+        let icon = match api.level {
+            ApiLevel::Breaking => "⚠ ",
+            ApiLevel::Unknown => "? ",
+            ApiLevel::Compatible => "",
+        };
+        format!(
+            r#"<span class="api api-{}" title="{}">{icon}{}</span>"#,
+            api.level.css(),
+            esc(&api.reasons.join("\n").replace('`', "")),
+            api.level.label()
+        )
+    }
+
+    /// Why the item's API change has its label, one line per reason.
+    pub fn api_reasons_html(&self, it: &Item) -> String {
+        let Some(api) = &it.api else {
+            return String::new();
+        };
+        // Reasons the signature diff's notes already give stay out.
+        let noted: Vec<&str> = [&it.sig_diff, &it.sig_diff_public]
+            .into_iter()
+            .flatten()
+            .flat_map(|d| d.notes.iter().map(|n| n.text.as_str()))
+            .collect();
+        let lines: String = api
+            .reasons
+            .iter()
+            .filter(|r| !noted.contains(&r.as_str()))
+            .map(|r| format!("<li>{}</li>", crate::code::note_html(r)))
+            .collect();
+        if lines.is_empty() {
+            return String::new();
+        }
+        format!(
+            r#"<ul class="api-why api-{}">{lines}</ul>"#,
+            api.level.css()
+        )
     }
 
     /// Public paths gained and lost, marked like other changes.

@@ -320,6 +320,48 @@ pub struct Item {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_file: Option<String>,
     pub source: Vec<SourceLine>,
+    /// How the item's public API changed, if it is public on either side
+    /// and its API changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api: Option<ApiChange>,
+}
+
+/// Whether a public API change is breaking, by Cargo's SemVer rules.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ApiChange {
+    pub level: ApiLevel,
+    /// Why, one entry per change, e.g. "variant `B` added: exhaustive
+    /// `match`es outside the crate break". Code in backticks.
+    pub reasons: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiLevel {
+    /// Needs a major version bump.
+    Breaking,
+    /// What the definitions show isn't enough to tell.
+    Unknown,
+    /// Needs at most a minor version bump.
+    Compatible,
+}
+
+impl ApiLevel {
+    pub fn label(self) -> &'static str {
+        match self {
+            ApiLevel::Breaking => "breaking",
+            ApiLevel::Unknown => "check by hand",
+            ApiLevel::Compatible => "non-breaking",
+        }
+    }
+
+    pub fn css(self) -> &'static str {
+        match self {
+            ApiLevel::Breaking => "breaking",
+            ApiLevel::Unknown => "unknown",
+            ApiLevel::Compatible => "compatible",
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -446,6 +488,8 @@ pub struct ChangedFile {
     pub removed: u32,
     /// The changed lines with 3 lines of context. `@` lines start a hunk
     /// and hold "old_line new_line". Empty for binary or very large files.
+    /// For an analyzed file, only the changes outside every item (the
+    /// items show the others).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hunks: Vec<SourceLine>,
     /// The file was too large to diff line by line.
