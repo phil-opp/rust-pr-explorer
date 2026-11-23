@@ -744,5 +744,10 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .sbs .hunk-rv { grid-column: 1 / -1; }
 .hunk-rv .hunk-at { color: var(--muted); margin-right: auto; }
 .hunk-rv .rvc { gap: 4px; }
+.hunk-rv .hunk-at { font-weight: 600; color: var(--text); }
+.hunk-rv .hunk-at .dim { font-weight: 400; }
+.hunk-rv .rv-btn { font-size: 11px; padding: 0 6px; }
+.rv-scope { color: var(--muted); font-size: 12px; white-space: nowrap; }
+body:not(.reviewing) .rv-scope { display: none; }
 .hunk-rv .rv-fold { display: none; }
 body:not(.reviewing) .hunk-rv:not(:has(.rvc.done, .rvc.stale)) { display: none; }
