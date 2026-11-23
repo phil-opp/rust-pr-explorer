@@ -3,9 +3,9 @@ name: Rebase needed
 # Leaves a review on every open pull request that has merge conflicts with its
 # base branch, asking for a rebase. The review is posted once per conflict:
 # while the PR stays in conflict, later runs leave it alone. Once the
-# conflicts are gone, the review's text is edited to say so and the
-# `rebase-needed` label is removed. If the PR runs into conflicts again later,
-# it gets a new review.
+# conflicts are gone, the review's text is edited to say so, the review is
+# hidden as resolved, and the `rebase-needed` label is removed. If the PR runs
+# into conflicts again later, it gets a new, visible review.
 #
 # A push to `main` can put any open PR in conflict, so it checks all of them.
 # A push to a PR (or a change of its base branch) checks only that PR.
@@ -131,6 +131,21 @@ jobs:
                 }
               } else {
                 for (const review of open) {
+                  // Collapse the review in the timeline. If that fails, the
+                  // review is still edited and the label removed below, so
+                  // the PR doesn't look conflicting; it only warns.
+                  try {
+                    await github.graphql(
+                      `mutation($id: ID!) {
+                        minimizeComment(input: { subjectId: $id, classifier: RESOLVED }) {
+                          minimizedComment { isMinimized }
+                        }
+                      }`,
+                      { id: review.node_id },
+                    );
+                  } catch (e) {
+                    core.warning(`#${number}: could not hide review ${review.id}: ${e.message}`);
+                  }
                   const body = [
                     MARKER_DONE,
                     `**Resolved:** the conflicts with \`${pr.base.ref}\` are gone ` +
@@ -151,7 +166,7 @@ jobs:
                     owner, repo, issue_number: number, name: LABEL,
                   });
                 }
-                core.info(`#${number}: no conflicts` + (open.length ? ', review marked resolved.' : '.'));
+                core.info(`#${number}: no conflicts` + (open.length ? ', review marked resolved and hidden.' : '.'));
               }
             }
 
