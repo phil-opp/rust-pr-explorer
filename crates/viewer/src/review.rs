@@ -1437,6 +1437,7 @@ mod tests {
             externals: BTreeMap::new(),
             files: Vec::new(),
             warnings: Vec::new(),
+            semver_checks: None,
         };
         call(&mut out, "c::run", "c::S::new", "21:4");
         call(&mut out, "c::S::new", "c::Inner", "5:8");
@@ -1484,6 +1485,7 @@ mod tests {
             externals: BTreeMap::new(),
             files: Vec::new(),
             warnings: Vec::new(),
+            semver_checks: None,
         });
         assert_eq!(order_of(&d), ["c::P::new", "c::P::run", "c::P", "c::later"]);
     }
