@@ -333,7 +333,10 @@ fn compare(
         .filter(|i| i.info.kind == model::Kind::Mod)
         .map(|i| i.info.file.as_str())
         .collect();
+    // The analysis has had Cargo download the dependencies' sources.
+    let registry = lockfile::registry_sources();
     for f in &mut files {
+        lockfile::add_info(&mut f.lock, &registry);
         f.analyzed = analyzed.contains(f.path.as_str());
         if f.analyzed {
             let text = |dir: &Path| std::fs::read_to_string(dir.join(&f.path)).unwrap_or_default();
