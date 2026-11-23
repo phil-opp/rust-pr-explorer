@@ -98,7 +98,7 @@ fn shown_items(d: &Data, all: bool) -> Vec<&Item> {
 
 fn chip(d: &Data, it: &Item) -> String {
     format!(
-        r#"<a class="ref mm-chip {}" data-id="{}" data-kind="{}" data-path="{}"><span class="dot {}"></span><span class="nm" title="{}">{}</span></a>"#,
+        r#"<a class="ref mm-chip {}" data-id="{}" data-kind="{}" data-path="{}"><span class="dot {}"></span><span class="nm" title="{}">{}</span>{}</a>"#,
         it.status.css(),
         esc(&it.info.id),
         it.info.kind.css(),
@@ -109,7 +109,8 @@ fn chip(d: &Data, it: &Item) -> String {
             it.status.css()
         },
         esc(&d.display_name(it)),
-        esc(&d.display_name(it))
+        esc(&d.display_name(it)),
+        crate::data::test_tag_of(it),
     )
 }
 
