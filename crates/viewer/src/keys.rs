@@ -15,6 +15,19 @@ use web_sys::{Element, KeyboardEvent};
 /// Handles a key press. Returns whether it was a shortcut, so that the
 /// key does nothing else.
 pub fn on_key(app: &mut App, k: &KeyboardEvent) -> bool {
+    // Ctrl+Z (⌘Z) on the canvas undoes the last change to its cards.
+    // In a text field it stays the field's own undo.
+    if app.s.view == View::Canvas
+        && (k.ctrl_key() || k.meta_key())
+        && !k.shift_key()
+        && !k.alt_key()
+        && k.key().eq_ignore_ascii_case("z")
+        && !typing(k)
+        && !modal_open()
+    {
+        crate::canvas::undo(app);
+        return true;
+    }
     if k.ctrl_key() || k.meta_key() || k.alt_key() || typing(k) {
         return false;
     }
@@ -195,6 +208,7 @@ pub fn cheat_sheet_html() -> String {
             "Follow the item's next call of a new or changed item that isn't reviewed yet",
         ),
         ("Ctrl+Enter", "Save the comment"),
+        ("Ctrl+Z", "On the canvas: undo the last change to the cards"),
         ("Esc", "Close a dialog"),
         ("?", "This list"),
     ];

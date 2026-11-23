@@ -899,3 +899,17 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
 }
 /* Dragging on the canvas pans it, and two fingers zoom it (see canvas/events.rs). */
 #viewport { touch-action: none; }
+/* On a touch screen, a card's header moves the card only after the finger
+   rested on it (see canvas/events.rs): the card then rises. */
+.card.lifted { box-shadow: 0 0 0 3px var(--highlight), 0 12px 28px rgba(0, 0, 0, .3); }
+#viewport.lifting { cursor: grabbing; }
+#cv-undo:disabled { opacity: .5; cursor: default; }
+/* Not even code that scrolls sideways takes a touch from the canvas: the
+   canvas scrolls it itself (see canvas/events.rs). */
+#viewport * { touch-action: none; }
+/* On a phone, Undo floats over the canvas, in reach of the thumb, instead
+   of in the bar, which scrolls sideways. */
+@media (max-width: 760px) {
+  #cv-undo { position: fixed; right: 14px; bottom: 64px; z-index: 30; padding: 9px 14px; font-size: 15px; box-shadow: var(--shadow); background: var(--bg); }
+  #cv-undo:disabled { display: none; }
+}

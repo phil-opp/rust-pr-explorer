@@ -11,6 +11,30 @@ use crate::data::within;
 use crate::{App, View, dom, toast};
 use web_sys::{Element, PointerEvent, WheelEvent};
 
+/// How long a finger rests on a card's header before the card follows it.
+const HOLD_MS: i32 = 450;
+/// How far a finger may move, in pixels, and still count as resting (or,
+/// when lifted, as a tap rather than a pan).
+const SLOP: f64 = 10.0;
+
+/// A finger resting on what a mouse would drag right away: a card's
+/// header or a module frame. On a touch screen a drag there pans the view
+/// like anywhere else, so that moving the view doesn't move cards by
+/// accident; a card or frame follows the finger only after it rested for
+/// [`HOLD_MS`].
+pub struct Hold {
+    pointer: i32,
+    what: Lift,
+    sx: f64,
+    sy: f64,
+}
+
+#[derive(Clone)]
+enum Lift {
+    Card(u32),
+    Frame(String),
+}
+
 /// Handles a click inside the canvas. Returns whether it was consumed.
 pub fn on_click(app: &mut App, el: &Element) -> bool {
     let gid = dom::closest(el, ".card")
@@ -104,10 +128,18 @@ pub fn on_click(app: &mut App, el: &Element) -> bool {
             app.s.canvas.links.clear();
             app.s.canvas.expansions.clear();
             render(app);
+            toast("Cleared the canvas (Undo brings the cards back)");
         }
+        Some("cv-undo") => super::undo(app),
         _ => return false,
     }
     true
+}
+
+/// Whether a click ends a touch that moved the view (or a card) rather
+/// than tapped: then it shouldn't also open or press what it started on.
+pub fn swallow_click(app: &mut App) -> bool {
+    std::mem::take(&mut app.s.canvas.panned)
 }
 
 /// Starts dragging a card (by its header or tabs) or panning the canvas.
@@ -118,10 +150,15 @@ pub fn on_pointer_down(app: &mut App, el: &Element, ev: &PointerEvent) -> bool {
     let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
     let d = app.d.clone();
     let c = &mut app.s.canvas;
+    if ev.pointer_type() != "touch" || c.touches.is_empty() {
+        c.panned = false;
+    }
     if ev.pointer_type() == "touch" {
         c.touches.retain(|t| t.0 != ev.pointer_id());
         c.touches.push((ev.pointer_id(), x, y));
         if c.touches.len() > 1 {
+            c.panned = true;
+            c.hold = None;
             // A second finger turns panning into a pinch.
             if matches!(c.drag, None | Some(Drag::Pan { .. }))
                 && let Some((d0, mx, my)) = pinch_geometry(&c.touches)
@@ -137,25 +174,9 @@ pub fn on_pointer_down(app: &mut App, el: &Element, ev: &PointerEvent) -> bool {
             return true;
         }
     }
-    if let Some(frame) = dom::closest(el, "[data-frame]") {
-        let m = dom::data(&frame, "frame").unwrap_or_default();
-        ev.prevent_default();
-        let cards = c
-            .groups
-            .iter()
-            .filter(|g| {
-                visible(&d, c, g) && d.item(&g.active).is_some_and(|it| within(d.mod_of(it), &m))
-            })
-            .map(|g| (g.gid, g.x, g.y))
-            .collect();
-        c.drag = Some(Drag::Frame {
-            sx: x,
-            sy: y,
-            cards,
-        });
-        return true;
-    }
-    if let Some(card) = dom::closest(el, ".card") {
+    let lift = if let Some(frame) = dom::closest(el, "[data-frame]") {
+        Some(Lift::Frame(dom::data(&frame, "frame").unwrap_or_default()))
+    } else if let Some(card) = dom::closest(el, ".card") {
         // Cards are moved by their header, tabs, location line, footer, or
         // border; not by code or text, which can be selected.
         let handle = el == &card
@@ -163,38 +184,159 @@ pub fn on_pointer_down(app: &mut App, el: &Element, ev: &PointerEvent) -> bool {
             || el
                 .matches(".card-foot, .card-acts, .card-rv")
                 .unwrap_or(false);
-        if !handle || dom::closest(el, "[data-close], button, a, input, textarea").is_some() {
-            return false;
+        let control = dom::closest(el, "[data-close], button, a, input, textarea").is_some();
+        let gid = dom::data(&card, "gid").and_then(|g| g.parse::<u32>().ok());
+        match gid {
+            Some(gid) if handle && !control => Some(Lift::Card(gid)),
+            // On a touch screen, a finger on the rest of a card (its code,
+            // a button) pans the view; with a mouse, that selects text or
+            // clicks.
+            _ if ev.pointer_type() == "touch" => None,
+            _ => return false,
         }
-        let Some(gi) = dom::data(&card, "gid")
-            .and_then(|g| g.parse::<u32>().ok())
-            .and_then(|g| c.by_gid(g))
-        else {
-            return false;
-        };
-        ev.prevent_default();
-        let g = &c.groups[gi];
-        c.drag = Some(Drag::Card {
-            gid: g.gid,
-            sx: x,
-            sy: y,
-            gx: g.x,
-            gy: g.y,
-        });
-        dom::set_style(&card, "z-index", "10");
-        dom::set_style(&card, "pointer-events", "none");
     } else {
-        c.drag = Some(Drag::Pan {
-            sx: x,
-            sy: y,
-            px: c.pan.x,
-            py: c.pan.y,
+        None
+    };
+    if ev.pointer_type() == "touch" {
+        start_pan(c, x, y);
+        c.sideways = sideways_box(el).map(|b| {
+            let left = b.scroll_left() as f64;
+            (b, left, None)
         });
-        if let Some(vp) = dom::by_id("viewport") {
-            dom::toggle_class(&vp, "panning", true);
+        if let Some(what) = lift {
+            c.hold = Some(Hold {
+                pointer: ev.pointer_id(),
+                what,
+                sx: x,
+                sy: y,
+            });
+            let pointer = ev.pointer_id();
+            dom::timeout(HOLD_MS, move || {
+                crate::with_app(|app| lift_held(app, pointer));
+            });
         }
+        return true;
+    }
+    match lift {
+        Some(what) => {
+            ev.prevent_default();
+            start_lift(c, &d, what, x, y);
+        }
+        None => start_pan(c, x, y),
     }
     true
+}
+
+/// The box around `el` inside its card that is wider than it shows (code,
+/// a side-by-side diff, tabs), which a sideways swipe scrolls.
+fn sideways_box(el: &Element) -> Option<Element> {
+    let mut cur = Some(el.clone());
+    while let Some(e) = cur {
+        if e.class_list().contains("card") {
+            return None;
+        }
+        if e.scroll_width() > e.client_width()
+            && e.matches("pre, .sig, .sbs, .card-tabs").unwrap_or(false)
+        {
+            return Some(e);
+        }
+        cur = e.parent_element();
+    }
+    None
+}
+
+fn start_pan(c: &mut super::Canvas, x: f64, y: f64) {
+    c.hold = None;
+    c.sideways = None;
+    c.drag = Some(Drag::Pan {
+        sx: x,
+        sy: y,
+        px: c.pan.x,
+        py: c.pan.y,
+    });
+    if let Some(vp) = dom::by_id("viewport") {
+        dom::toggle_class(&vp, "panning", true);
+    }
+}
+
+/// Starts moving a card or a module frame's cards from pointer position
+/// `x`, `y`.
+fn start_lift(c: &mut super::Canvas, d: &crate::data::Data, what: Lift, x: f64, y: f64) {
+    match what {
+        Lift::Frame(m) => {
+            let cards = c
+                .groups
+                .iter()
+                .filter(|g| {
+                    visible(d, c, g) && d.item(&g.active).is_some_and(|it| within(d.mod_of(it), &m))
+                })
+                .map(|g| (g.gid, g.x, g.y))
+                .collect();
+            c.drag = Some(Drag::Frame {
+                sx: x,
+                sy: y,
+                cards,
+            });
+        }
+        Lift::Card(gid) => {
+            let Some(gi) = c.by_gid(gid) else { return };
+            let g = &c.groups[gi];
+            c.drag = Some(Drag::Card {
+                gid,
+                sx: x,
+                sy: y,
+                gx: g.x,
+                gy: g.y,
+            });
+            if let Some(card) = card_el(gid) {
+                dom::set_style(&card, "z-index", "10");
+                dom::set_style(&card, "pointer-events", "none");
+            }
+        }
+    }
+}
+
+thread_local! {
+    static HINTED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Says once how to move a card on a touch screen, the first time a
+/// swipe on a card's header pans the view instead.
+fn hint_hold() {
+    if !HINTED.with(|h| h.replace(true)) {
+        toast("To move a card, hold its header for a moment, then drag");
+    }
+}
+
+/// After a finger rested on a card's header or a frame for [`HOLD_MS`]:
+/// from now on the card or frame follows the finger instead of the view.
+fn lift_held(app: &mut App, pointer: i32) {
+    let d = app.d.clone();
+    let c = &mut app.s.canvas;
+    let Some(hold) = c.hold.take_if(|h| h.pointer == pointer) else {
+        return;
+    };
+    if !matches!(c.drag, Some(Drag::Pan { .. })) || c.touches.len() != 1 {
+        return;
+    }
+    // The view moved by at most the slop; put it back where it was.
+    if let Some(Drag::Pan { px, py, .. }) = c.drag {
+        c.pan.x = px;
+        c.pan.y = py;
+        apply_pan(c);
+    }
+    if let Some(vp) = dom::by_id("viewport") {
+        dom::toggle_class(&vp, "panning", false);
+        dom::toggle_class(&vp, "lifting", true);
+    }
+    if let Lift::Card(gid) = hold.what
+        && let Some(card) = card_el(gid)
+    {
+        dom::toggle_class(&card, "lifted", true);
+    }
+    start_lift(c, &d, hold.what, hold.sx, hold.sy);
+    // A short buzz where supported, like a long press elsewhere.
+    let _ = dom::window().navigator().vibrate_with_duration(15);
 }
 
 /// The card whose header is under the pointer, if the pointer is close
@@ -232,6 +374,7 @@ pub fn on_pointer_move(app: &mut App, ev: &PointerEvent) {
             gy,
         }) => {
             let Some(gi) = c.by_gid(gid) else { return };
+            c.panned = true;
             let g = &mut c.groups[gi];
             g.x = gx + (x - sx) / c.pan.k;
             g.y = gy + (y - sy) / c.pan.k;
@@ -262,6 +405,25 @@ pub fn on_pointer_move(app: &mut App, ev: &PointerEvent) {
             draw_edges(app);
         }
         Some(Drag::Pan { sx, sy, px, py }) => {
+            if (x - sx).hypot(y - sy) > SLOP {
+                if c.hold.take().is_some() {
+                    hint_hold();
+                }
+                c.panned = true;
+            }
+            // A finger on code that is wider than its card: a mostly
+            // sideways swipe scrolls the code, anything else the view.
+            // (The browser can't do it: it would take over the touch from
+            // the canvas.)
+            if let Some((b, left, mode)) = &mut c.sideways {
+                if mode.is_none() && (x - sx).hypot(y - sy) > SLOP {
+                    *mode = Some((x - sx).abs() > (y - sy).abs());
+                }
+                if *mode == Some(true) {
+                    b.set_scroll_left((*left - (x - sx)) as i32);
+                    return;
+                }
+            }
             c.pan.x = px + x - sx;
             c.pan.y = py + y - sy;
             apply_pan(c);
@@ -284,11 +446,16 @@ pub fn on_pointer_move(app: &mut App, ev: &PointerEvent) {
 pub fn on_pointer_up(app: &mut App, ev: &PointerEvent) {
     let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
     app.s.canvas.touches.retain(|t| t.0 != ev.pointer_id());
+    app.s.canvas.hold = None;
     let Some(drag) = app.s.canvas.drag.take() else {
         return;
     };
     if let Some(vp) = dom::by_id("viewport") {
         dom::toggle_class(&vp, "panning", false);
+        dom::toggle_class(&vp, "lifting", false);
+    }
+    for el in dom::query_all(".card.lifted") {
+        dom::toggle_class(&el, "lifted", false);
     }
     for el in dom::query_all(".card.hover-target") {
         dom::toggle_class(&el, "hover-target", false);

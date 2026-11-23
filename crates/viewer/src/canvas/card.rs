@@ -59,7 +59,7 @@ fn toggle_button(
 ) -> String {
     if c.is_expanded(id, kind) {
         format!(
-            r#"<button data-act="{act}" class="on" aria-pressed="true" title="Close the cards this opened (Ctrl+Z closes the last ones opened)">{label}</button>"#
+            r#"<button data-act="{act}" class="on" aria-pressed="true" title="Close the cards this opened (Undo or Ctrl+Z also does)">{label}</button>"#
         )
     } else {
         format!(
