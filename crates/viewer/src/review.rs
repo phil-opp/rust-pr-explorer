@@ -409,15 +409,24 @@ fn units_in_order(d: &Data) -> Vec<(String, u64)> {
     out
 }
 
-/// The units in review order, for going through a change top-down: each
-/// changed item that no other changed item calls, in reading order, and
-/// after each one the changed items it calls, depth-first, in the order of
-/// their first call in its body. A call through unchanged items counts as
-/// a call too (`parse` calls the unchanged `parse_expr`, which calls the
-/// changed `parse_factor`: `parse_factor` comes after `parse`). An item
-/// that is reached again is not repeated. Items that only call each other
-/// (a cycle no other changed item calls into) start from the first of
-/// them in reading order. Files stay last.
+/// The units in review order, for going through a change from the outside
+/// in: callers before the changed items they call. It starts with the
+/// changed items that no other changed item calls, in reading order, and
+/// after each one come the changed items it calls, in the order of their
+/// first call in its body, then what those call, and so on. A call through
+/// unchanged items counts as a call too (`parse` calls the unchanged
+/// `parse_expr`, which calls the changed `parse_factor`: `parse_factor`
+/// comes after `parse`).
+///
+/// An item that several changed items call waits until all of them came:
+/// if `a` and `b` both call `shared`, the order is `a`, `b`, `shared`,
+/// not `a`, `shared`, `b`. (This is a reverse postorder of a depth-first
+/// search: a topological order of the calls that keeps what only one item
+/// calls right after that item.) Calls that close a cycle don't count for
+/// this: items that call each other come in the order the search reaches
+/// them. Items that only call each other (a cycle no other changed item
+/// calls into) start from the first of them in reading order, after
+/// everything else. Files stay last.
 ///
 /// Calls of removed items don't count: a removed function no longer calls
 /// anything, so the items it called are reached from their callers in the
@@ -457,31 +466,52 @@ fn call_order(d: &Data, units: &[(String, u64)]) -> Vec<String> {
             called[i] = true;
         }
     }
-    let mut seen = vec![false; units.len()];
-    let mut out = Vec::with_capacity(units.len());
-    let mut visit = |start: usize| {
-        // Depth-first, preorder; the stack holds callees in reverse so
-        // that the first call is visited first.
-        let mut stack = vec![start];
-        while let Some(i) = stack.pop() {
-            if std::mem::replace(&mut seen[i], true) {
-                continue;
-            }
-            out.push(units[i].0.clone());
-            stack.extend(callees[i].iter().rev().filter(|&&c| !seen[c]));
-        }
-    };
     let is_file = |i: usize| units[i].0.starts_with("file:");
-    for i in (0..units.len()).filter(|&i| !called[i] && !is_file(i)) {
-        visit(i);
+    let mut seen = vec![false; units.len()];
+    // The roots in one search, so that an item that several of them call
+    // comes after all of them: started from the last root, so that the
+    // first one comes first once the postorder is reversed.
+    let mut order = Vec::with_capacity(units.len());
+    for i in (0..units.len())
+        .rev()
+        .filter(|&i| !called[i] && !is_file(i))
+    {
+        post_order(&callees, i, &mut seen, &mut order);
     }
+    order.reverse();
+    // Cycles that no root reaches, each from its first item.
     for i in (0..units.len()).filter(|&i| !is_file(i)) {
-        visit(i);
+        let mut part = Vec::new();
+        post_order(&callees, i, &mut seen, &mut part);
+        order.extend(part.into_iter().rev());
     }
-    for i in (0..units.len()).filter(|&i| is_file(i)) {
-        visit(i);
+    order.extend((0..units.len()).filter(|&i| is_file(i)));
+    order.into_iter().map(|i| units[i].0.clone()).collect()
+}
+
+/// Appends `start` and the units it reaches through `callees` that aren't
+/// `seen` yet to `out`, each after the units it calls (postorder). Callees
+/// are visited from the last call to the first, so that the first call
+/// comes first once the order is reversed.
+fn post_order(callees: &[Vec<usize>], start: usize, seen: &mut [bool], out: &mut Vec<usize>) {
+    if std::mem::replace(&mut seen[start], true) {
+        return;
     }
-    out
+    // Each unit on the path, with how many of its callees were visited.
+    let mut stack = vec![(start, 0)];
+    while let Some(&(i, k)) = stack.last() {
+        let list = &callees[i];
+        if k < list.len() {
+            stack.last_mut().unwrap().1 += 1;
+            let c = list[list.len() - 1 - k];
+            if !std::mem::replace(&mut seen[c], true) {
+                stack.push((c, 0));
+            }
+        } else {
+            stack.pop();
+            out.push(i);
+        }
+    }
 }
 
 /// What an item calls, in the order of the first call in its body (as
@@ -1258,6 +1288,48 @@ mod tests {
         // The summary of **Finish review** keeps reading order.
         let units = REVIEW.with(|r| r.borrow().units.clone());
         assert_eq!(units[1], "c::a::new_fn");
+    }
+
+    #[test]
+    fn an_item_that_several_call_comes_after_all_of_them() {
+        let mut out = data().out;
+        // `root_fn` and `late` both call `new_fn`, and nothing calls them.
+        call(&mut out, "c::root_fn", "c::a::new_fn", "10:4");
+        call(&mut out, "c::b::late", "c::a::new_fn", "21:8");
+        let d = Data::new(out);
+        assert_eq!(
+            order_of(&d),
+            [
+                "c::root_fn",
+                "c::b::early",
+                "c::b::late",
+                // Not right after `root_fn`: `late` calls it too.
+                "c::a::new_fn",
+                "c::gone::f",
+                "file:README.md",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cycle_under_a_caller_comes_after_it() {
+        let mut out = data().out;
+        // `root_fn` calls `late`, and `late` and `new_fn` call each other.
+        call(&mut out, "c::root_fn", "c::b::late", "10:4");
+        call(&mut out, "c::b::late", "c::a::new_fn", "21:8");
+        call(&mut out, "c::a::new_fn", "c::b::late", "3:4");
+        let d = Data::new(out);
+        assert_eq!(
+            order_of(&d),
+            [
+                "c::root_fn",
+                "c::b::late",
+                "c::a::new_fn",
+                "c::b::early",
+                "c::gone::f",
+                "file:README.md",
+            ]
+        );
     }
 
     #[test]
