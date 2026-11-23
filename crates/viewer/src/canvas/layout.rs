@@ -189,6 +189,7 @@ pub fn show_module_graph(app: &mut App, m: &str) {
     for id in &ids {
         c.add_group(id, 0.0, 0.0);
     }
+    app.s.canvas_focus = None;
     crate::set_view(app, View::Canvas);
     arrange_by_module(app);
     render(app);
