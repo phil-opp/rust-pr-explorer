@@ -13,6 +13,8 @@ pub struct Settings {
     pub split: bool,
     /// Hide changes that only add, remove or move whitespace.
     pub ignore_ws: bool,
+    /// Show lines that were only rewrapped (as rustfmt does) as unchanged.
+    pub reformat: bool,
     /// Old and new line numbers in front of diff lines.
     pub line_numbers: bool,
     /// Code font family.
@@ -26,6 +28,7 @@ impl Default for Settings {
         Settings {
             split: false,
             ignore_ws: false,
+            reformat: true,
             line_numbers: true,
             font: DEFAULT_FONT.into(),
             size: 13,
@@ -63,9 +66,10 @@ pub(crate) fn set(new: Settings) {
 impl Settings {
     fn encode(&self) -> String {
         format!(
-            "split={};ws={};ln={};size={};font={}",
+            "split={};ws={};rf={};ln={};size={};font={}",
             u8::from(self.split),
             u8::from(self.ignore_ws),
+            u8::from(self.reformat),
             u8::from(self.line_numbers),
             self.size,
             self.font
@@ -78,6 +82,7 @@ impl Settings {
             match part.split_once('=') {
                 Some(("split", v)) => out.split = v == "1",
                 Some(("ws", v)) => out.ignore_ws = v == "1",
+                Some(("rf", v)) => out.reformat = v == "1",
                 Some(("ln", v)) => out.line_numbers = v == "1",
                 Some(("size", v)) => {
                     if let Some(n) = v.parse().ok().filter(|n| SIZES.contains(n)) {
@@ -170,6 +175,7 @@ pub fn panel_html() -> String {
         <label><input type="radio" name="set-layout" value="inline" {}> Inline</label>
         <label><input type="radio" name="set-layout" value="split" {}> Side by side</label>
         <label><input type="checkbox" id="set-ws" {}> Hide whitespace changes</label>
+        <label title="Lines that only got wrapped differently, as by rustfmt"><input type="checkbox" id="set-rf" {}> Hide reformatting</label>
         <label><input type="checkbox" id="set-ln" {}> Line numbers</label>
         <div class="set-h">Code</div>
         <label>Font <select id="set-font">{fonts}</select></label>
@@ -179,6 +185,7 @@ pub fn panel_html() -> String {
         if s.split { "" } else { "checked" },
         if s.split { "checked" } else { "" },
         if s.ignore_ws { "checked" } else { "" },
+        if s.reformat { "checked" } else { "" },
         if s.line_numbers { "checked" } else { "" },
         if custom { "" } else { "hidden" },
         if custom { esc(&s.font) } else { String::new() },
@@ -207,6 +214,7 @@ pub fn on_change(el: &Element) -> bool {
     };
     match el.id().as_str() {
         "set-ws" => s.ignore_ws = checked(),
+        "set-rf" => s.reformat = checked(),
         "set-ln" => s.line_numbers = checked(),
         "set-size" => {
             if let Ok(n) = value().parse() {
@@ -239,7 +247,9 @@ pub fn on_change(el: &Element) -> bool {
         }
         _ => return false,
     }
-    let layout_changed = s.split != get().split || s.ignore_ws != get().ignore_ws;
+    let old = get();
+    let layout_changed =
+        s.split != old.split || s.ignore_ws != old.ignore_ws || s.reformat != old.reformat;
     set(s);
     save();
     apply();
@@ -260,6 +270,7 @@ mod tests {
         let s = Settings {
             split: true,
             ignore_ws: true,
+            reformat: false,
             line_numbers: false,
             font: "Fira Code".into(),
             size: 15,
