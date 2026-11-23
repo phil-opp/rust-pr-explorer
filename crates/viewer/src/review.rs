@@ -27,7 +27,7 @@ use crate::data::{Data, changed};
 use crate::dom;
 use crate::since::Snapshot;
 use model::stable_hash as hash;
-use model::{ChangedFile, Item, Kind, Status};
+use model::{ChangedFile, Item, Kind, Status, UseCtx};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -414,34 +414,57 @@ fn units_in_order(d: &Data) -> Vec<(String, u64)> {
     out
 }
 
-/// The units in review order, for going through a change top-down: each
-/// changed item that no other changed item calls, in reading order, and
-/// after each one the changed items it calls, depth-first, in the order of
-/// their first call in its body. A call through unchanged items counts as
-/// a call too (`parse` calls the unchanged `parse_expr`, which calls the
-/// changed `parse_factor`: `parse_factor` comes after `parse`). An item
-/// that is reached again is not repeated. Items that only call each other
-/// (a cycle no other changed item calls into) start from the first of
-/// them in reading order. Files stay last.
+/// The units in review order, for going through a change from the outside
+/// in: each changed item that no other changed item calls or uses, in
+/// reading order, and after each one the changed functions it calls,
+/// depth-first, in the order of their first call in its body. A call
+/// through unchanged items counts as a call too (`parse` calls the
+/// unchanged `parse_expr`, which calls the changed `parse_factor`:
+/// `parse_factor` comes after `parse`). An item that is reached again is
+/// not repeated.
 ///
-/// Calls of removed items don't count: a removed function no longer calls
-/// anything, so the items it called are reached from their callers in the
-/// PR's version.
+/// Types (and constants, statics, …) come after the functions: the changed
+/// types that the functions reached from a starting item use (or construct,
+/// as with `Wrapper(x)`) follow once all of those functions came, in the
+/// order they were first used. A type is followed by its impls (and what a
+/// trait impl contains) that no changed item calls, in reading order; what
+/// those call follows them as above. So a private struct that a public
+/// function's helpers build comes after the public function and its
+/// helpers, not before them. Methods that no changed item calls are
+/// starting items like free functions; those of one type start together,
+/// so that the type comes after all of them.
+///
+/// Items that only call or use each other (a cycle no other changed item
+/// reaches) start from the first of them in reading order. Files stay
+/// last. Calls and uses of removed items don't count: a removed function no
+/// longer calls anything, so the items it called are reached from their
+/// callers in the PR's version.
 fn call_order(d: &Data, units: &[(String, u64)]) -> Vec<String> {
     let index: HashMap<&str, usize> = units
         .iter()
         .enumerate()
         .map(|(i, (id, _))| (id.as_str(), i))
         .collect();
-    // Changed callees of each unit, in the order of their first call.
-    let callees: Vec<Vec<usize>> = units
+    let item = |i: usize| d.item(&units[i].0);
+    let is_impl = |i: usize| item(i).is_some_and(|it| it.info.kind == Kind::Impl);
+    let callable = |i: usize| {
+        item(i).is_some_and(|it| {
+            matches!(
+                it.info.kind,
+                Kind::Fn | Kind::Method | Kind::TraitMethod | Kind::Macro
+            )
+        })
+    };
+    // Changed items that each unit calls or uses, in the order of their
+    // first mention.
+    let refs: Vec<Vec<usize>> = units
         .iter()
         .map(|(id, _)| {
             let me = index[id.as_str()];
             let mut list = Vec::new();
             // Unchanged items passed through, so that each is expanded once.
             let mut through = HashSet::new();
-            let mut stack: Vec<&str> = calls_in_order(d, id);
+            let mut stack: Vec<&str> = refs_in_order(d, id);
             stack.reverse();
             while let Some(to) = stack.pop() {
                 match index.get(to) {
@@ -456,35 +479,88 @@ fn call_order(d: &Data, units: &[(String, u64)]) -> Vec<String> {
             list
         })
         .collect();
+    // The changed type, impl or trait that a unit belongs to.
+    let owner = |i: usize| -> Option<usize> {
+        let info = &item(i)?.info;
+        [&info.parent, &info.self_ty]
+            .into_iter()
+            .flatten()
+            .find_map(|o| index.get(o.as_str()).copied())
+            .filter(|&o| o != i)
+    };
     let mut called = vec![false; units.len()];
-    for list in &callees {
-        for &i in list {
-            called[i] = true;
+    for (i, list) in refs.iter().enumerate() {
+        for &c in list.iter().filter(|&&c| callable(c)) {
+            called[c] |= c != i;
         }
+    }
+    // Impls, and what trait impls contain, follow their type (or impl),
+    // unless a changed item calls them. Methods that nothing calls are
+    // where a review can start, like free functions.
+    let attached: Vec<Option<usize>> = (0..units.len())
+        .map(|i| owner(i).filter(|&o| !called[i] && !(callable(i) && !is_impl(o))))
+        .collect();
+    // What comes right after a unit (depth-first), and what waits until
+    // the search from its starting item is done.
+    let mut next: Vec<Vec<usize>> = vec![Vec::new(); units.len()];
+    let mut later: Vec<Vec<usize>> = vec![Vec::new(); units.len()];
+    for (i, list) in refs.iter().enumerate() {
+        // An impl doesn't wait for the type it belongs to.
+        let mine = |t: usize| attached[i].is_some_and(|o| o == t || owner(o) == Some(t));
+        for &t in list {
+            if callable(t) {
+                next[i].push(t);
+            } else if !mine(t) {
+                later[i].push(t);
+            }
+        }
+    }
+    for (i, a) in attached.iter().enumerate() {
+        if let Some(o) = *a {
+            next[o].push(i);
+        }
+    }
+    let mut reached = vec![false; units.len()];
+    for (i, t) in
+        (0..units.len()).flat_map(|i| next[i].iter().chain(&later[i]).map(move |&t| (i, t)))
+    {
+        reached[t] |= t != i;
     }
     let mut seen = vec![false; units.len()];
     let mut out = Vec::with_capacity(units.len());
-    let mut visit = |start: usize| {
-        // Depth-first, preorder; the stack holds callees in reverse so
-        // that the first call is visited first.
-        let mut stack = vec![start];
-        while let Some(i) = stack.pop() {
-            if std::mem::replace(&mut seen[i], true) {
-                continue;
+    // From each of `starts`, what comes next, depth-first (preorder; the
+    // stack holds it in reverse so that the first call is visited first),
+    // then what waits, the same way.
+    let mut visit = |starts: &[usize]| {
+        let mut waiting: std::collections::VecDeque<usize> = starts.iter().copied().collect();
+        let mut stack = Vec::new();
+        while let Some(from) = waiting.pop_front() {
+            stack.push(from);
+            while let Some(i) = stack.pop() {
+                if std::mem::replace(&mut seen[i], true) {
+                    continue;
+                }
+                out.push(units[i].0.clone());
+                waiting.extend(later[i].iter().filter(|&&t| !seen[t]));
+                stack.extend(next[i].iter().rev().filter(|&&c| !seen[c]));
             }
-            out.push(units[i].0.clone());
-            stack.extend(callees[i].iter().rev().filter(|&&c| !seen[c]));
         }
     };
     let is_file = |i: usize| units[i].0.starts_with("file:");
-    for i in (0..units.len()).filter(|&i| !called[i] && !is_file(i)) {
-        visit(i);
+    // Methods of one type that nothing calls start together, so that the
+    // type waits for all of them. Reading order keeps them next to each
+    // other.
+    let roots: Vec<usize> = (0..units.len())
+        .filter(|&i| !reached[i] && !is_file(i))
+        .collect();
+    for group in roots.chunk_by(|&a, &b| owner(a).is_some() && owner(a) == owner(b)) {
+        visit(group);
     }
     for i in (0..units.len()).filter(|&i| !is_file(i)) {
-        visit(i);
+        visit(&[i]);
     }
     for i in (0..units.len()).filter(|&i| is_file(i)) {
-        visit(i);
+        visit(&[i]);
     }
     out
 }
@@ -496,7 +572,32 @@ fn calls_in_order<'a>(d: &'a Data, id: &str) -> Vec<&'a str> {
     let Some(it) = d.item(id).filter(|it| it.status != Status::Removed) else {
         return Vec::new();
     };
-    // Where each callee is first named in the body.
+    by_first_mention(it, it.info.calls.iter().map(|c| c.to.as_str()).collect())
+}
+
+/// What an item calls or uses (not counting an impl's use of its type),
+/// in the order of the first mention in its source. Nothing for removed
+/// items.
+fn refs_in_order<'a>(d: &'a Data, id: &str) -> Vec<&'a str> {
+    let Some(it) = d.item(id).filter(|it| it.status != Status::Removed) else {
+        return Vec::new();
+    };
+    let calls = it.info.calls.iter().map(|c| c.to.as_str());
+    let uses = it
+        .info
+        .uses
+        .iter()
+        .filter(|u| u.ctx != UseCtx::Impl)
+        .map(|u| u.to.as_str());
+    let mut list: Vec<&str> = calls.chain(uses).collect();
+    list.sort();
+    list.dedup();
+    by_first_mention(it, list)
+}
+
+/// Sorts `list` by where `it`'s source first names each (as far as the
+/// positions of names tell; else by id).
+fn by_first_mention<'a>(it: &'a Item, mut list: Vec<&'a str>) -> Vec<&'a str> {
     let mut first: HashMap<&str, (usize, usize)> = HashMap::new();
     for (at, r) in &it.info.source_refs {
         let Some(to) = r.id.as_deref() else {
@@ -507,7 +608,6 @@ fn calls_in_order<'a>(d: &'a Data, id: &str) -> Vec<&'a str> {
         let e = first.entry(to).or_insert(pos);
         *e = (*e).min(pos);
     }
-    let mut list: Vec<&str> = it.info.calls.iter().map(|c| c.to.as_str()).collect();
     list.sort_by_key(|to| (first.get(to).copied().unwrap_or((usize::MAX, 0)), *to));
     list
 }
@@ -1263,6 +1363,127 @@ mod tests {
         // The summary of **Finish review** keeps reading order.
         let units = REVIEW.with(|r| r.borrow().units.clone());
         assert_eq!(units[1], "c::a::new_fn");
+    }
+
+    #[test]
+    fn types_come_after_the_functions_that_use_them() {
+        // In the file, the types and their impls come before `run`, which
+        // calls `S::new`, which uses `S` and constructs `Inner`.
+        let mut imp = item(
+            "c::S::<impl Display for S>",
+            Kind::Impl,
+            "c",
+            "src/lib.rs",
+            8,
+            Status::Added,
+        );
+        imp.info.parent = Some("c::S".into());
+        imp.info.self_ty = Some("c::S".into());
+        imp.info.uses.insert(model::Use {
+            to: "c::S".into(),
+            ctx: UseCtx::Impl,
+        });
+        let mut new = item(
+            "c::S::new",
+            Kind::Method,
+            "c",
+            "src/lib.rs",
+            4,
+            Status::Added,
+        );
+        new.info.parent = Some("c::S".into());
+        new.info.self_ty = Some("c::S".into());
+        new.info.uses.insert(model::Use {
+            to: "c::S".into(),
+            ctx: UseCtx::Signature,
+        });
+        // `-> S`, before the body constructs `Inner`.
+        new.info.source_refs.insert(
+            "4:20".into(),
+            model::Ref {
+                id: Some("c::S".into()),
+                path: "c::S".into(),
+            },
+        );
+        let mut s = item("c::S", Kind::Struct, "c", "src/lib.rs", 1, Status::Added);
+        s.info.uses.insert(model::Use {
+            to: "c::Inner".into(),
+            ctx: UseCtx::Field,
+        });
+        let items = [
+            item("c", Kind::Mod, "c", "src/lib.rs", 1, Status::Changed),
+            s,
+            new,
+            imp,
+            item(
+                "c::Inner",
+                Kind::Struct,
+                "c",
+                "src/lib.rs",
+                12,
+                Status::Added,
+            ),
+            item("c::run", Kind::Fn, "c", "src/lib.rs", 20, Status::Changed),
+        ];
+        let mut out = Output {
+            meta: Meta::default(),
+            crates: vec!["c".into()],
+            items: items
+                .into_iter()
+                .map(|it| (it.info.id.clone(), it))
+                .collect(),
+            externals: BTreeMap::new(),
+            files: Vec::new(),
+            warnings: Vec::new(),
+        };
+        call(&mut out, "c::run", "c::S::new", "21:4");
+        call(&mut out, "c::S::new", "c::Inner", "5:8");
+        let d = Data::new(out);
+        assert_eq!(
+            order_of(&d),
+            [
+                "c::run",
+                "c::S::new",
+                // After all the functions, with the impl that nothing calls.
+                "c::S",
+                "c::S::<impl Display for S>",
+                "c::Inner",
+            ]
+        );
+    }
+
+    #[test]
+    fn methods_that_nothing_calls_come_before_their_type() {
+        // `P::new` and `P::run` are the entry points: nothing calls them.
+        let method = |id: &str, line| {
+            let mut m = item(id, Kind::Method, "c", "src/lib.rs", line, Status::Added);
+            m.info.parent = Some("c::P".into());
+            m.info.self_ty = Some("c::P".into());
+            m.info.uses.insert(model::Use {
+                to: "c::P".into(),
+                ctx: UseCtx::Signature,
+            });
+            m
+        };
+        let items = [
+            item("c", Kind::Mod, "c", "src/lib.rs", 1, Status::Changed),
+            item("c::P", Kind::Struct, "c", "src/lib.rs", 1, Status::Added),
+            method("c::P::new", 4),
+            method("c::P::run", 8),
+            item("c::later", Kind::Fn, "c", "src/lib.rs", 20, Status::Added),
+        ];
+        let d = Data::new(Output {
+            meta: Meta::default(),
+            crates: vec!["c".into()],
+            items: items
+                .into_iter()
+                .map(|it| (it.info.id.clone(), it))
+                .collect(),
+            externals: BTreeMap::new(),
+            files: Vec::new(),
+            warnings: Vec::new(),
+        });
+        assert_eq!(order_of(&d), ["c::P::new", "c::P::run", "c::P", "c::later"]);
     }
 
     #[test]
