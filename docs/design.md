@@ -23,6 +23,7 @@ crates/rust-pr-explorer  CLI: get sources, analyze, compare, write the page
     collector.rs         resolving the paths inside an item
     syntax.rs            rendering and normalizing syntax
   src/semantic.rs        call resolution with rust-analyzer (feature "semantic")
+  src/public_api.rs      exact public API from rust-analyzer's name resolution
   src/merge.rs           base/head comparison, moves
   src/sigdiff.rs         structured signature diffs
   src/files.rs           every changed file: line diffs, Cargo.toml entries
@@ -78,7 +79,9 @@ Since this is a review tool, it never guesses. Name resolution follows Rust's ru
 
 ### Public paths
 
-After the items are built, every item gets the paths under which code outside the crate can name it. Crate roots start with their own name. Then, until nothing changes: a `pub` item of a module with a public path gets that path plus its name, and a `pub use` in such a module gives its target the module's path plus the imported (or renamed) name; glob re-exports do this for every `pub` item of the module. Paths are capped at 12 segments, which only re-export cycles reach. An item is public if it has a path. Base and head paths are compared: a path gained or lost is a change of the item, even if its code is the same. The overview lists each item under its shortest path, as rustdoc does.
+After the items are built, every item gets the paths under which code outside the crate can name it. Crate roots start with their own name. Then, until nothing changes: a `pub` item of a module with a public path gets that path plus its name, and a `pub use` in such a module gives its target the module's path plus the imported (or renamed) name; glob re-exports do this for every `pub` item of the module. Paths are capped at 12 segments, which only re-export cycles reach. An item is public if it has a path. `#[doc(hidden)]` items and `pub use`s give no paths. Base and head paths are compared: a path gained or lost is a change of the item, even if its code is the same. The first path is where rustdoc documents the item (its definition path if public, else the shortest re-export), and the overview lists it there.
+
+With rust-analyzer, `public_api.rs` replaces these paths: it walks rust-analyzer's resolved module scopes (`hir_def`'s `ItemScope`) from each library root through every `pub` name, which also covers globs, `cfg` and macro-generated `pub use`s. Paths through a `#[doc(hidden)]` item, module or `pub use` are dropped, and re-exports are ordered by `#[doc(inline)]`/`#[doc(no_inline)]` like rustdoc. Definitions are mapped back to items by the position of their name (modules by path). Names that refer to other crates' items become items of their own (`reexport_of`), and items rust-analyzer doesn't see (an inactive `cfg`) keep the syntactic paths.
 
 ### 2. rust-analyzer as a library (on by default)
 
@@ -187,7 +190,7 @@ rust-analyzer's `hir` API could replace the syntactic item model entirely: modul
 - It doesn't work for code that fails to load as a cargo workspace.
 - The syntactic model is fast and already accurate for paths.
 
-The current split uses rust-analyzer where only type inference helps: method calls. Moving the public-API computation (re-exports, visibility) to `hir` would be the natural next step.
+The current split uses rust-analyzer where the syntax isn't enough: method calls, and the public API (re-exports, `#[doc(hidden)]`, macro-generated `pub use`s).
 
 ### Front end: framework or native GUI — not chosen
 
@@ -203,5 +206,3 @@ The tool calls the `git` binary to clone, fetch pull request refs, compute merge
 ## Next steps
 
 - Opt-in rustdoc JSON in trusted mode, for an exact public API.
-- Public-API computation via rust-analyzer's `hir` (exact re-exports, `doc(hidden)`).
-- Show the PR description (`gh pr view --json body`).

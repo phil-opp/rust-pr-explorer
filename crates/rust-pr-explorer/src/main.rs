@@ -4,6 +4,8 @@ mod analyze;
 mod files;
 mod merge;
 mod parts;
+#[cfg(feature = "semantic")]
+mod public_api;
 mod python;
 #[cfg(feature = "semantic")]
 mod semantic;

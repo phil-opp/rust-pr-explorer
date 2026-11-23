@@ -1,0 +1,94 @@
+// Headless browser smoke test of an explorer page.
+//
+// Usage: node ci/smoke.mjs <page.html> <out-dir>
+//
+// Opens the page in Chromium once with a light and once with a dark color
+// scheme, visits every view and opens an item on the canvas. Fails on any
+// uncaught error, console error or failed request, on an empty view, and if
+// both themes render with the same background. Screenshots of every view go
+// to <out-dir>.
+
+import { chromium } from "playwright";
+import { mkdirSync } from "node:fs";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const [page_path, out_dir] = process.argv.slice(2);
+if (!page_path || !out_dir) {
+  console.error("usage: node ci/smoke.mjs <page.html> <out-dir>");
+  process.exit(2);
+}
+mkdirSync(out_dir, { recursive: true });
+const url = pathToFileURL(resolve(page_path)).href;
+
+const VIEWS = ["overview", "module", "canvas", "space"];
+const failures = [];
+const backgrounds = {};
+
+const browser = await chromium.launch();
+try {
+  for (const scheme of ["light", "dark"]) {
+    const context = await browser.newContext({
+      colorScheme: scheme,
+      viewport: { width: 1400, height: 900 },
+    });
+    const page = await context.newPage();
+    const fail = (msg) => failures.push(`[${scheme}] ${msg}`);
+    page.on("pageerror", (e) => fail(`uncaught error: ${e.message}`));
+    page.on("console", (m) => {
+      if (m.type() === "error") fail(`console error: ${m.text()}`);
+    });
+    page.on("requestfailed", (r) => fail(`request failed: ${r.url()}`));
+
+    await page.goto(url);
+    // The viewer fills the sidebar once the wasm module has started.
+    await page
+      .waitForFunction(() => document.querySelector("#sidebar")?.children.length > 0, null, {
+        timeout: 30_000,
+      })
+      .catch(() => fail("the viewer did not start (sidebar stays empty)"));
+
+    backgrounds[scheme] = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+
+    for (const view of VIEWS) {
+      await page.click(`#views [data-view="${view}"]`);
+      const section = page.locator(`#view-${view}`);
+      try {
+        await section.waitFor({ state: "visible", timeout: 5_000 });
+      } catch {
+        fail(`view "${view}" is not shown after clicking its tab`);
+        continue;
+      }
+      const empty = await section.evaluate((el) => el.innerText.trim() === "" && el.querySelector("svg, canvas, .card") === null);
+      if (empty) fail(`view "${view}" is empty`);
+      await page.screenshot({ path: `${out_dir}/${scheme}-${view}.png` });
+    }
+
+    // Open an item from the overview on the canvas.
+    await page.click('#views [data-view="overview"]');
+    const open = page.locator("#view-overview [data-open]").first();
+    if ((await open.count()) === 0) {
+      fail("the overview has no item to open");
+    } else {
+      await open.click();
+      try {
+        await page.locator("#cards .card").first().waitFor({ state: "visible", timeout: 5_000 });
+        await page.screenshot({ path: `${out_dir}/${scheme}-canvas-card.png` });
+      } catch {
+        fail("opening an item shows no card on the canvas");
+      }
+    }
+    await context.close();
+  }
+} finally {
+  await browser.close();
+}
+
+if (backgrounds.light === backgrounds.dark) {
+  failures.push(`light and dark themes have the same background (${backgrounds.light})`);
+}
+if (failures.length > 0) {
+  console.error(`Smoke test failed:\n${failures.map((f) => `  - ${f}`).join("\n")}`);
+  process.exit(1);
+}
+console.log(`Smoke test passed: ${VIEWS.length} views in light and dark (backgrounds ${backgrounds.light}, ${backgrounds.dark}).`);
