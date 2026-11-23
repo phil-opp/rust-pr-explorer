@@ -611,7 +611,7 @@ details.private-def .sigbox { margin-top: 4px; }
 :root:not(.no-lno) pre .ln:has(> .lno)::before { content: none; }
 :root:not(.no-lno) .ln .lno, :root:not(.no-lno) .ln .sg { display: inline-block; user-select: none; color: var(--muted); }
 .ln .lno::before, .ln .lno::after { display: inline-block; min-width: var(--lnw, 3ch); text-align: right; opacity: .8; }
-.ln .lno::before { content: attr(data-o); }
+.ln .lno::before { content: attr(data-o); margin-left: 4px; }
 .ln .lno::after { content: attr(data-n); margin: 0 4px 0 1ch; }
 .ln .sg { width: 14px; }
 .ln .sg::before { content: attr(data-t); }
