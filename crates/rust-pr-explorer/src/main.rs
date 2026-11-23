@@ -3,6 +3,7 @@
 mod analyze;
 mod files;
 mod merge;
+mod parts;
 #[cfg(feature = "semantic")]
 mod public_api;
 mod python;
@@ -143,14 +144,10 @@ fn analyze_checkout(
     for f in &mut files {
         f.analyzed = analyzed.contains(f.path.as_str());
         if f.analyzed {
-            let decls = |dir: &Path| {
-                std::fs::read_to_string(dir.join(&f.path))
-                    .map(|t| files::declaration_lines(&t))
-                    .unwrap_or_default()
-            };
-            let (old, new) = (decls(&checkout.base_dir), decls(&checkout.head_dir));
+            let text = |dir: &Path| std::fs::read_to_string(dir.join(&f.path)).unwrap_or_default();
+            let (old, new) = (text(&checkout.base_dir), text(&checkout.head_dir));
             // The items show the other changes: keep only these.
-            (f.outside_items, f.hunks) =
+            (f.outside_items, f.hunks, f.parts) =
                 files::outside_items(f, output.items.values(), (&old, &new));
         }
     }

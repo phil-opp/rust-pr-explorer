@@ -989,9 +989,23 @@ fn changes_outside_items_are_counted() {
     let out = crate::analyze_checkout(&checkout, false, Trust::Untrusted);
     let lib = out.files.iter().find(|f| f.path == "src/lib.rs").unwrap();
     assert!(lib.analyzed);
-    // `thread_local!`, the extern fn and the test assertion: 3 lines on
-    // each side. The change in `f` is inside an item.
-    assert_eq!(lib.outside_items, 6);
+    // `thread_local!`, the extern block and the test are parts of their
+    // own; no other line changed. The change in `f` is inside an item.
+    assert_eq!(lib.outside_items, 0, "{:#?}", lib.hunks);
+    let parts: Vec<(&str, &str)> = lib
+        .parts
+        .iter()
+        .map(|p| (p.name.as_str(), p.kind.as_str()))
+        .collect();
+    assert_eq!(
+        parts,
+        [
+            ("thread_local!", "macro call"),
+            ("extern \"C\"", "extern"),
+            ("tests::t", "test"),
+        ]
+    );
+    assert_eq!(lib.parts[2].sig, "#[test]\nfn t()");
     // Imports spread over several lines and attributes of module
     // declarations are not code outside items.
     let base = write_crate(&[(
