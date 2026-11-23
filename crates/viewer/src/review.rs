@@ -138,6 +138,16 @@ const HUNK_GAP: usize = 8;
 
 /// The hunks of a changed item, if it has more than one.
 pub fn hunks(it: &Item) -> Vec<Hunk> {
+    let out = changes(it);
+    if out.len() < 2 {
+        return Vec::new();
+    }
+    out
+}
+
+/// The separate changes of a changed item, also when it has only one.
+/// Reformatted lines are no part of them.
+pub fn changes(it: &Item) -> Vec<Hunk> {
     if it.status != Status::Changed {
         return Vec::new();
     }
@@ -201,9 +211,6 @@ pub fn hunks(it: &Item) -> Vec<Hunk> {
             h.old.push(o);
             o += 1;
         }
-    }
-    if out.len() < 2 {
-        return Vec::new();
     }
     let mut seen = HashSet::new();
     out.into_iter()

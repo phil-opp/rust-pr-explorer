@@ -275,6 +275,7 @@ fn analyze_all(
             let since_base = analyze_side(&s.dir, how, "since");
             let pr = checkout.pr.clone().map(|pr| model::PrMeta {
                 base_rev: s.commit[..s.commit.len().min(10)].to_string(),
+                base_commit: s.commit.clone(),
                 custom_base: true,
                 since: Some(s.commit.clone()),
                 ..pr
