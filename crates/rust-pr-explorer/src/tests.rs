@@ -1369,6 +1369,49 @@ fn semver_labels_in_demo() {
 }
 
 #[test]
+fn notes_on_fields_and_variants_carry_their_docs() {
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "pub struct Group {\n    /// The tabs.\n    pub tabs: Vec<String>,\n    /// Gone soon.\n    pub old: u8,\n}\n\npub enum Mode {\n    A,\n}\n",
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        "pub struct Group {\n    /// The tabs.\n    pub tabs: Vec<u8>,\n    /// Expanded sections.\n    ///\n    /// More detail.\n    pub expanded: Vec<String>,\n    pub plain: u8,\n}\n\npub enum Mode {\n    A,\n    /// The new mode.\n    B,\n}\n",
+    )]);
+    let out = analyze_dirs(base.path(), head.path());
+    let docs = |id: &str| -> Vec<(String, Option<String>)> {
+        out.items[id]
+            .sig_diff
+            .as_ref()
+            .unwrap()
+            .notes
+            .iter()
+            .map(|n| (n.text.clone(), n.docs.clone()))
+            .collect()
+    };
+    let group = docs("t::Group");
+    let find = |list: &[(String, Option<String>)], what: &str| {
+        list.iter()
+            .find(|(t, _)| t.contains(what))
+            .unwrap_or_else(|| panic!("{what} in {list:?}"))
+            .1
+            .clone()
+    };
+    assert_eq!(
+        find(&group, "expanded"),
+        Some("Expanded sections.\n\nMore detail.".to_string())
+    );
+    assert_eq!(find(&group, "tabs"), Some("The tabs.".to_string()));
+    // A removed field shows its old docs; one without docs shows none.
+    assert_eq!(find(&group, "old"), Some("Gone soon.".to_string()));
+    assert_eq!(find(&group, "plain"), None);
+    assert_eq!(
+        find(&docs("t::Mode"), "`B`"),
+        Some("The new mode.".to_string())
+    );
+}
+
+#[test]
 fn derives_count_and_their_order_does_not() {
     let base = write_crate(&[(
         "src/lib.rs",

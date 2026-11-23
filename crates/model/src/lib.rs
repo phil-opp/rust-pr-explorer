@@ -281,6 +281,13 @@ pub struct DiffNote {
     pub text: String,
     /// Groups of the spans this note describes.
     pub groups: Vec<u32>,
+    /// The field or variant the note is about, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
+    /// Its doc comment (Markdown): the new one, or for a removed member
+    /// the old one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
 }
 
 /// A signature diff aligned on syntax: parameters, generic parameters,
