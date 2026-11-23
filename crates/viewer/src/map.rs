@@ -405,9 +405,14 @@ pub fn render_matrix(app: &App) {
         })
         .collect();
     let html = format!(
-        r#"<div class="mx-wrap"><p class="sub">Each cell counts the calls{} from the items of the row's module into the column's module that involve a change. The diagonal counts calls inside one module. Hover a cell to list them, click it to open them on the canvas. Private modules are in italics.</p>
-        <table class="mx"><tr><th></th>{head}</tr>{rows}</table></div>"#,
-        if sp.show_uses { " and uses" } else { "" }
+        r#"<div class="mx-wrap"><table class="mx"><tr><th>{}</th>{head}</tr>{rows}</table></div>"#,
+        crate::pages::help_html(&format!(
+            "Each cell counts the calls{} from the items of the row's module into the column's \
+             module that involve a change. The diagonal counts calls inside one module. Hover a \
+             cell to list them, click it to open them on the canvas. Private modules are in \
+             italics.",
+            if sp.show_uses { " and uses" } else { "" }
+        ))
     );
     dom::set_html("space-alt", &html);
 }
