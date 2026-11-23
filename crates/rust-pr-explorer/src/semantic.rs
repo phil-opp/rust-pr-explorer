@@ -21,8 +21,8 @@ use ra_ap_ide::{
 };
 use ra_ap_ide_db::ra_fixture::RaFixtureConfig;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
-use ra_ap_paths::AbsPathBuf;
-use ra_ap_project_model::{CargoConfig, CargoFeatures, RustLibSource};
+use ra_ap_paths::{AbsPathBuf, Utf8PathBuf};
+use ra_ap_project_model::{CargoConfig, CargoFeatures, RustLibSource, TargetDirectoryConfig};
 use ra_ap_vfs::{Vfs, VfsPath};
 use std::collections::BTreeMap;
 use std::collections::{BTreeSet, HashMap};
@@ -65,6 +65,7 @@ pub fn refine(
     root: &Path,
     manifest_dirs: &[PathBuf],
     trust: Trust,
+    target_dir: Option<&Path>,
     analysis: &mut Analysis,
 ) -> Result<Stats> {
     let root = std::fs::canonicalize(root)?;
@@ -82,7 +83,7 @@ pub fn refine(
     let mut api_done: BTreeSet<String> = BTreeSet::new();
     for dir in manifest_dirs {
         let dir = std::fs::canonicalize(dir)?;
-        let (host, vfs) = match load(&dir, trust) {
+        let (host, vfs) = match load(&dir, trust, target_dir) {
             Ok(loaded) => loaded,
             Err(e) => {
                 let rel = dir
@@ -461,12 +462,19 @@ fn target_of(
     }
 }
 
-fn load(dir: &Path, trust: Trust) -> Result<(AnalysisHost, Vfs)> {
+fn load(dir: &Path, trust: Trust, target_dir: Option<&Path>) -> Result<(AnalysisHost, Vfs)> {
+    let target_dir_config = match target_dir.map(|d| Utf8PathBuf::from_path_buf(d.to_path_buf())) {
+        Some(Ok(d)) => TargetDirectoryConfig::Directory(d),
+        Some(Err(d)) => anyhow::bail!("target directory is not UTF-8: {}", d.display()),
+        None => TargetDirectoryConfig::None,
+    };
     let cargo = CargoConfig {
         sysroot: Some(RustLibSource::Discover),
         // The syntactic analysis sees code behind every `cfg(feature)`;
         // enable all features so that rust-analyzer does too.
         features: CargoFeatures::All,
+        // Where `cargo check` builds the build scripts and proc macros.
+        target_dir_config,
         ..Default::default()
     };
     let trusted = trust == Trust::Trusted;
