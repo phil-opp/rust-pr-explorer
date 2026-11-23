@@ -197,6 +197,13 @@ code { font-size: .92em; }
 .api-why.api-breaking, .api-why.api-unknown, .api-why.api-compatible { border: none; padding: 0 0 0 18px; display: block; cursor: auto; font: 13px var(--sans); color: var(--text); }
 .api-why.api-breaking li::marker { color: var(--removed); }
 .api-why.api-compatible { color: var(--muted); }
+/* Impact of internal changes: the public items that reach them. */
+.impact { font: 13px var(--sans); margin: 2px 0 6px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
+.impact-h { font-weight: 600; }
+.impact.none { color: var(--muted); }
+.impact button, .impact-list button { font-size: 12px; padding: 0 6px; }
+.impact-list { margin: 2px 0 0; padding-left: 18px; font: 13px var(--sans); }
+.impact-list li { margin: 2px 0; }
 .semver-sum { margin: 0 0 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
 /* Code */
@@ -292,7 +299,7 @@ a.ref:hover { text-decoration: underline; }
 .irow + .irow, .whole + .irow { margin-top: 10px; }
 .irow .ihead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .irow .iacts { display: flex; gap: 4px; align-items: start; }
-.irow > .sigbox, .irow > .docs, .irow > details, .irow > .mark, .irow > .docs-acts { grid-column: 1 / -1; }
+.irow > .sigbox, .irow > .docs, .irow > details, .irow > .mark, .irow > .docs-acts, .irow > .impact, .irow > .impact-list { grid-column: 1 / -1; }
 .irow .docs { margin: 0; }
 .irow.context { opacity: .75; }
 /* Members (methods, associated items) are small cards inside their item. */
