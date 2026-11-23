@@ -216,7 +216,7 @@ fn find_moves(
             // Names of items that moved along (siblings, `Self`) point into
             // the new module: compare with the old module's paths rewritten.
             let old_code = rewrite_module(code(old), &old.info.module, &new.info.module);
-            if code(old) == code(new) || similar_code(&old_code, code(new)) {
+            if old_code == code(new) || similar_code(&old_code, code(new)) {
                 moves.insert((*new_id).clone(), (*old_id).clone());
             }
         }
