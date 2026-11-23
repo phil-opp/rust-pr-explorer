@@ -7,8 +7,30 @@ use crate::dom;
 use model::{Item, Kind, Status};
 use std::collections::BTreeMap;
 
+/// Whether the sidebar shows. Without any Rust change, a tree of unchanged
+/// modules only gets in the way, so it shows only on the module pages, where
+/// it is the way to browse the modules.
+pub fn sidebar_shown(app: &App) -> bool {
+    app.d.rust_changed() || (app.s.view == crate::View::Module && !app.d.roots().is_empty())
+}
+
+fn warnings_html(d: &Data) -> String {
+    d.out
+        .warnings
+        .iter()
+        .map(|w| format!(r#"<div class="side-warn">⚠ {}</div>"#, esc(w)))
+        .collect()
+}
+
 pub fn render_sidebar(app: &App) {
     let d = &app.d;
+    let shown = sidebar_shown(app);
+    if let Some(el) = dom::by_id("sidebar") {
+        dom::toggle_class(&el, "hidden", !shown);
+    }
+    if !shown {
+        return;
+    }
     fn tree(app: &App, m: &str) -> String {
         let d = &app.d;
         let Some(it) = d.item(m) else {
@@ -75,18 +97,19 @@ pub fn render_sidebar(app: &App) {
         )
     }
     let roots: String = d.roots().iter().map(|r| tree(app, r)).collect();
-    let warnings: String = d
-        .out
-        .warnings
-        .iter()
-        .map(|w| format!(r#"<div class="side-warn">⚠ {}</div>"#, esc(w)))
-        .collect();
+    let warnings = warnings_html(d);
+    let note = if d.rust_changed() {
+        ""
+    } else {
+        r#"<div class="side-note">No module changed in this PR.</div>"#
+    };
     dom::set_html(
         "sidebar",
         &format!(
-            r#"<div class="side-h">Modules</div><ul class="tree">{roots}</ul>
+            r#"<div class="side-h">Modules</div>{note}<ul class="tree">{roots}</ul>
             <div class="side-legend">
-              <div><span class="dot added"></span> added &nbsp; <span class="dot changed"></span> changed &nbsp; <span class="dot removed"></span> removed</div>
+              <div class="legend-dots"><span><span class="dot added"></span> added</span><span><span class="dot changed"></span> changed</span><span><span class="dot removed"></span> removed</span></div>
+              <div>No symbol: unchanged.</div>
               <div class="legend-bars"><span class="lb m-add">added</span><span class="lb m-chg">changed</span><span class="lb m-del">removed</span></div>
               <div>{}</div>
               <div>Calls resolved with: {}</div>
@@ -343,11 +366,11 @@ pub fn render_overview(app: &App) {
         })
         .collect();
     // Without any Rust change, say so instead of showing empty sections.
-    let rust_changed = d.items().any(|it| it.info.kind != Kind::Mod && changed(it));
-    let rust_html = if !rust_changed {
+    let rust_html = if !d.rust_changed() {
         let analyzed = d.out.crates.len();
+        // The sidebar is hidden then, so its warnings go here.
         format!(
-            r#"<h2>Rust code</h2><div class="empty-state">No Rust item was added, changed or removed{}. The changed files are listed below.</div>"#,
+            r#"<h2>Rust code</h2><div class="empty-state">No Rust item was added, changed or removed{}. The changed files are listed below.</div>{}"#,
             if analyzed == 0 {
                 " (no Rust crate was found)".to_string()
             } else {
@@ -355,7 +378,8 @@ pub fn render_overview(app: &App) {
                     " in the {analyzed} analyzed crate{}",
                     if analyzed == 1 { "" } else { "s and targets" }
                 )
-            }
+            },
+            warnings_html(d)
         )
     } else {
         format!(

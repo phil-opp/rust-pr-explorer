@@ -244,6 +244,13 @@ impl Data {
             .collect()
     }
 
+    /// Whether the PR adds, changes or removes any Rust item (modules
+    /// themselves aside: a module only counts through what is in it).
+    pub fn rust_changed(&self) -> bool {
+        self.items()
+            .any(|it| it.info.kind != Kind::Mod && changed(it))
+    }
+
     pub fn touched(&self, it: &Item) -> bool {
         self.touched.get(&it.info.id).copied().unwrap_or(false)
     }

@@ -147,6 +147,10 @@ pub fn set_view(app: &mut App, view: View) {
             section.id() == format!("view-{}", view.name()),
         );
     }
+    // Show or hide the sidebar first, so that the view lays out at its final width.
+    if let Some(el) = dom::by_id("sidebar") {
+        dom::toggle_class(&el, "hidden", !pages::sidebar_shown(app));
+    }
     match view {
         View::Overview => pages::render_overview(app),
         View::Module => pages::render_module_page(app),

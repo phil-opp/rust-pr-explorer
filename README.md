@@ -46,6 +46,8 @@ The demo in `fixtures/demo` is a small calculator crate. Its "PR" adds variables
 
 Lists only the public items that were added, changed or removed, nested by module, with their rustdoc-style signature and docs. A type whose methods changed appears as context with the changed members below it. Items are listed where rustdoc lists them: under their shortest public path, so an item of a private module that is re-exported with `pub use` appears at the re-export, marked "re-export of …". Internal changes are summarized per module, with a link to each module's internal call graph.
 
+The sidebar lists the modules with a status symbol and the number of changed items in each. When the PR changes no Rust item, the sidebar is hidden, except on the module pages, where it is the way to browse the modules.
+
 ### Files outside the Rust analysis
 
 Every file the PR changes is accounted for:
@@ -62,7 +64,7 @@ Every file the PR changes is accounted for:
 
 Every item shows what rustdoc would show: its definition or signature (private fields hidden when looking from outside the module), its docs, and its place in the module tree.
 
-- **Change markers**: inside a changed item, a bar on the left marks each part that changed, so the eye finds changes without reading labels. Each kind differs in line style as well as color, so it doesn't depend on telling red from green: changed, the most common, is a plain solid amber line; added is a dotted green line and removed a dashed red line. Removed text is also struck through, and status dots differ in shape (disc, diamond, hollow square). Neighboring parts that changed the same way share one bar.
+- **Change markers**: inside a changed item, a bar on the left marks each part that changed, so the eye finds changes without reading labels. Each kind differs in line style as well as color, so it doesn't depend on telling red from green: changed, the most common, is a plain solid amber line; added is a dotted green line and removed a dashed red line. Removed text is also struck through, and status symbols differ in shape: a small square with a plus (added), a dot (changed) or a minus (removed); unchanged items have no symbol. Neighboring parts that changed the same way share one bar.
 - **New and removed items** are marked as a whole instead: a NEW or REMOVED badge, and a tinted background with a border around the item (solid for new, dashed for removed). A new type and its new methods form one group, and the badge appears once, on the type; inside a new module only the module has it.
   - The signature block gets a bar when the signature changed. An unchanged signature, shown only for reference, is drawn muted and outlined instead.
   - Docs are compared paragraph by paragraph (lists and code blocks count as one paragraph). Changed and added paragraphs get a bar; removed paragraphs are shown struck through. When a paragraph changed only a few words, the words are marked inside it (inserted underlined, removed struck through). This is done only when it can't change how the Markdown renders: not for changes to link text or targets, Markdown syntax, the start of a line, or code blocks. Otherwise the previous text of the paragraph can be expanded. **Compare docs side by side** opens both versions next to each other, with changed paragraphs aligned.
