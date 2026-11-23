@@ -1,6 +1,7 @@
 //! Rust PR Explorer: shows a pull request as changed Rust items.
 
 mod analyze;
+mod commits;
 mod css;
 mod files;
 mod javascript;
@@ -240,6 +241,7 @@ fn analyze_all(
         resolution: String::new(),
         pr,
         project: checkout.project.clone(),
+        commits: Vec::new(),
     };
     let since = match &checkout.since {
         Some(source::Since::Changes(s)) => {
@@ -255,6 +257,9 @@ fn analyze_all(
                 (&checkout.head_dir, head.clone()),
                 s.files.clone(),
                 meta(&s.label, pr),
+                // Commits are traced from the PR's base, which this page
+                // doesn't compare with.
+                None,
             ))
         }
         _ => None,
@@ -265,6 +270,7 @@ fn analyze_all(
         // Taken by the checkout before anything was removed from the copies.
         checkout.files.clone(),
         meta(&checkout.base_label, checkout.pr.clone()),
+        checkout.git.as_ref(),
     );
     (output, since)
 }
@@ -276,6 +282,7 @@ fn compare(
     (head_dir, (head, head_note)): (&Path, (analyze::Analysis, String)),
     mut files: Vec<model::ChangedFile>,
     meta: model::Meta,
+    git: Option<&source::GitRange>,
 ) -> model::Output {
     let resolution = if base_note == head_note {
         head_note
@@ -302,6 +309,12 @@ fn compare(
         }
     }
     output.files = files;
+    if let Some(git) = git {
+        eprintln!("tracing which commit changed what…");
+        let mut warnings = Vec::new();
+        output.meta.commits = commits::commits(git, &output.items, &output.files, &mut warnings);
+        output.warnings.extend(warnings);
+    }
     output
 }
 

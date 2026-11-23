@@ -7,9 +7,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use syn::{Attribute, Item, Visibility, parse_quote};
-pub use syntax::is_extra_target;
 #[cfg(feature = "semantic")]
 pub use syntax::wrap_fn_sig;
+pub use syntax::{extract_docs, is_extra_target};
 
 mod collector;
 mod items;
