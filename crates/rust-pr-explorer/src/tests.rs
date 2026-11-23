@@ -170,6 +170,101 @@ fn rewrapped_lines_are_found_in_the_demo() {
 }
 
 #[test]
+fn extracted_code_is_marked_as_moved() {
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "pub fn run(xs: &[u32]) -> u32 {
+    let mut total = 0;
+    for x in xs {
+        let scaled = x.saturating_mul(3);
+        total += scaled.min(1000);
+    }
+    total
+}
+",
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        "pub fn run(xs: &[u32]) -> u32 {
+    let mut total = 0;
+    for x in xs {
+        total += weight(*x);
+    }
+    total
+}
+
+fn weight(x: u32) -> u32 {
+    let scaled = x.saturating_mul(3);
+    scaled.min(1000)
+}
+",
+    )]);
+    let out = analyze_dirs(base.path(), head.path());
+    let run = &out.items["t::run"];
+    let weight = &out.items["t::weight"];
+    assert_eq!(weight.status, Status::Added);
+    // Only the line that is the same apart from indentation was moved.
+    assert_eq!(
+        run.moved_lines,
+        [model::MovedLines {
+            side: '-',
+            start: 3,
+            len: 1,
+            other: "t::weight".into(),
+            other_line: 10,
+        }]
+    );
+    assert_eq!(
+        weight.moved_lines,
+        [model::MovedLines {
+            side: '+',
+            start: 1,
+            len: 1,
+            other: "t::run".into(),
+            other_line: 4,
+        }]
+    );
+}
+
+#[test]
+fn short_or_reindented_lines_are_not_moved() {
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "pub fn a(x: u32) -> u32 {
+    let y = x + 1;
+    y
+}
+pub fn b(v: Vec<u32>) -> usize {
+    v.iter().filter(|n| **n > 10).count()
+}
+",
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        "pub fn a(x: u32) -> u32 {
+    x * 2
+}
+pub fn b(v: Vec<u32>) -> usize {
+    if v.is_empty() {
+        return 0;
+    }
+    {
+        v.iter().filter(|n| **n > 10).count()
+    }
+}
+pub fn c(x: u32) -> u32 {
+    let y = x + 1;
+    y * y
+}
+",
+    )]);
+    let out = analyze_dirs(base.path(), head.path());
+    // `let y = x + 1;` has too few letters and digits, and the line in `b`
+    // was only indented.
+    assert!(out.items.values().all(|it| it.moved_lines.is_empty()));
+}
+
+#[test]
 fn calls_and_uses() {
     let out = demo();
     let calc = &out.items["tinycalc::calc"].info;
