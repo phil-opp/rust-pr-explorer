@@ -89,9 +89,22 @@ impl Checkout {
         let temp = tempfile::tempdir()?;
         let base_rev = rev_parse(repo, base)?;
         let head_rev = rev_parse(repo, head)?;
-        // `git clone` needs the top-level directory.
-        let top = git_output(repo, &["rev-parse", "--show-toplevel"])?;
-        let prefix = git_output(repo, &["rev-parse", "--show-prefix"])?;
+        // `git clone` needs the top-level directory of a work tree; a bare
+        // repository (which has none) is cloned as it is.
+        let bare = git_output(repo, &["rev-parse", "--is-bare-repository"])? == "true";
+        let (top, prefix) = if bare {
+            (
+                repo.to_str()
+                    .context("repository path is not UTF-8")?
+                    .to_string(),
+                String::new(),
+            )
+        } else {
+            (
+                git_output(repo, &["rev-parse", "--show-toplevel"])?,
+                git_output(repo, &["rev-parse", "--show-prefix"])?,
+            )
+        };
         let base_tree = temp.path().join("base");
         let head_tree = temp.path().join("head");
         // A worktree of a shared clone: unlike `git archive`, it doesn't

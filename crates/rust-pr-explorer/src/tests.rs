@@ -607,6 +607,49 @@ fn one_file_as_two_modules() {
     assert!(analysis.warnings.is_empty(), "{:?}", analysis.warnings);
 }
 
+/// Files that each include the next file twice double the number of
+/// modules with every file; the analysis stops at a limit.
+#[test]
+fn repeated_includes_are_limited() {
+    let mut files = vec![(
+        "src/lib.rs".to_string(),
+        "#[path = \"f1.rs\"]\npub mod a;\n#[path = \"f1.rs\"]\npub mod b;\n".to_string(),
+    )];
+    let levels = 18;
+    for n in 1..levels {
+        files.push((
+            format!("src/f{n}.rs"),
+            format!(
+                "#[path = \"f{0}.rs\"]\npub mod a;\n#[path = \"f{0}.rs\"]\npub mod b;\npub fn f() {{}}\n",
+                n + 1
+            ),
+        ));
+    }
+    files.push((format!("src/f{levels}.rs"), "pub fn f() {}\n".to_string()));
+    let refs: Vec<(&str, &str)> = files
+        .iter()
+        .map(|(p, t)| (p.as_str(), t.as_str()))
+        .collect();
+    let dir = write_crate(&refs);
+    let start = std::time::Instant::now();
+    let crates = crate::source::find_crates(dir.path());
+    let analysis = Analyzer::run(dir.path(), &crates);
+    assert!(start.elapsed().as_secs() < 30, "{:?}", start.elapsed());
+    let modules = analysis
+        .items
+        .values()
+        .filter(|i| i.info.kind == model::Kind::Mod)
+        .count();
+    // Every file once, plus the limited repeats.
+    assert!(modules <= levels + 1 + 1000, "{modules}");
+    let limit: Vec<&String> = analysis
+        .warnings
+        .iter()
+        .filter(|w| w.contains("further modules"))
+        .collect();
+    assert_eq!(limit.len(), 1, "{:?}", analysis.warnings);
+}
+
 #[test]
 fn embedded_data_cannot_end_its_script_element() {
     let json = serde_json::to_string("Strips `<!--<script>` prefixes. </script>").unwrap();
@@ -718,6 +761,25 @@ fn git_checkouts_list_and_remove_what_they_must() {
     let listed: Vec<&str> = sub.files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(listed, ["hidden.rs", "leak.rs", "lib.rs"]);
     assert!(sub.title.ends_with(" in src"), "{}", sub.title);
+
+    // A bare repository has no top-level directory: it is cloned as it is.
+    let bare = tempfile::tempdir().unwrap();
+    let bare_path = bare.path().join("repo.git");
+    let out = std::process::Command::new("git")
+        .args(["clone", "-q", "--bare"])
+        .arg(dir.path())
+        .arg(&bare_path)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let from_bare =
+        crate::source::Checkout::from_git(&bare_path, "HEAD~1", "HEAD", Trust::Untrusted).unwrap();
+    assert!(from_bare.head_dir.join("src/hidden.rs").is_file());
+    assert_eq!(from_bare.files.len(), checkout.files.len());
 }
 
 /// In `dirs` mode, build output and downloaded packages are neither copied

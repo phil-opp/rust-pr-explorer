@@ -169,6 +169,12 @@ struct Res {
     display_start: usize,
 }
 
+/// Modules a crate may read from files it already loaded as other
+/// modules (one file included twice with `#[path]`, which rustc allows).
+/// Without a limit, files that include the next file twice each double the
+/// number of modules, and a PR could make the analysis run for hours.
+const MAX_REPEATED_LOADS: usize = 1000;
+
 pub struct Analyzer {
     root: PathBuf,
     /// The canonical root, so that no file outside the checkout is read.
@@ -176,6 +182,10 @@ pub struct Analyzer {
     /// Per (crate, canonical file): the module ids it was loaded as, so
     /// that a `#[path]` cycle (a file inside its own module) ends.
     loaded: HashMap<(String, PathBuf), Vec<String>>,
+    /// Per crate: modules read from a file the crate had already loaded.
+    /// Capped, because each such file can declare its modules again, so
+    /// that their number can double with every file (see `load_file`).
+    repeated_loads: HashMap<String, usize>,
     /// Name lookups, memoized (see `lookup_name`).
     lookup_memo: std::cell::RefCell<HashMap<LookupKey, Option<Res>>>,
     lookup_active: std::cell::RefCell<std::collections::HashSet<LookupKey>>,
@@ -277,6 +287,7 @@ impl Analyzer {
             root: root.to_path_buf(),
             canonical_root: std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf()),
             loaded: Default::default(),
+            repeated_loads: Default::default(),
             lookup_memo: Default::default(),
             lookup_active: Default::default(),
             lookup_cut: Default::default(),
@@ -347,7 +358,8 @@ impl Analyzer {
     /// Reads and parses a source file for module `id`. Files outside the
     /// checkout are refused, and so is a file that an enclosing module of
     /// `id` was loaded from (a `#[path]` cycle). A file may be included as
-    /// several unrelated modules, like rustc allows. The error's flag is
+    /// several unrelated modules, like rustc allows, up to
+    /// [`MAX_REPEATED_LOADS`] times per crate. The error's flag is
     /// set when the file is the same module, declared again (under another
     /// `cfg`).
     fn load_file(
@@ -363,8 +375,12 @@ impl Analyzer {
                 false,
             ));
         }
-        let key = (Self::crate_of(id).to_string(), canonical);
-        let ids = self.loaded.entry(key).or_default();
+        let krate = Self::crate_of(id).to_string();
+        let ids = self
+            .loaded
+            .get(&(krate.clone(), canonical.clone()))
+            .map(Vec::as_slice)
+            .unwrap_or_default();
         if ids.iter().any(|first| first == id) {
             return Err((
                 format!(
@@ -385,7 +401,26 @@ impl Analyzer {
                 false,
             ));
         }
-        ids.push(id.to_string());
+        if !ids.is_empty() {
+            let n = self.repeated_loads.entry(krate.clone()).or_default();
+            *n += 1;
+            if *n > MAX_REPEATED_LOADS {
+                // Warned once, when the limit is reached; the callers skip
+                // empty warnings.
+                let warning = if *n == MAX_REPEATED_LOADS + 1 {
+                    format!(
+                        "crate `{krate}` includes files as more than {MAX_REPEATED_LOADS} further modules (`#[path]`); the rest are not read"
+                    )
+                } else {
+                    String::new()
+                };
+                return Err((warning, false));
+            }
+        }
+        self.loaded
+            .entry((krate, canonical))
+            .or_default()
+            .push(id.to_string());
         let text = std::fs::read_to_string(path)
             .map_err(|e| (format!("cannot read {}: {e}", path.display()), false))?;
         let file = syn::parse_file(&text)
@@ -659,7 +694,9 @@ impl Analyzer {
                                     (file.items, child_src, child_dir, file.attrs)
                                 }
                                 Err((e, _)) => {
-                                    self.warnings.push(e);
+                                    if !e.is_empty() {
+                                        self.warnings.push(e);
+                                    }
                                     continue;
                                 }
                             }
