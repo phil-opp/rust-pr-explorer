@@ -39,6 +39,7 @@ crates/viewer            the page's front end (wasm, web-sys, pulldown-cmark)
   src/code/              highlighting, signature diffs, Markdown, doc diffs
   src/canvas/            canvas of cards: cards, edges, layout, events
   src/map.rs, route.rs   structure view (module map, matrix) and arrow routing
+  src/impact.rs          public items that reach a changed internal item
   src/files.rs           other changed files (Markdown sections, Python, YAML,
                          manifests, Rust code outside items)
   src/css.rs             CSS highlighting and selector boxes

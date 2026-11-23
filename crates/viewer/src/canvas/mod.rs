@@ -19,7 +19,7 @@ pub use events::{
     active_item_of_card, highlight_card_of, on_click, on_details_toggle, on_pointer_down,
     on_pointer_move, on_pointer_up, on_unfold, on_wheel,
 };
-pub use layout::show_module_graph;
+pub use layout::{show_impact, show_module_graph};
 pub use open::{open, open_for_review};
 
 use card::card_html;

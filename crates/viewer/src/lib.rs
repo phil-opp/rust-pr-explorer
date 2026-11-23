@@ -10,6 +10,7 @@ mod css;
 mod data;
 mod dom;
 mod files;
+mod impact;
 mod js;
 mod map;
 mod nav;
@@ -447,6 +448,10 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
     }
     if let Some(b) = dom::closest(el, "[data-unfold], [data-unfold-all]") {
         canvas::on_unfold(app, &b);
+        return;
+    }
+    if let Some(b) = dom::closest(el, "[data-impact]") {
+        canvas::show_impact(app, &dom::data(&b, "impact").unwrap_or_default());
         return;
     }
     if dom::closest(el, "#view-canvas").is_some() && canvas::on_click(app, el) {
