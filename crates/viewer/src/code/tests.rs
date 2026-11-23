@@ -1,4 +1,4 @@
-use super::docs_diff::{docs_diff_html, word_diff_html};
+use super::docs_diff::{docs_diff_html, mark_changed_tokens, word_diff_html};
 use super::markdown::doc_blocks;
 use super::*;
 use crate::data::Data;
@@ -394,7 +394,9 @@ fn source_diff_follows_the_settings() {
         "{html}"
     );
     assert!(
-        html.contains(r#"<span class="no">6</span><span class="ln del" data-t="-">"#),
+        html.contains(
+            r#"<span class="no">6</span><span class="ln del wl" data-t="-">    <span class="wc">b</span>();"#
+        ),
         "{html}"
     );
     assert!(
@@ -490,7 +492,12 @@ fn small_body_changes_are_shown_directly() {
     // The hunk with two lines of context comes first, outside the
     // collapsed whole source; skipped lines are marked.
     let (hunk, whole) = html.split_once("<details").unwrap();
-    assert!(hunk.contains("old();") && hunk.contains("new();"), "{hunk}");
+    // The changed line pair has its changed word marked.
+    assert!(
+        hunk.contains(r#"<span class="wc">old</span>();"#)
+            && hunk.contains(r#"<span class="wc">new</span>();"#),
+        "{hunk}"
+    );
     assert!(hunk.contains("l4;") && hunk.contains("l7;"), "{hunk}");
     assert!(!hunk.contains("l2;") && !hunk.contains("l9;"), "{hunk}");
     assert_eq!(hunk.matches("⋯").count(), 2, "{hunk}");
@@ -550,4 +557,27 @@ fn review_rendering_cases() {
             == Some("X<F>")
     );
     assert!(!web_url("javascript://x/%0Aalert(1)") && web_url("https://docs.rs/x"));
+}
+
+#[test]
+fn changed_code_lines_mark_changed_tokens() {
+    let d = empty();
+    let (a, b) = (
+        code_html(&d, "let x = foo(1, 2);", Links::None),
+        code_html(&d, "let x = foo(1, 3);", Links::None),
+    );
+    let (ma, mb) = mark_changed_tokens(&a, &b).unwrap();
+    assert!(ma.contains(r#"<span class="wc">2</span>"#), "{ma}");
+    assert!(mb.contains(r#"<span class="wc">3</span>"#), "{mb}");
+    assert_eq!(ma.matches("wc").count(), 1, "{ma}");
+    // Words of a run share one mark; tags are never inside a mark.
+    let (_, mb) = mark_changed_tokens("<p>a b c d e</p>", "<p>a x y d e</p>").unwrap();
+    assert_eq!(mb, r#"<p>a <span class="wc">x y</span> d e</p>"#);
+    let (_, mb) = mark_changed_tokens("a <b>b</b> c d", "a x <b>y</b> c d").unwrap();
+    assert_eq!(
+        mb,
+        r#"a <span class="wc">x</span> <b><span class="wc">y</span></b> c d"#
+    );
+    // A different line: no marks.
+    assert_eq!(mark_changed_tokens("one two three", "four five six"), None);
 }

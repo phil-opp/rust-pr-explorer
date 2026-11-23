@@ -458,3 +458,78 @@ pub fn docs_compare_html(d: &Data, it: &model::Item) -> String {
         r#"<div class="cmp docs"><div class="cmp-h">Before (base)</div><div class="cmp-h">After (PR)</div>{rows}</div>"#
     )
 }
+
+/// Two versions of a changed line of highlighted code, with the text that
+/// differs between them wrapped in `<span class="wc">`. Only the text is
+/// compared, not the highlighting or links around it, and a change of
+/// whitespace alone isn't marked. `None` if less than half of the shorter
+/// line remains, where marking words wouldn't help.
+pub fn mark_changed_tokens(old: &str, new: &str) -> Option<(String, String)> {
+    use similar::{Algorithm, DiffOp, capture_diff_slices};
+    let (a, b) = (html_tokens(old), html_tokens(new));
+    // Positions of the text tokens, and what they are compared by.
+    let text = |toks: &[&str]| -> (Vec<usize>, Vec<String>) {
+        toks.iter()
+            .enumerate()
+            .filter(|(_, t)| !is_tag(t))
+            .map(|(i, t)| {
+                let key = if t.trim().is_empty() { " " } else { t };
+                (i, key.to_string())
+            })
+            .unzip()
+    };
+    let ((ia, ka), (ib, kb)) = (text(&a), text(&b));
+    let mut changed_a = vec![false; a.len()];
+    let mut changed_b = vec![false; b.len()];
+    let mut same = 0;
+    for op in capture_diff_slices(Algorithm::Myers, &ka, &kb) {
+        if let DiffOp::Equal { new_index, len, .. } = op {
+            same += ib[new_index..new_index + len]
+                .iter()
+                .filter(|&&i| is_text(b[i]))
+                .count();
+            continue;
+        }
+        for &i in &ia[op.old_range()] {
+            changed_a[i] = is_text(a[i]);
+        }
+        for &i in &ib[op.new_range()] {
+            changed_b[i] = is_text(b[i]);
+        }
+    }
+    let words = |toks: &[&str]| toks.iter().filter(|t| is_text(t)).count();
+    if same * 2 < words(&a).min(words(&b)) {
+        return None;
+    }
+    // Marks runs of changed text; whitespace between two changed tokens
+    // of a run belongs to it.
+    let render = |toks: &[&str], changed: &[bool]| -> String {
+        let mut out = String::new();
+        let mut open = false;
+        for (k, t) in toks.iter().enumerate() {
+            let inner_ws = !is_tag(t)
+                && !is_text(t)
+                && open
+                && toks[k + 1..]
+                    .iter()
+                    .zip(&changed[k + 1..])
+                    .find(|(t, _)| is_tag(t) || is_text(t))
+                    .is_some_and(|(t, &c)| !is_tag(t) && c);
+            let mark = changed[k] || inner_ws;
+            if open && !mark {
+                out.push_str("</span>");
+                open = false;
+            }
+            if mark && !open {
+                out.push_str(r#"<span class="wc">"#);
+                open = true;
+            }
+            out.push_str(t);
+        }
+        if open {
+            out.push_str("</span>");
+        }
+        out
+    };
+    Some((render(&a, &changed_a), render(&b, &changed_b)))
+}

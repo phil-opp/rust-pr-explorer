@@ -2,7 +2,8 @@
 //! definitions, Markdown sections, and plain line diffs for the rest.
 
 use crate::code::{
-    Links, Seg, code_html, esc, markdown_diff_segs, markdown_file_html, marked_html, sig_diff_html,
+    Links, Seg, code_html, esc, mark_changed_tokens, markdown_diff_segs, markdown_file_html,
+    marked_html, sig_diff_html,
 };
 use crate::data::Data;
 use model::{ChangedFile, ManifestChange, PyChange, SourceLine, Status};
@@ -29,7 +30,32 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
     let mut new_line = 0usize;
     let mut old_line = 0usize;
     let mut body = String::new();
-    for l in lines {
+    // Removed lines whose changed words are marked.
+    let mut paired = vec![false; lines.len()];
+    let mut codes: Vec<String> = lines
+        .iter()
+        .map(|l| match lang {
+            "rust" | "python" => code_html(d, &l.1, Links::None),
+            _ => esc(&l.1),
+        })
+        .collect();
+    // Removed lines directly followed by added ones pair up (the first
+    // with the first, and so on) and get their changed words marked.
+    let mut i = 0;
+    while i < lines.len() {
+        let dels = lines[i..].iter().take_while(|l| l.0 == '-').count();
+        let adds = lines[i + dels..].iter().take_while(|l| l.0 == '+').count();
+        for k in 0..dels.min(adds) {
+            let (o, n) = (i + k, i + dels + k);
+            if let Some((a, b)) = mark_changed_tokens(&codes[o], &codes[n]) {
+                codes[o] = a;
+                codes[n] = b;
+                paired[o] = true;
+            }
+        }
+        i += (dels + adds).max(1);
+    }
+    for ((l, code), paired) in lines.iter().zip(codes).zip(paired) {
         if l.0 == '@' {
             let mut it = l.1.split(' ').filter_map(|n| n.parse::<usize>().ok());
             old_line = it.next().unwrap_or(1);
@@ -39,12 +65,9 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
             ));
             continue;
         }
-        let code = match lang {
-            "rust" | "python" => code_html(d, &l.1, Links::None),
-            _ => esc(&l.1),
-        };
         let (class, no) = match l.0 {
             '+' => ("add", new_line),
+            '-' if paired => ("del wl", old_line),
             '-' => ("del", old_line),
             _ => ("", new_line),
         };

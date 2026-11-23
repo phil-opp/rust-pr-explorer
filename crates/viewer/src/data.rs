@@ -687,8 +687,14 @@ impl Data {
         // or removed lines.
         let mut rows: Vec<(Option<usize>, Option<usize>)> = Vec::new();
         let split = opts.split && it.status == Status::Changed;
+        // Changed lines that pair up (the first old one with the first new
+        // one, and so on), to have their changed words marked.
+        let mut pairs: Vec<(usize, usize)> = Vec::new();
         for op in capture_diff_slices(Algorithm::Myers, &ok, &nk) {
             let (o, n) = (op.old_range(), op.new_range());
+            if let DiffOp::Replace { .. } = op {
+                pairs.extend(o.clone().zip(n.clone()));
+            }
             match op {
                 DiffOp::Equal { .. } => rows.extend(o.zip(n).map(|(a, b)| (Some(a), Some(b)))),
                 DiffOp::Replace { .. } if split => {
@@ -723,7 +729,30 @@ impl Data {
             Status::Removed => (it.info.line, it.info.line),
             _ => (it.old_line.unwrap_or(it.info.line), it.info.line),
         };
+        // Changed lines with their changed words marked.
+        let mut marked_old: HashMap<usize, String> = HashMap::new();
+        let mut marked_new: HashMap<usize, String> = HashMap::new();
+        if it.status == Status::Changed {
+            for &(o, n) in &pairs {
+                let old_html = code_html(self, old[o], Links::None);
+                let new_html = code_html(
+                    self,
+                    new[n],
+                    Links::Source {
+                        line: new_start + n,
+                        refs: &it.info.source_refs,
+                    },
+                );
+                if let Some((a, b)) = crate::code::mark_changed_tokens(&old_html, &new_html) {
+                    marked_old.insert(o, a);
+                    marked_new.insert(n, b);
+                }
+            }
+        }
         let new_code = |n: usize| {
+            if let Some(html) = marked_new.get(&n) {
+                return html.clone();
+            }
             if it.status == Status::Removed {
                 // Base code: what its names referred to is not known here.
                 code_html(self, new[n], Links::None)
@@ -738,7 +767,12 @@ impl Data {
                 )
             }
         };
-        let old_code = |o: usize| code_html(self, old[o], Links::None);
+        let old_code = |o: usize| {
+            marked_old
+                .get(&o)
+                .cloned()
+                .unwrap_or_else(|| code_html(self, old[o], Links::None))
+        };
         let nonempty = |s: String| if s.is_empty() { " ".to_string() } else { s };
         let changed_row = |&(o, n): &(Option<usize>, Option<usize>)| match (o, n) {
             (Some(a), Some(b)) => ok[a] != nk[b],
@@ -760,12 +794,13 @@ impl Data {
                                 r#"<span class="no">{}</span><span class="ln {}" data-t="{}">{}</span>"#,
                                 start + i,
                                 if same { "" } else { class },
-                                if same { "" } else if class == "del" { "-" } else { "+" },
+                                if same { "" } else if class.starts_with("del") { "-" } else { "+" },
                                 nonempty(code(i))
                             ),
                             None => r#"<span class="no"></span><span class="ln gap"> </span>"#.to_string(),
                         };
-                        cell(o, old_start, "del", &old_code) + &cell(n, new_start, "add", &new_code)
+                        let del = if o.is_some_and(|a| marked_old.contains_key(&a)) { "del wl" } else { "del" };
+                        cell(o, old_start, del, &old_code) + &cell(n, new_start, "add", &new_code)
                     })
                     .collect();
                 format!(r#"<div class="sbs">{cells}</div>"#)
@@ -779,6 +814,9 @@ impl Data {
                         let (class, tag, no, code) = match (o, n) {
                             (_, Some(b)) if o.is_some() => ("", ' ', new_start + b, new_code(b)),
                             (None, Some(b)) => ("add", '+', new_start + b, new_code(b)),
+                            (Some(a), _) if marked_old.contains_key(&a) => {
+                                ("del wl", '-', old_start + a, old_code(a))
+                            }
                             (Some(a), _) => ("del", '-', old_start + a, old_code(a)),
                             (None, None) => unreachable!(),
                         };
