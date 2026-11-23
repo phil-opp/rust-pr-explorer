@@ -518,6 +518,11 @@ details.private-def .sigbox { margin-top: 4px; }
 
 /* Module map. */
 #space-alt { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; overflow: auto; background: var(--bg-alt); }
+/* Dragged by its background to pan, like the canvas; links and matrix cells
+   keep their own cursor. */
+#space-alt { cursor: grab; }
+#space-alt.panning { cursor: grabbing; user-select: none; }
+#space-alt :is(a, button, input, select, label, [data-mx-a], .mm-more) { cursor: pointer; }
 .mm-wrap { position: relative; display: inline-block; min-width: 100%; padding: 32px 40px 60px; box-sizing: border-box; }
 #mm-edges { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; z-index: 2; }
 /* Centered when it fits; otherwise it starts at the left edge and scrolls. */
