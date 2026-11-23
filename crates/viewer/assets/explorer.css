@@ -974,3 +974,39 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
   #cv-undo { position: fixed; right: 14px; bottom: 64px; z-index: 30; padding: 9px 14px; font-size: 15px; box-shadow: var(--shadow); background: var(--bg); }
   #cv-undo:disabled { display: none; }
 }
+
+/* An item's name and review buttons stay at the top of the page while its
+   body scrolls past, until the item itself scrolls out. Only rows with
+   review buttons stick (not the parts of a file, which have none), and a
+   line under them shows once they are stuck, where the browser supports
+   scroll-state queries. The background matches the row's, which is tinted
+   for added and removed items. */
+.ientry, .irow.member { --row-bg: var(--bg); }
+.whole-added, .irow.added { --row-bg: color-mix(in srgb, var(--added-bg) 55%, var(--bg)); }
+.whole-removed, .irow.removed { --row-bg: color-mix(in srgb, var(--removed-bg) 55%, var(--bg)); }
+.irow:has(> .iacts) > .ihead, .irow > .iacts, .ientry.file > .irow:first-child {
+  /* The page's top padding would otherwise leave a gap above them. */
+  position: sticky; top: -22px; z-index: 2; background: var(--row-bg, var(--bg)); container-type: scroll-state;
+}
+/* Covers the gap between the name and the buttons. */
+.irow:has(> .iacts) > .ihead { box-shadow: 12px 0 0 var(--row-bg, var(--bg)); }
+@container scroll-state(stuck: top) {
+  .irow > .ihead::after, .irow > .iacts::after, .ientry.file > .irow:first-child::after {
+    content: ""; position: absolute; left: 0; right: 0; bottom: -4px; height: 4px; background: var(--row-bg, var(--bg)); border-bottom: 1px solid var(--border);
+  }
+  .irow > .ihead::after { right: -12px; }
+}
+/* In the call view, the card's name sticks below the trail and its review
+   buttons at the bottom of the screen (past the page's bottom padding). */
+.cg-focus .card-h { position: sticky; top: 32px; z-index: 2; background: inherit; border-radius: 8px 8px 0 0; }
+.cg-focus .card-rv { position: sticky; bottom: -80px; z-index: 2; background: inherit; border-radius: 0 0 8px 8px; }
+/* On a phone the buttons are on their own line under the name, and only
+   they stick, which keeps the stuck part small. */
+@media (max-width: 760px) {
+  .irow:has(> .iacts) > .ihead { position: static; box-shadow: none; }
+  .irow > .iacts, .ientry.file > .irow:first-child { top: -14px; }
+  .cg-focus .card-rv { bottom: -60px; }
+  /* "Whole item (n changes):" says what "Approve item" already does, and
+     without it the buttons fit on one line. */
+  .irow > .iacts .rv-scope, .cg-focus .card-rv .rv-scope { display: none; }
+}
