@@ -195,6 +195,11 @@ pub struct ItemInfo {
     /// stands for the re-export; its `sig` is the `pub use`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reexport_of: Option<String>,
+    /// Code that exists only in tests of a library or binary: marked
+    /// `#[test]` or `#[cfg(test)]`, or inside a test-only module, impl or
+    /// trait. Never part of the public API.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub test_only: bool,
 }
 
 fn is_zero(n: &u32) -> bool {

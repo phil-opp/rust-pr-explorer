@@ -550,8 +550,13 @@ impl Data {
     /// The visibility of a module. Other items show it in their signature.
     pub fn vis_html(&self, it: &Item) -> String {
         let i = &it.info;
+        let test = if i.test_only {
+            r#"<span class="st st-test" title="Compiled only for tests: marked #[test] or #[cfg(test)], or inside test-only code">test-only</span>"#
+        } else {
+            ""
+        };
         if i.kind != Kind::Mod {
-            return String::new();
+            return test.to_string();
         }
         let class = if i.vis_label == "pub" {
             "vis pub"
@@ -563,7 +568,7 @@ impl Data {
             None => "public".into(),
         };
         format!(
-            r#"<span class="{class}" title="{}">{}</span>"#,
+            r#"{test}<span class="{class}" title="{}">{}</span>"#,
             esc(&title),
             esc(&i.vis_label)
         )
