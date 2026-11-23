@@ -425,6 +425,13 @@ pub fn on_click(app: &mut App, el: &web_sys::Element) -> bool {
     };
     let f = flows(&app.d, app.s.space.show_unchanged, app.s.space.show_uses);
     let list = f.pairs.get(&(a, b)).cloned().unwrap_or_default();
+    // On a phone: the first caller in the call view, with its callees.
+    if crate::narrow()
+        && let Some((x, _, _)) = list.first()
+    {
+        crate::calls::focus(app, x);
+        return true;
+    }
     for (x, y, _) in list.iter().take(12) {
         crate::canvas::open(app, x, None, false);
         crate::canvas::open(app, y, Some(x), false);
