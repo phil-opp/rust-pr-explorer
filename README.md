@@ -228,13 +228,13 @@ What that leaves out:
 
 ## Development
 
-CI runs `cargo fmt`, clippy (for the host and for wasm) and the tests, builds the demo page, and opens it in headless Chromium in the light and the dark theme (`ci/smoke.mjs`). The smoke test fails on any JavaScript error and on an empty view. The page and screenshots of every view are uploaded as the `demo-page` artifact of each run.
+CI runs `cargo fmt`, clippy (for the host and for wasm) and the tests, builds the demo page, and opens it in headless Chromium in the light and the dark theme (`ci/smoke.mjs`). The smoke test fails on any JavaScript error, on an empty view, and on text below the WCAG AA contrast ratio (4.5:1, or 3:1 for large text) in either theme, as [axe-core](https://github.com/dequelabs/axe-core) measures it in every view, on a canvas card and in review mode. The page and screenshots of every view are uploaded as the `demo-page` artifact of each run.
 
 To run the smoke test locally:
 
 ```sh
 cargo run --release -- dirs fixtures/demo/base fixtures/demo/head -o demo.html
-npm install --no-save --no-package-lock playwright@1.63.0
+npm install --no-save --no-package-lock playwright@1.63.0 axe-core@4.10.2
 npx playwright install chromium
 node ci/smoke.mjs demo.html smoke
 ```
