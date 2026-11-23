@@ -9,7 +9,7 @@
   --link: #2a6fb0;
   --type: #ad378a;
   --trait: #6e4fc4;
-  --fn: #9a6e31;
+  --fn: #8f6529;
   --mod: #3873ad;
   --macro: #068000;
   --kw: #8959a8;
@@ -107,8 +107,16 @@ code { font-size: .92em; }
 .top-row.sub { height: 39px; border-top: 1px solid var(--border); gap: 14px; }
 #settings-btn { white-space: nowrap; }
 .brand { font-weight: 700; white-space: nowrap; }
-#pr-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 14px; }
-#pr-title b { color: var(--text); }
+#pr-title { flex: 1; min-width: 0; display: flex; flex-direction: column; justify-content: center; line-height: 1.25; }
+#pr-title > div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#pr-title .hd-main { font-size: 15px; color: var(--muted); }
+#pr-title .hd-main { display: flex; gap: 6px; }
+/* The title shrinks; the PR number stays visible. */
+#pr-title .hd-main b { color: var(--text); min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#pr-title .hd-main a { font-weight: 600; flex: none; }
+#pr-title .hd-sub { font-size: 12px; color: var(--muted); }
+#pr-title .hd-sub:empty { display: none; }
+#pr-title .hd-sub code { font-size: 11px; }
 #views { display: flex; gap: 4px; }
 #views button { padding: 4px 12px; }
 .search { position: relative; }
@@ -381,6 +389,14 @@ a.ref:hover { text-decoration: underline; }
 .card-acts { display: flex; gap: 4px; flex-wrap: wrap; }
 .card-acts button { font-size: 12px; padding: 1px 7px; }
 .card-acts button .n { color: var(--muted); }
+.card-acts { align-items: center; }
+.card-acts .grow { flex: 1; }
+/* What a card doesn't show (unresolved call sites, private callees): a small
+   badge, with the details in its tooltip. */
+.card-badge { font-size: 11.5px; color: var(--muted); border: 1px dashed var(--border); border-radius: 10px; padding: 0 7px; cursor: help; white-space: nowrap; }
+a.card-badge[data-drill] { cursor: pointer; color: var(--private); }
+a.card-badge[data-drill]:hover { border-style: solid; }
+.card.context.folded .card-b { padding-bottom: 8px; }
 .sig-old { font-size: 12px; color: var(--muted); }
 .sig-old pre { background: var(--removed-bg); opacity: .8; }
 .members { font-size: 13px; }
@@ -457,6 +473,25 @@ a.ref:hover { text-decoration: underline; }
    line paired with its new version also has its changed words marked. */
 .ln.del .wc { background: color-mix(in srgb, var(--removed) 28%, transparent); text-decoration: line-through 1.5px var(--removed); border-radius: 2px; }
 .ln.add .wc { background: color-mix(in srgb, var(--added) 28%, transparent); border-radius: 2px; }
+/* Changed words have a stronger background than their line, on which the
+   syntax colors fall below the WCAG AA contrast ratio (4.5:1). Inside them,
+   the syntax colors move toward the text color just enough to keep it. A
+   comment's or string's color is set outside the changed words, so it is set
+   again inside them. */
+.ln .wc, .sig-diff ins.sd {
+  --type: #842d6b; --trait: #584099; --fn: #664b25; --mod: #2b5278; --macro: #095e05;
+  --kw: #634278; --str: #475607; --num: #694a09; --comment: #4e504d; --link: #225380;
+}
+@media (prefers-color-scheme: dark) {
+  .ln .wc, .sig-diff ins.sd {
+    --type: #e9b7dd; --trait: #cebef9; --fn: #e4c095; --mod: #a9caee; --macro: #88d988;
+    --kw: #d6bdea; --str: #b1d17b; --num: #e3c37b; --comment: #c6c6ca; --link: #a1cbf1;
+  }
+}
+.kw .wc { color: var(--kw); }
+.str .wc { color: var(--str); }
+.num .wc { color: var(--num); }
+.cm .wc { color: var(--comment); }
 
 /* Word changes in docs: inserted words underlined, removed ones struck out. */
 ins.wd { text-decoration: underline 2px var(--added); text-underline-offset: 3px; background: var(--added-bg); }

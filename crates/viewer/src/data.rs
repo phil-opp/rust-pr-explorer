@@ -653,6 +653,46 @@ impl Data {
         )
     }
 
+    /// The PR in the header: its title and number, then a small line with
+    /// the repository and the compared branches. The full details are in
+    /// the tooltip, and on the overview.
+    pub fn header_html(&self) -> String {
+        let meta = &self.out.meta;
+        let Some(pr) = &meta.pr else {
+            let sub = if meta.title.contains(&meta.base) {
+                String::new()
+            } else {
+                format!("{} → {}", meta.base, meta.head)
+            };
+            return format!(
+                r#"<div class="hd-main" title="{}"><b>{}</b></div><div class="hd-sub">{}</div>"#,
+                esc(format!("{}\n{sub}", meta.title).trim_end()),
+                esc(&meta.title),
+                esc(&sub)
+            );
+        };
+        let pr_url = format!("https://github.com/{}/pull/{}", pr.repo, pr.number);
+        let title = pr.title.as_deref().unwrap_or("");
+        let head = match (&pr.head_ref, &pr.head_owner) {
+            (Some(r), Some(o)) => format!("{o}:{r}"),
+            (Some(r), None) => r.clone(),
+            _ => "PR head".to_string(),
+        };
+        let tip = format!(
+            "{} #{}: {title}\nbase {} @ {} (merge base) ← {head} @ {}",
+            pr.repo, pr.number, pr.base_ref, pr.base_rev, pr.head_rev
+        );
+        format!(
+            r#"<div class="hd-main" title="{tip}"><b>{}</b> <a href="{pr_url}" target="_blank" rel="noopener">#{}</a></div><div class="hd-sub" title="{tip}">{} · <code>{}</code> ← <code>{}</code></div>"#,
+            esc(title),
+            pr.number,
+            esc(&pr.repo),
+            esc(&pr.base_ref),
+            esc(&head),
+            tip = esc(&tip),
+        )
+    }
+
     /// The signature block of an item seen from `scope`, with a bar on the
     /// left that tells at a glance whether it changed: a changed signature
     /// is shown as a diff against the base version, an unchanged one is

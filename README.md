@@ -147,10 +147,11 @@ Every item shows what rustdoc would show: its definition or signature (private f
 ### Canvas
 
 - Click any name to place its item next to the current card, with a connector between the two.
-- **calls ▸** shows callees and **◂ callers** shows callers. **◂ used by** shows where a type or trait is used, broken down into signatures, fields, impls and bodies.
-- Edges: solid for calls, dotted for uses. Every edge is resolved, never guessed. A card lists how many call sites in its body could not be resolved, so a missing edge is visible.
+- **◂ callers** shows callers, to the left of the card, and **calls ▸** shows callees, to the right. **◂ used by** shows where a type or trait is used, broken down into signatures, fields, impls and bodies.
+- Edges: solid for calls, dotted for uses. Every edge is resolved, never guessed. A badge in a card's footer ("3 unresolved") counts the call sites in its body that could not be resolved, so a missing edge is visible; its tooltip says why.
 - Drag a card by its header onto another card's header to combine them into **tabs**. *members as tabs* opens all methods of a type in one tabbed card.
-- **Viewing from** sets the module the canvas is looking from. Only items that are visible from that module, under Rust's privacy rules, are shown. Hidden callers and callees are summarized ("2 callers are private to `mod lexer`") with a link to drill into that module.
+- **Viewing from** sets the module the canvas is looking from. Only items that are visible from that module, under Rust's privacy rules, are shown. Hidden callers and callees are counted in a badge ("2 private callers"); its tooltip names the modules they are private to, and a click views the canvas from that module.
+- Cards of unchanged items (an unchanged callee, say) show only their signature. **docs & source ▾** expands one, **signature only ▴** folds it again.
 - **Arrange by module** lays the cards out inside nested module frames, with each module's private items in a dashed zone.
 
 ### Structure view
@@ -227,13 +228,13 @@ What that leaves out:
 
 ## Development
 
-CI runs `cargo fmt`, clippy (for the host and for wasm) and the tests, builds the demo page, and opens it in headless Chromium in the light and the dark theme (`ci/smoke.mjs`). The smoke test fails on any JavaScript error and on an empty view. The page and screenshots of every view are uploaded as the `demo-page` artifact of each run.
+CI runs `cargo fmt`, clippy (for the host and for wasm) and the tests, builds the demo page, and opens it in headless Chromium in the light and the dark theme (`ci/smoke.mjs`). The smoke test fails on any JavaScript error, on an empty view, and on text below the WCAG AA contrast ratio (4.5:1, or 3:1 for large text) in either theme, as [axe-core](https://github.com/dequelabs/axe-core) measures it in every view, on a canvas card and in review mode. The page and screenshots of every view are uploaded as the `demo-page` artifact of each run.
 
 To run the smoke test locally:
 
 ```sh
 cargo run --release -- dirs fixtures/demo/base fixtures/demo/head -o demo.html
-npm install --no-save --no-package-lock playwright@1.63.0
+npm install --no-save --no-package-lock playwright@1.63.0 axe-core@4.10.2
 npx playwright install chromium
 node ci/smoke.mjs demo.html smoke
 ```
