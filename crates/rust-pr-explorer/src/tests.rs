@@ -20,6 +20,7 @@ fn analyze_dirs(base: &Path, head: &Path) -> Output {
             resolution: String::new(),
             pr: None,
             project: None,
+            commits: Vec::new(),
         },
     )
 }

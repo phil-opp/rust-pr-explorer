@@ -34,6 +34,17 @@ pub struct CrateSrc {
     pub edition: Option<u16>,
 }
 
+/// Where the two trees of a checkout come from in a git repository.
+pub struct GitRange {
+    /// A repository (or clone) that has both commits.
+    pub dir: PathBuf,
+    pub base: String,
+    pub head: String,
+    /// The analyzed subdirectory, e.g. `crates/foo/`; empty for the whole
+    /// repository.
+    pub prefix: String,
+}
+
 /// Two checked out source trees plus a description of where they came from.
 pub struct Checkout {
     pub base_dir: PathBuf,
@@ -49,6 +60,8 @@ pub struct Checkout {
     /// Every file that differs, taken before anything was removed from
     /// the copies (see [`sanitize`]).
     pub files: Vec<model::ChangedFile>,
+    /// The git history between the two trees, if they come from one.
+    pub git: Option<GitRange>,
     // Keeps temporary directories alive for as long as the checkout is used.
     _temp: Option<tempfile::TempDir>,
 }
@@ -86,6 +99,7 @@ impl Checkout {
                 &std::fs::canonicalize(head)?.to_string_lossy(),
             ])),
             files,
+            git: None,
             _temp: Some(temp),
         })
     }
@@ -171,6 +185,12 @@ impl Checkout {
                 &prefix,
             ])),
             files,
+            git: Some(GitRange {
+                dir: clone,
+                base: base_rev,
+                head: head_rev,
+                prefix,
+            }),
             _temp: Some(temp),
         })
     }
@@ -301,6 +321,12 @@ impl Checkout {
             // The PR identifies the project.
             project: None,
             files,
+            git: Some(GitRange {
+                dir: git_dir,
+                base: base_rev,
+                head: head_rev,
+                prefix: String::new(),
+            }),
             _temp: Some(temp),
         })
     }
@@ -388,7 +414,7 @@ fn run_git(dir: Option<&Path>, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn git_output(dir: &Path, args: &[&str]) -> Result<String> {
+pub fn git_output(dir: &Path, args: &[&str]) -> Result<String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(dir)

@@ -566,7 +566,7 @@ pub fn manifests_html(d: &Data) -> String {
         .out
         .files
         .iter()
-        .filter(|f| !f.manifest.is_empty())
+        .filter(|f| !f.manifest.is_empty() && crate::commit_filter::file_in(&f.path))
         .collect();
     if list.is_empty() {
         return String::new();
@@ -599,6 +599,7 @@ pub fn other_files_html(d: &Data) -> String {
         .files
         .iter()
         .filter(|f| !f.analyzed || f.outside_items > 0 || !f.parts.is_empty())
+        .filter(|f| crate::commit_filter::file_in(&f.path))
         .collect();
     let (generated, own): (Vec<&ChangedFile>, Vec<&ChangedFile>) =
         others.into_iter().partition(|f| f.generated.is_some());

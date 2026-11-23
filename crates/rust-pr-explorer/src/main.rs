@@ -1,6 +1,7 @@
 //! Rust PR Explorer: shows a pull request as changed Rust items.
 
 mod analyze;
+mod commits;
 mod css;
 mod files;
 mod javascript;
@@ -134,6 +135,7 @@ fn analyze_checkout(
             resolution,
             pr: checkout.pr.clone(),
             project: checkout.project.clone(),
+            commits: Vec::new(),
         },
     );
     // Files the Rust analysis covers: one per module.
@@ -155,6 +157,12 @@ fn analyze_checkout(
         }
     }
     output.files = files;
+    if let Some(git) = &checkout.git {
+        eprintln!("tracing which commit changed what…");
+        let mut warnings = Vec::new();
+        output.meta.commits = commits::commits(git, &output.items, &output.files, &mut warnings);
+        output.warnings.extend(warnings);
+    }
     output
 }
 

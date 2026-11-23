@@ -144,6 +144,16 @@ Every item shows what rustdoc would show: its definition or signature (private f
 - **Finish review…** sums up the verdicts and comments, suggests an overall verdict (request changes if any item needs them, approve if every item is approved, else comment) and takes a summary. For a pull request, it offers one command to copy and run, which posts the review (verdict, summary and inline comments) with the GitHub CLI: `printf '%s' '{…}' | gh api --method POST repos/OWNER/REPO/pulls/NUMBER/reviews --input -`. The JSON is in the form [GitHub's API for creating a review](https://docs.github.com/en/rest/pulls/reviews#create-a-review-for-a-pull-request) takes, and is quoted so that the command works the same in bash, zsh and fish. The page itself never talks to GitHub and holds no token, since anyone who can open it could read one; `gh` uses your own login. Each comment goes on a line of its item that GitHub's diff shows (its first added line, else its first removed line, else a line of context), on the commit the page was generated for. Comments that fit on no line (a binary file, an item without a diff line nearby) go into the review's text, and comments on items that changed since you reviewed them are left out. The review can also be copied as Markdown, for an ordinary comment.
 - Nothing leaves the browser: marks are not shared between browsers or people.
 
+### Commit filter
+
+For a pull request or a `git` range, the **Commits** menu in the header shows only what one commit changed, like GitHub's view of a single commit. Every page then lists only the items and files that commit touched, and a note at the top names the commit, with **Show all commits** to go back.
+
+- Which items a commit touched is worked out with `git blame` when the page is built. An item's added lines are blamed in the PR's version (the commit that last wrote each line), and its removed lines in the base with `git blame --reverse` (the commit after the last one that still had the line). A commit counts an item if it wrote one of its added lines that is still there, or removed one of its base lines. A line that a later commit rewrote counts only for that later commit.
+- A file counts for every commit that modified it, whether or not that change survives.
+- Items keep their whole change from the PR's base to its head, not only the commit's part, since the page holds no other versions.
+- Some changed items have no changed line of their own, for example an item whose only change is a public path that a `pub use` elsewhere added. These are listed under **Changes no commit was found for**.
+- Merge commits are listed but not traced. Ranges with more than 250 commits get no filter (a warning says so), since each commit needs its own blame runs, which fetch old file versions on demand.
+
 ### Canvas
 
 - Click any name to place its item next to the current card, with a connector between the two.

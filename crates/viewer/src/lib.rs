@@ -6,6 +6,7 @@
 
 mod canvas;
 mod code;
+mod commit_filter;
 mod css;
 mod data;
 mod dom;
@@ -139,6 +140,7 @@ pub fn start() {
     review::load(&app.d);
     let title = app.d.compared_html();
     dom::set_html("pr-title", &title);
+    dom::set_html("commit-menu", &commit_filter::menu_html(&app.d));
     APP.with(|a| *a.borrow_mut() = Some(app));
     install_listeners();
     with_app(nav::start);
@@ -313,6 +315,13 @@ fn install_listeners() {
         with_app(|app| {
             if settings::on_change(&el) {
                 set_view(app, app.s.view);
+            } else if el.id() == "commit-filter" {
+                let value = el
+                    .dyn_ref::<web_sys::HtmlSelectElement>()
+                    .map(|s| s.value())
+                    .unwrap_or_default();
+                commit_filter::set(&app.d, value.parse().ok());
+                set_view(app, app.s.view);
             } else if el.id() == "show-unchanged" {
                 app.s.show_unchanged = el
                     .dyn_ref::<web_sys::HtmlInputElement>()
@@ -469,6 +478,16 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
                 None => canvas::open(app, &id, None, true),
             },
         }
+        return;
+    }
+    if dom::closest(el, "[data-commit-clear]").is_some() {
+        commit_filter::set(&app.d, None);
+        if let Some(s) = dom::by_id("commit-filter")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlSelectElement>().ok())
+        {
+            s.set_value("");
+        }
+        set_view(app, app.s.view);
         return;
     }
     if let Some(b) = dom::closest(el, "[data-open]") {
