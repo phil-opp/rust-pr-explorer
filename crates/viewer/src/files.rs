@@ -1,5 +1,6 @@
 //! Files the Rust analysis doesn't cover: `Cargo.toml` changes, Python
-//! definitions, YAML keys, Markdown sections, and plain line diffs for the
+//! definitions, YAML keys, CSS selectors, Markdown sections, and plain line
+//! diffs for the
 //! rest. For analyzed Rust files, the code that belongs to no item: tests,
 //! macro calls and `extern` blocks as parts, and the remaining lines.
 
@@ -7,6 +8,7 @@ use crate::code::{
     Links, Seg, code_html, esc, mark_changed_tokens, markdown_diff_segs, markdown_file_html,
     marked_html, sig_diff_html,
 };
+use crate::css;
 use crate::data::Data;
 use crate::js;
 use crate::yaml;
@@ -28,8 +30,8 @@ fn stats(added: u32, removed: u32) -> String {
     format!(r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>"#)
 }
 
-/// Hunks of a line diff. Rust, Python, JavaScript and YAML get syntax
-/// colors; nothing
+/// Hunks of a line diff. Rust, Python, JavaScript, YAML and CSS get
+/// syntax colors; nothing
 /// is linked.
 pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
     let mut new_line = 0usize;
@@ -38,12 +40,15 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
     let (mut old_yaml, mut new_yaml) = (yaml::State::default(), yaml::State::default());
     // So do JavaScript comments and template literals.
     let (mut old_js, mut new_js) = (js::State::default(), js::State::default());
+    // So do CSS comments.
+    let (mut old_css, mut new_css) = (css::State::default(), css::State::default());
     let mut body = String::new();
     let mut codes: Vec<String> = Vec::with_capacity(lines.len());
     for l in lines {
         if l.0 == '@' {
             (old_yaml, new_yaml) = (yaml::State::default(), yaml::State::default());
             (old_js, new_js) = (js::State::default(), js::State::default());
+            (old_css, new_css) = (css::State::default(), css::State::default());
         }
         codes.push(match lang {
             "rust" | "python" => code_html(d, &l.1, Links::None),
@@ -61,6 +66,14 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
                 _ => {
                     js::line_html(&mut old_js, &l.1);
                     js::line_html(&mut new_js, &l.1)
+                }
+            },
+            "css" => match l.0 {
+                '-' => css::line_html(&mut old_css, &l.1),
+                '+' => css::line_html(&mut new_css, &l.1),
+                _ => {
+                    css::line_html(&mut old_css, &l.1);
+                    css::line_html(&mut new_css, &l.1)
                 }
             },
             _ => esc(&l.1),
@@ -259,7 +272,9 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
                 _ if c.body_changed => ("<b>Body changed</b>", "m-chg"),
                 _ => ("Source", ""),
             };
-            let small = c.status == Status::Changed && added + removed <= 4;
+            // Like Rust items' bodies: small changes start open.
+            let small =
+                c.status == Status::Changed && added + removed <= crate::data::SMALL_BODY as u32;
             segs.push(Seg::new(
                 bar,
                 format!(
@@ -474,6 +489,12 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
     let structured = match f.lang.as_str() {
         "python" | "javascript" | "yaml" | "rust" if !f.parts.is_empty() => {
             parts_html(d, &f.parts, &f.lang)
+        }
+        "css" if !f.styles.is_empty() => css::styles_html(&f.styles),
+        // Compared, and no property changed.
+        "css" if !f.hunks.is_empty() && f.status == Status::Changed => {
+            r#"<div class="note">No property changed: only comments, formatting or the order of rules (which can matter where selectors of equal specificity overlap).</div>"#
+                .to_string()
         }
         "markdown" => match (&f.old_text, &f.new_text) {
             (Some(o), Some(n)) => markdown_html(d, o, n),
