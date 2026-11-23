@@ -56,6 +56,8 @@ pub struct State {
     /// Module shown on the module page.
     pub module: String,
     pub show_unchanged: bool,
+    /// Whether the sidebar lists unchanged modules too.
+    pub side_all: bool,
     pub canvas: canvas::Canvas,
     /// The item last opened on the canvas from outside it, for the history
     /// entry (see [`nav`]).
@@ -119,6 +121,7 @@ pub fn start() {
             view: View::Overview,
             module: root.clone(),
             show_unchanged: false,
+            side_all: false,
             canvas: canvas::Canvas::new(root),
             canvas_focus: None,
             space: space::Space::new(),
@@ -157,6 +160,10 @@ pub fn set_view(app: &mut App, view: View) {
             "active",
             section.id() == format!("view-{}", view.name()),
         );
+    }
+    // Show or hide the sidebar first, so that the view lays out at its final width.
+    if let Some(el) = dom::by_id("sidebar") {
+        dom::toggle_class(&el, "hidden", !pages::sidebar_shown(app));
     }
     match view {
         View::Overview => pages::render_overview(app),
@@ -307,6 +314,11 @@ fn install_listeners() {
                     .dyn_ref::<web_sys::HtmlInputElement>()
                     .is_some_and(|i| i.checked());
                 pages::render_module_page(app);
+            } else if el.id() == "side-all" {
+                app.s.side_all = el
+                    .dyn_ref::<web_sys::HtmlInputElement>()
+                    .is_some_and(|i| i.checked());
+                pages::render_sidebar(app);
             } else {
                 let _ = space::on_change(app, &el);
             }

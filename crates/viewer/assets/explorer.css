@@ -142,6 +142,10 @@ code { font-size: .92em; }
 .tree-row .cnt { margin-left: auto; font-size: 11px; color: var(--muted); }
 .side-legend { padding: 14px; font-size: 12px; color: var(--muted); }
 .side-legend div { margin: 3px 0; }
+.legend-dots { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.legend-dots > span { display: inline-flex; align-items: center; gap: 5px; }
+.side-opt { display: flex; align-items: center; gap: 6px; padding: 8px 14px 0; font-size: 12px; color: var(--muted); cursor: pointer; }
+.side-note { padding: 2px 14px 8px; font-size: 12px; color: var(--muted); }
 .side-warn { padding: 6px 14px; font-size: 12px; color: var(--removed); }
 
 /* Status markers */
@@ -300,13 +304,28 @@ a.ref:hover { text-decoration: underline; }
 .card-tab.active { background: var(--bg); border-color: var(--border); margin-bottom: -1px; }
 .card-tab .x { color: var(--muted); }
 .card-tab .x:hover { color: var(--removed); }
-/* Status dots differ in shape too: added = disc, changed = diamond,
-   removed = hollow square, unchanged = small grey disc. */
-.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; box-sizing: border-box; }
-.dot.added { background: var(--added); }
-.dot.changed { background: var(--changed); border-radius: 1px; transform: rotate(45deg) scale(.95); }
-.dot.removed { background: transparent; border: 2px solid var(--removed); border-radius: 1px; }
-.dot.unchanged { background: var(--border); width: 5px; height: 5px; }
+/* Status symbols: a small square with a sign inside, so that they differ
+   in shape, not only in color: added = plus, changed = dot,
+   removed = minus. Unchanged has no symbol; its space is kept for alignment. */
+.dot {
+  width: 14px; height: 14px; display: inline-block; flex: none; box-sizing: border-box; vertical-align: -2px;
+  border: 1px solid currentColor; border-radius: 3px; background: no-repeat center;
+}
+.dot.added {
+  color: var(--added); background-color: var(--added-bg);
+  background-image: linear-gradient(currentColor, currentColor), linear-gradient(currentColor, currentColor);
+  background-size: 8px 2px, 2px 8px;
+}
+.dot.changed {
+  color: var(--changed); background-color: var(--changed-bg);
+  background-image: radial-gradient(circle, currentColor 2.6px, transparent 3.2px);
+}
+.dot.removed {
+  color: var(--removed); background-color: var(--removed-bg);
+  background-image: linear-gradient(currentColor, currentColor);
+  background-size: 8px 2px;
+}
+.dot.unchanged { visibility: hidden; }
 .card-h { display: flex; align-items: center; gap: 6px; padding: 7px 10px 5px; cursor: move; flex-wrap: wrap; user-select: none; }
 .card-h .title-name { font-size: 14px; }
 .card-h .grow { flex: 1; }
