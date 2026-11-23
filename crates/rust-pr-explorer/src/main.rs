@@ -47,6 +47,17 @@ struct Cli {
     /// Only use this in a sandboxed environment: the PR's code gets executed.
     #[arg(long, global = true, env = "RUST_PR_EXPLORER_TRUST_PROJECT_CODE")]
     trust_project_code: bool,
+    /// With `--trust-project-code`: the cargo target directory for the
+    /// build scripts and proc macros, shared by both versions (and the
+    /// "since" one). Keep it between runs (e.g. in a CI cache) to only
+    /// build the dependencies once. Defaults to a temporary directory.
+    #[arg(
+        long,
+        global = true,
+        env = "RUST_PR_EXPLORER_TARGET_DIR",
+        requires = "trust_project_code"
+    )]
+    target_dir: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -99,7 +110,30 @@ fn main() -> Result<()> {
         Input::Git { repo, base, head } => source::Checkout::from_git(repo, base, head, trust)?,
         Input::Dirs { base, head } => source::Checkout::from_dirs(base, head, trust)?,
     };
-    let (output, since) = analyze_all(&checkout, !cli.syntax_only, trust);
+    // Build scripts and proc macros are built once, for all versions: the
+    // registry dependencies are the same in each (only the workspace's own
+    // crates are rebuilt, because their paths differ).
+    let temp_target;
+    let given_target;
+    let target_dir = match (trust, &cli.target_dir) {
+        (source::Trust::Untrusted, _) => None,
+        (source::Trust::Trusted, Some(dir)) => {
+            // cargo runs in each checkout: a relative path would point into
+            // it.
+            given_target = std::path::absolute(dir)?;
+            Some(given_target.as_path())
+        }
+        (source::Trust::Trusted, None) => {
+            temp_target = tempfile::tempdir()?;
+            Some(temp_target.path())
+        }
+    };
+    let how = Settings {
+        semantic: !cli.syntax_only,
+        trust,
+        target_dir,
+    };
+    let (output, since) = analyze_all(&checkout, &how);
     write_outputs(&output, &cli.out, cli.json.as_deref())?;
     match (&checkout.since, since) {
         (Some(source::Since::Changes(s)), Some(since)) => {
@@ -164,13 +198,30 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     path.with_file_name(name)
 }
 
+/// How to analyze each version.
+struct Settings<'a> {
+    /// Resolve calls with rust-analyzer.
+    semantic: bool,
+    #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
+    trust: source::Trust,
+    /// The cargo target directory for build scripts and proc macros (only
+    /// when trusted). `None` uses the project's own.
+    #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
+    target_dir: Option<&'a Path>,
+}
+
 #[cfg(test)]
 fn analyze_checkout(
     checkout: &source::Checkout,
     semantic: bool,
     trust: source::Trust,
 ) -> model::Output {
-    analyze_all(checkout, semantic, trust).0
+    let how = Settings {
+        semantic,
+        trust,
+        target_dir: None,
+    };
+    analyze_all(checkout, &how).0
 }
 
 /// The analysis of the checkout, and of the changes since an earlier
@@ -178,11 +229,10 @@ fn analyze_checkout(
 /// once for both.
 fn analyze_all(
     checkout: &source::Checkout,
-    semantic: bool,
-    trust: source::Trust,
+    how: &Settings,
 ) -> (model::Output, Option<model::Output>) {
-    let base = analyze_side(&checkout.base_dir, semantic, trust, "base");
-    let head = analyze_side(&checkout.head_dir, semantic, trust, "head");
+    let base = analyze_side(&checkout.base_dir, how, "base");
+    let head = analyze_side(&checkout.head_dir, how, "head");
     let meta = |label: &str, pr: Option<model::PrMeta>| model::Meta {
         title: checkout.title.clone(),
         base: label.to_string(),
@@ -196,7 +246,7 @@ fn analyze_all(
     };
     let since = match &checkout.since {
         Some(source::Since::Changes(s)) => {
-            let since_base = analyze_side(&s.dir, semantic, trust, "since");
+            let since_base = analyze_side(&s.dir, how, "since");
             let pr = checkout.pr.clone().map(|pr| model::PrMeta {
                 base_rev: s.commit[..s.commit.len().min(10)].to_string(),
                 custom_base: true,
@@ -280,16 +330,11 @@ fn compare(
 
 /// Analyzes one source tree. Returns the analysis and a note on how calls
 /// were resolved.
-fn analyze_side(
-    root: &Path,
-    semantic: bool,
-    trust: source::Trust,
-    label: &str,
-) -> (analyze::Analysis, String) {
+fn analyze_side(root: &Path, how: &Settings, label: &str) -> (analyze::Analysis, String) {
     let crates = source::find_crates(root);
     #[allow(unused_mut)]
     let mut analysis = analyze::Analyzer::run(root, &crates);
-    if !semantic {
+    if !how.semantic {
         return (analysis, "syntax only".into());
     }
     #[cfg(feature = "semantic")]
@@ -301,13 +346,13 @@ fn analyze_side(
             crates.iter().map(|c| c.manifest_dir.clone()).collect()
         };
         dirs.dedup();
-        match semantic::refine(root, &dirs, trust, &mut analysis) {
+        match semantic::refine(root, &dirs, how.trust, how.target_dir, &mut analysis) {
             Ok(stats) => {
                 eprintln!(
                     "{label}: {} functions, {} call sites resolved, {} unresolved, {} external items described",
                     stats.functions, stats.resolved_sites, stats.unresolved_sites, stats.externals
                 );
-                let mut note = match trust {
+                let mut note = match how.trust {
                     source::Trust::Untrusted => "rust-analyzer".to_string(),
                     source::Trust::Trusted => {
                         "rust-analyzer, with build scripts and proc macros".to_string()
@@ -341,7 +386,7 @@ fn analyze_side(
     }
     #[cfg(not(feature = "semantic"))]
     {
-        let _ = (label, trust);
+        let _ = (label, how);
         (analysis, "syntax only (built without rust-analyzer)".into())
     }
 }

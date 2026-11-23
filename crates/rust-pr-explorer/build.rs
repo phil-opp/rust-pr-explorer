@@ -15,6 +15,17 @@ fn main() {
         println!("cargo:rerun-if-changed={}", workspace.join(dep).display());
     }
 
+    // For analyzing this repository with the explorer itself in trusted
+    // mode, which runs this build script once per version: the viewer's
+    // wasm build is most of that time, and the analysis doesn't need it.
+    // A tool built this way shows an empty page.
+    println!("cargo:rerun-if-env-changed=RUST_PR_EXPLORER_STUB_VIEWER");
+    if std::env::var_os("RUST_PR_EXPLORER_STUB_VIEWER").is_some_and(|v| v == "1") {
+        std::fs::write(out_dir.join("viewer.js"), "").unwrap();
+        std::fs::write(out_dir.join("viewer_bg.wasm"), "").unwrap();
+        return;
+    }
+
     let target_dir = out_dir.join("viewer-target");
     build_viewer(workspace, &target_dir);
     let wasm = target_dir.join("wasm32-unknown-unknown/wasm-release/viewer.wasm");
