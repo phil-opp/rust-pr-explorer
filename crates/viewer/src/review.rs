@@ -778,6 +778,27 @@ pub fn next_open_where(after: Option<&str>, keep: impl Fn(&str) -> bool) -> Opti
         .cloned()
 }
 
+/// The first item that the source of item `of` tags as new or changed
+/// (see `code::ref_tag`) and that still needs a review, in the order the
+/// source names them: where `Enter` goes in review mode.
+pub fn next_open_call(d: &Data, of: &str) -> Option<String> {
+    let it = d.item(of)?;
+    let mut refs: Vec<((usize, usize), &str)> = it
+        .info
+        .source_refs
+        .iter()
+        .filter_map(|(at, r)| {
+            let (l, c) = at.split_once(':')?;
+            Some(((l.parse().ok()?, c.parse().ok()?), r.id.as_deref()?))
+        })
+        .collect();
+    refs.sort();
+    refs.into_iter()
+        .map(|(_, id)| id)
+        .find(|id| crate::code::ref_tag(d, id, of).is_some() && mark(id) != Some(Mark::Done))
+        .map(str::to_string)
+}
+
 /// Shows a reviewed unit whole again, or folds it back to one line.
 pub fn toggle_unfolded(id: &str) {
     REVIEW.with(|r| {
@@ -818,7 +839,7 @@ fn control_class(id: &str, m: Mark) -> String {
 
 /// The verdict buttons, as on GitHub. Approving moves on right away; the
 /// other two ask for a comment first.
-const ACTIONS: &str = r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve and go to the next item">✓ Approve</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Add a comment">✎ Comment</button>"#;
+const ACTIONS: &str = r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve and go to the next item (a)">✓ Approve</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Add a comment (c)">✎ Comment</button>"#;
 
 /// One line of a comment, shortened, for the button that edits it.
 fn snippet(text: &str) -> String {
@@ -953,7 +974,7 @@ fn update_groups() {
 }
 
 /// Leaves review mode; the marks stay.
-const EXIT: &str = r#"<button id="rv-exit" title="Hide the review controls; your marks stay">Exit review</button>"#;
+const EXIT: &str = r#"<button id="rv-keys" title="Keyboard shortcuts (?)">?</button><button id="rv-exit" title="Hide the review controls; your marks stay">Exit review</button>"#;
 
 /// The progress and the review actions in the header: "Next" while
 /// something is left, then "Finish review…" as the main action. "Clear"
@@ -1431,6 +1452,43 @@ mod tests {
             html.contains(r#"<a class="ref new" data-id="c::a::new_fn""#),
             "{html}"
         );
+    }
+
+    #[test]
+    fn enter_follows_the_first_unreviewed_tagged_call() {
+        let mut out = data().out;
+        let f = out.items.get_mut("c::root_fn").unwrap();
+        // In source order: `late` (changed), `same` (unchanged), `new_fn`
+        // (added), and `root_fn` itself. Positions compare as numbers.
+        for (at, to) in [
+            ("10:4", "c::a::new_fn"),
+            ("9:30", "c::a::same"),
+            ("9:12", "c::root_fn"),
+            ("9:4", "c::b::late"),
+        ] {
+            f.info.source_refs.insert(
+                at.into(),
+                model::Ref {
+                    id: Some(to.into()),
+                    path: to.into(),
+                },
+            );
+        }
+        let d = Data::new(out);
+        set(&d, &[]);
+        assert_eq!(
+            next_open_call(&d, "c::root_fn").as_deref(),
+            Some("c::b::late")
+        );
+        let late = print_of("c::b::late");
+        set(&d, &[("c::b::late", late)]);
+        assert_eq!(
+            next_open_call(&d, "c::root_fn").as_deref(),
+            Some("c::a::new_fn")
+        );
+        let new_fn = print_of("c::a::new_fn");
+        set(&d, &[("c::b::late", late), ("c::a::new_fn", new_fn)]);
+        assert_eq!(next_open_call(&d, "c::root_fn"), None);
     }
 
     fn print_of_in(d: &Data, id: &str) -> u64 {

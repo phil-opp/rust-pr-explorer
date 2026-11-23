@@ -74,29 +74,36 @@ pub fn ref_html(d: &Data, text: &str, r: &Ref, extra: &str) -> String {
 
 /// Classes that point out, in source views, a reference to an item that
 /// the PR adds (`new`), or a call of a function that it changes (`chg`),
-/// as each of them needs a review of its own. Names of changed types are
-/// not marked: they are everywhere, and calls are what a top-down review
-/// follows. Once that item is reviewed, `rv-ok` adds a ✓ in review
-/// mode (kept up to date by `review::refresh`). Not for references of an
-/// item to itself (a recursive call), which need no review of their own.
+/// as each of them needs a review of its own (see [`ref_tag`]). Once that
+/// item is reviewed, `rv-ok` adds a ✓ in review mode (kept up to date by
+/// `review::refresh`).
 fn mark_class(d: &Data, r: &Ref, of: &str) -> &'static str {
-    let Some(it) =
-        r.id.as_deref()
-            .filter(|&id| id != of)
-            .and_then(|id| d.item(id))
-    else {
+    let Some(id) = r.id.as_deref() else {
         return "";
     };
-    if d.external(&it.info.id).is_some() || !crate::review::is_unit_item(it) {
-        return "";
+    let done = || crate::review::mark(id) == Some(crate::review::Mark::Done);
+    match ref_tag(d, id, of) {
+        Some("new") if done() => "new rv-ok",
+        Some("chg") if done() => "chg rv-ok",
+        Some(tag) => tag,
+        None => "",
     }
-    let done = crate::review::mark(&it.info.id) == Some(crate::review::Mark::Done);
-    match (it.status, done) {
-        (Status::Added, false) => "new",
-        (Status::Added, true) => "new rv-ok",
-        (Status::Changed, false) if it.info.kind.is_callable() => "chg",
-        (Status::Changed, true) if it.info.kind.is_callable() => "chg rv-ok",
-        _ => "",
+}
+
+/// How the source of item `of` tags a reference to item `id`: `new` for
+/// an item the PR adds, `chg` for a function or method it changes. Names
+/// of changed types are not tagged: they are everywhere, and calls are
+/// what a top-down review follows. A reference of an item to itself (a
+/// recursive call) is not tagged either.
+pub fn ref_tag(d: &Data, id: &str, of: &str) -> Option<&'static str> {
+    let it = d.item(id).filter(|_| id != of)?;
+    if d.external(id).is_some() || !crate::review::is_unit_item(it) {
+        return None;
+    }
+    match it.status {
+        Status::Added => Some("new"),
+        Status::Changed if it.info.kind.is_callable() => Some("chg"),
+        _ => None,
     }
 }
 
