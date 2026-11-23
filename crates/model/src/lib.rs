@@ -478,6 +478,50 @@ pub struct PrMeta {
     /// so the page's diff may not be the one GitHub shows.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub custom_base: bool,
+    /// The PR's review threads on GitHub when the page was built, open and
+    /// resolved, in the order GitHub lists them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<ReviewThread>,
+}
+
+/// A review thread of a pull request: comments on a line of a file.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReviewThread {
+    /// The file, relative to the repository root.
+    pub path: String,
+    /// The line it is on in the PR's current diff: in the PR's version of
+    /// the file, or in the base's with `left`. `None` when the thread is
+    /// outdated (its line is gone) or on the whole file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    /// The first line, for a comment on several lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<usize>,
+    /// The line in the diff the thread was started on, for an outdated one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_line: Option<usize>,
+    /// On the base's version of the line (GitHub's `LEFT` side).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub left: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resolved: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub outdated: bool,
+    /// The first comment on GitHub.
+    #[serde(default)]
+    pub url: String,
+    pub comments: Vec<ThreadComment>,
+}
+
+/// One comment of a review thread.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThreadComment {
+    /// GitHub login; empty for a deleted account.
+    pub author: String,
+    /// Markdown.
+    pub body: String,
+    /// ISO 8601, e.g. `2026-11-23T15:33:01Z`.
+    pub created_at: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
