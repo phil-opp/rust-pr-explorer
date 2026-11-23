@@ -620,6 +620,10 @@ impl Data {
     }
 }
 
+/// What a page of the changes since an earlier commit compares.
+const SINCE_TIP: &str = "Only what the PR changed since this earlier commit. \
+What its base branch changed in between, through a merge or a rebase, is left out.";
+
 impl Data {
     /// What is compared: for a pull request the repository, PR number and
     /// title, and the base and PR branches with the compared commits.
@@ -648,6 +652,15 @@ impl Data {
             (Some(r), None) => format!("<code>{}</code>", esc(r)),
             _ => "PR head".to_string(),
         };
+        if pr.since.is_some() {
+            return format!(
+                r#"<a href="{repo_url}" target="_blank" rel="noopener">github.com/{}</a> · <a href="{pr_url}" target="_blank" rel="noopener">PR #{}</a>{title} <span class="dim">· <span title="{SINCE_TIP}">changes since <code>{}</code></span> ← {head} @ {}</span>"#,
+                esc(&pr.repo),
+                pr.number,
+                esc(&pr.base_rev),
+                esc(&pr.head_rev),
+            );
+        }
         format!(
             r#"<a href="{repo_url}" target="_blank" rel="noopener">github.com/{}</a> · <a href="{pr_url}" target="_blank" rel="noopener">PR #{}</a>{title} <span class="dim">· base <code>{}</code> <span title="merge base">@ {}</span> ← {head} @ {}</span>"#,
             esc(&pr.repo),
@@ -683,6 +696,21 @@ impl Data {
             (Some(r), None) => r.clone(),
             _ => "PR head".to_string(),
         };
+        if pr.since.is_some() {
+            let tip = format!(
+                "{} #{}: {title}\nchanges since {} ← {head} @ {}\n{SINCE_TIP}",
+                pr.repo, pr.number, pr.base_rev, pr.head_rev
+            );
+            return format!(
+                r#"<div class="hd-main" title="{tip}"><b>{}</b> <a href="{pr_url}" target="_blank" rel="noopener">#{}</a></div><div class="hd-sub" title="{tip}">{} · since <code>{}</code> ← <code>{}</code></div>"#,
+                esc(title),
+                pr.number,
+                esc(&pr.repo),
+                esc(&pr.base_rev),
+                esc(&head),
+                tip = esc(&tip),
+            );
+        }
         let tip = format!(
             "{} #{}: {title}\nbase {} @ {} (merge base) ← {head} @ {}",
             pr.repo, pr.number, pr.base_ref, pr.base_rev, pr.head_rev

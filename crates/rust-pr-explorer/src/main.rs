@@ -56,6 +56,14 @@ enum Input {
         /// Base revision (defaults to the merge base with the default branch).
         #[arg(long)]
         base: Option<String>,
+        /// An earlier commit of the PR (in full): also write a page with
+        /// only what changed since then, leaving out what the base branch
+        /// changed in between. It goes next to `--out` (and `--json`), with
+        /// `-since` added to the name, if the PR changed since then. Prints
+        /// `since: changes`, `since: none` or `since: unavailable (reason)`
+        /// on stdout.
+        #[arg(long, conflicts_with = "base")]
+        since: Option<String>,
     },
     /// Two revisions of a local git repository.
     Git {
@@ -84,21 +92,54 @@ fn main() -> Result<()> {
         source::Trust::Untrusted
     };
     let checkout = match &cli.input {
-        Input::Pr { pr, base } => source::Checkout::from_github_pr(pr, base.as_deref(), trust)?,
+        Input::Pr { pr, base, since } => {
+            source::Checkout::from_github_pr(pr, base.as_deref(), since.as_deref(), trust)?
+        }
         Input::Git { repo, base, head } => source::Checkout::from_git(repo, base, head, trust)?,
         Input::Dirs { base, head } => source::Checkout::from_dirs(base, head, trust)?,
     };
-    let output = analyze_checkout(&checkout, !cli.syntax_only, trust);
+    let (output, since) = analyze_all(&checkout, !cli.syntax_only, trust);
+    write_outputs(&output, &cli.out, cli.json.as_deref())?;
+    match (&checkout.since, since) {
+        (Some(source::Since::Changes(s)), Some(since)) => {
+            eprintln!("changes since {}:", s.commit);
+            write_outputs(
+                &since,
+                &with_suffix(&cli.out, "-since"),
+                cli.json
+                    .as_deref()
+                    .map(|j| with_suffix(j, "-since"))
+                    .as_deref(),
+            )?;
+            println!("since: changes");
+        }
+        (Some(source::Since::Nothing), _) => {
+            eprintln!("nothing changed since the given commit but the base branch");
+            println!("since: none");
+        }
+        (Some(source::Since::Unavailable(why)), _) => {
+            eprintln!("warning: no page of the changes since the given commit: {why}");
+            // One line, for scripts.
+            let why = why.split_whitespace().collect::<Vec<_>>().join(" ");
+            println!("since: unavailable ({why})");
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Writes the page, and the analysis as JSON if asked to.
+fn write_outputs(output: &model::Output, out: &Path, json: Option<&Path>) -> Result<()> {
     for w in &output.warnings {
         eprintln!("warning: {w}");
     }
-    let json = serde_json::to_string(&output)?;
-    if let Some(path) = &cli.json {
-        std::fs::write(path, serde_json::to_string_pretty(&output)?)
+    if let Some(path) = json {
+        std::fs::write(path, serde_json::to_string_pretty(output)?)
             .with_context(|| format!("writing {}", path.display()))?;
     }
-    std::fs::write(&cli.out, render_page(&output.meta.title, &json))
-        .with_context(|| format!("writing {}", cli.out.display()))?;
+    let data = serde_json::to_string(output)?;
+    std::fs::write(out, render_page(&output.meta.title, &data))
+        .with_context(|| format!("writing {}", out.display()))?;
     let changed = output
         .items
         .values()
@@ -107,38 +148,91 @@ fn main() -> Result<()> {
     eprintln!(
         "{} items analyzed, {changed} added/changed/removed → {}",
         output.items.len(),
-        cli.out.display()
+        out.display()
     );
     Ok(())
 }
 
+/// `dir/name.ext` → `dir/name{suffix}.ext`.
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let name = match path.extension() {
+        Some(ext) => format!("{stem}{suffix}.{}", ext.to_string_lossy()),
+        None => format!("{stem}{suffix}"),
+    };
+    path.with_file_name(name)
+}
+
+#[cfg(test)]
 fn analyze_checkout(
     checkout: &source::Checkout,
     semantic: bool,
     trust: source::Trust,
 ) -> model::Output {
-    // Taken by the checkout before anything was removed from the copies.
-    let mut files = checkout.files.clone();
-    let (base, base_note) = analyze_side(&checkout.base_dir, semantic, trust, "base");
-    let (head, head_note) = analyze_side(&checkout.head_dir, semantic, trust, "head");
+    analyze_all(checkout, semantic, trust).0
+}
+
+/// The analysis of the checkout, and of the changes since an earlier
+/// commit if it has them (see [`source::Since`]). The head is analyzed
+/// once for both.
+fn analyze_all(
+    checkout: &source::Checkout,
+    semantic: bool,
+    trust: source::Trust,
+) -> (model::Output, Option<model::Output>) {
+    let base = analyze_side(&checkout.base_dir, semantic, trust, "base");
+    let head = analyze_side(&checkout.head_dir, semantic, trust, "head");
+    let meta = |label: &str, pr: Option<model::PrMeta>| model::Meta {
+        title: checkout.title.clone(),
+        base: label.to_string(),
+        head: checkout.head_label.clone(),
+        url: checkout.url.clone(),
+        resolution: String::new(),
+        pr,
+        project: checkout.project.clone(),
+    };
+    let since = match &checkout.since {
+        Some(source::Since::Changes(s)) => {
+            let since_base = analyze_side(&s.dir, semantic, trust, "since");
+            let pr = checkout.pr.clone().map(|pr| model::PrMeta {
+                base_rev: s.commit[..s.commit.len().min(10)].to_string(),
+                custom_base: true,
+                since: Some(s.commit.clone()),
+                ..pr
+            });
+            Some(compare(
+                (&s.dir, since_base),
+                (&checkout.head_dir, head.clone()),
+                s.files.clone(),
+                meta(&s.label, pr),
+            ))
+        }
+        _ => None,
+    };
+    let output = compare(
+        (&checkout.base_dir, base),
+        (&checkout.head_dir, head),
+        // Taken by the checkout before anything was removed from the copies.
+        checkout.files.clone(),
+        meta(&checkout.base_label, checkout.pr.clone()),
+    );
+    (output, since)
+}
+
+/// Compares two analyzed trees: the base and the head, each with the note
+/// of [`analyze_side`].
+fn compare(
+    (base_dir, (base, base_note)): (&Path, (analyze::Analysis, String)),
+    (head_dir, (head, head_note)): (&Path, (analyze::Analysis, String)),
+    mut files: Vec<model::ChangedFile>,
+    meta: model::Meta,
+) -> model::Output {
     let resolution = if base_note == head_note {
         head_note
     } else {
         format!("base: {base_note}; head: {head_note}")
     };
-    let mut output = merge::merge(
-        base,
-        head,
-        model::Meta {
-            title: checkout.title.clone(),
-            base: checkout.base_label.clone(),
-            head: checkout.head_label.clone(),
-            url: checkout.url.clone(),
-            resolution,
-            pr: checkout.pr.clone(),
-            project: checkout.project.clone(),
-        },
-    );
+    let mut output = merge::merge(base, head, model::Meta { resolution, ..meta });
     // Files the Rust analysis covers: one per module.
     let analyzed: std::collections::BTreeSet<&str> = output
         .items
@@ -150,7 +244,7 @@ fn analyze_checkout(
         f.analyzed = analyzed.contains(f.path.as_str());
         if f.analyzed {
             let text = |dir: &Path| std::fs::read_to_string(dir.join(&f.path)).unwrap_or_default();
-            let (old, new) = (text(&checkout.base_dir), text(&checkout.head_dir));
+            let (old, new) = (text(base_dir), text(head_dir));
             (f.added_lines, f.removed_lines) = files::changed_lines(&f.hunks);
             // The items show the other changes: keep only these.
             (f.outside_items, f.hunks, f.parts) =

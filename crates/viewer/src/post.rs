@@ -513,7 +513,9 @@ pub fn finish_html(d: &Data) -> String {
 <p class="sub">The comments go on the commit this page shows ({rev}). If the PR got new commits, GitHub shows them where those lines are now, or as outdated.{custom}</p>"#,
             what = posts_html(&s.comments, "", suggested),
             rev = esc(&pr.head_rev),
-            custom = if pr.custom_base {
+            custom = if pr.since.is_some() {
+                " This page compares with an earlier commit of the PR, not with its base branch, so comments on removed lines may not fit GitHub's diff; GitHub then rejects the review."
+            } else if pr.custom_base {
                 " This page compares against a base given with <code>--base</code>, so its diff may differ from GitHub's; GitHub then rejects the review."
             } else {
                 ""

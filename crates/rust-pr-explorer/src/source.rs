@@ -49,6 +49,8 @@ pub struct Checkout {
     /// Every file that differs, taken before anything was removed from
     /// the copies (see [`sanitize`]).
     pub files: Vec<model::ChangedFile>,
+    /// What changed since an earlier commit of the PR (`pr --since`).
+    pub since: Option<Since>,
     // Keeps temporary directories alive for as long as the checkout is used.
     _temp: Option<tempfile::TempDir>,
 }
@@ -86,6 +88,7 @@ impl Checkout {
                 &std::fs::canonicalize(head)?.to_string_lossy(),
             ])),
             files,
+            since: None,
             _temp: Some(temp),
         })
     }
@@ -171,13 +174,21 @@ impl Checkout {
                 &prefix,
             ])),
             files,
+            since: None,
             _temp: Some(temp),
         })
     }
 
     /// Fetches a GitHub pull request. The base is the merge base of the PR
     /// head and the repository's default branch, unless `base` is given.
-    pub fn from_github_pr(spec: &str, base: Option<&str>, trust: Trust) -> Result<Self> {
+    /// With `since`, an earlier commit of the PR, it also prepares the
+    /// comparison of the head with that commit (see [`Since`]).
+    pub fn from_github_pr(
+        spec: &str,
+        base: Option<&str>,
+        since: Option<&str>,
+        trust: Trust,
+    ) -> Result<Self> {
         let (owner, repo, number) = parse_pr_spec(spec)?;
         let url = format!("https://github.com/{owner}/{repo}.git");
         let temp = tempfile::tempdir()?;
@@ -273,8 +284,25 @@ impl Checkout {
             )?;
         }
         let files = crate::files::changed_files(&base_dir, &head_dir, &[]);
+        let since = since.map(|rev| {
+            let dir = temp.path().join("since");
+            let branch = format!("origin/{base_ref}");
+            match since_checkout(&git_dir, &dir, rev, &branch, &base_rev, &head_rev) {
+                Ok(Some((prev, label))) => Since::Changes(SinceChanges {
+                    files: crate::files::changed_files(&dir, &head_dir, &[]),
+                    dir,
+                    commit: prev,
+                    label,
+                }),
+                Ok(None) => Since::Nothing,
+                Err(e) => Since::Unavailable(format!("{e:#}")),
+            }
+        });
         sanitize(&base_dir, trust)?;
         sanitize(&head_dir, trust)?;
+        if let Some(Since::Changes(s)) = &since {
+            sanitize(&s.dir, trust)?;
+        }
         Ok(Checkout {
             base_dir,
             head_dir,
@@ -302,14 +330,239 @@ impl Checkout {
                 head_rev: short(&head_rev).to_string(),
                 head_commit: head_rev.clone(),
                 custom_base: base.is_some(),
+                since: None,
                 threads,
             }),
             // The PR identifies the project.
             project: None,
             files,
+            since,
             _temp: Some(temp),
         })
     }
+}
+
+/// What changed in a pull request since an earlier commit of it, such as
+/// the one an earlier explorer page showed.
+pub enum Since {
+    /// The PR changed since then.
+    Changes(SinceChanges),
+    /// Nothing changed but the base branch: the PR only merged it or was
+    /// rebased onto it.
+    Nothing,
+    /// The comparison could not be made, and why.
+    Unavailable(String),
+}
+
+pub struct SinceChanges {
+    /// What the head is compared with, checked out: the earlier commit,
+    /// with the base branch's changes since then applied to it.
+    pub dir: PathBuf,
+    /// The earlier commit, in full.
+    pub commit: String,
+    /// What `dir` holds, for the page's header.
+    pub label: String,
+    /// Every file that differs between `dir` and the head.
+    pub files: Vec<model::ChangedFile>,
+}
+
+/// Checks out what the PR's `head` is compared with to show its changes
+/// since `rev`, an earlier commit of the PR, at `dir`. Returns the commit
+/// in full and a label, or `None` when nothing changed but the base branch.
+///
+/// A plain diff from `rev` would also show every change the base branch
+/// got in between, once the PR merged it or was rebased onto it. So the
+/// base branch's changes since `rev`'s merge base (up to `base`, the PR's
+/// merge base now) are applied to `rev` first, with `git merge-tree`, and
+/// the head is compared with the result.
+fn since_checkout(
+    git_dir: &Path,
+    dir: &Path,
+    rev: &str,
+    branch: &str,
+    base: &str,
+    head: &str,
+) -> Result<Option<(String, String)>> {
+    // After a force push, the earlier commit is on no branch any more, but
+    // GitHub still serves it by its full id.
+    let prev = match rev_parse(git_dir, rev) {
+        Ok(prev) => prev,
+        Err(_) => {
+            eprintln!("fetching {rev}…");
+            git_output(git_dir, &["fetch", "--quiet", "origin", rev])
+                .with_context(|| format!("could not fetch {rev}"))?;
+            rev_parse(git_dir, rev)?
+        }
+    };
+    let tree_of = |rev: &str| git_output(git_dir, &["rev-parse", &format!("{rev}^{{tree}}")]);
+    let old_base = git_output(git_dir, &["merge-base", branch, &prev])?;
+    let tree = if old_base == base {
+        tree_of(&prev)?
+    } else {
+        let merge_base = format!("--merge-base={old_base}");
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(git_dir)
+            .args(["merge-tree", "--write-tree", "--no-messages", "--name-only"])
+            .arg(&merge_base)
+            .args([base, &prev])
+            .output()
+            .context("failed to run git")?;
+        match out.status.code() {
+            Some(0) => String::from_utf8_lossy(&out.stdout)
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string(),
+            // Conflicts. Whether the PR changed is then judged by its
+            // commits: any that is no merge and not on the base branch.
+            Some(1) => {
+                let range = format!("{prev}..{head}");
+                let not_base = format!("^{branch}");
+                let own = git_output(git_dir, &["rev-list", "--no-merges", &range, &not_base])?;
+                if own.is_empty() {
+                    return Ok(None);
+                }
+                // The tree, then the conflicted files.
+                let text = String::from_utf8_lossy(&out.stdout);
+                let mut lines = text.lines();
+                let tree = lines.next().unwrap_or_default();
+                let conflicted: BTreeSet<&str> = lines.take_while(|l| !l.is_empty()).collect();
+                resolve_as_merged(git_dir, tree, &conflicted, &prev, head, branch)?
+            }
+            _ => bail!(
+                "`git merge-tree` failed: {}",
+                String::from_utf8_lossy(&out.stderr).trim()
+            ),
+        }
+    };
+    if tree == tree_of(head)? {
+        return Ok(None);
+    }
+    let (commit, label) = if tree == tree_of(&prev)? {
+        (prev.clone(), format!("since {}", short(&prev)))
+    } else {
+        // A commit for the tree, so that it can be checked out.
+        let message = format!(
+            "{} with the base branch's changes up to {}",
+            short(&prev),
+            short(base)
+        );
+        let commit = git_output(
+            git_dir,
+            &[
+                "-c",
+                "user.name=rust-pr-explorer",
+                "-c",
+                "user.email=rust-pr-explorer@localhost",
+                "commit-tree",
+                &tree,
+                "-p",
+                &prev,
+                "-m",
+                &message,
+            ],
+        )?;
+        (
+            commit,
+            format!(
+                "since {}, with the base branch's changes since then",
+                short(&prev)
+            ),
+        )
+    };
+    run_git(
+        Some(git_dir),
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "--detach",
+            dir.to_str().unwrap(),
+            &commit,
+        ],
+    )?;
+    Ok(Some((prev, label)))
+}
+
+/// Settles the conflicts of `tree`, the earlier commit `prev` with the
+/// base branch's changes replayed on it, as the PR did: each conflicted
+/// file is taken from the PR's last merge since `prev`. That version holds
+/// the PR's changes up to `prev`, the base branch's and the resolution, and
+/// is only right if no commit of the PR's own changed the file in between.
+/// Otherwise, or without such a merge, the comparison is given up.
+fn resolve_as_merged(
+    git_dir: &Path,
+    tree: &str,
+    conflicted: &BTreeSet<&str>,
+    prev: &str,
+    head: &str,
+    branch: &str,
+) -> Result<String> {
+    let range = format!("{prev}..{head}");
+    let merge = git_output(
+        git_dir,
+        &["rev-list", "--merges", "--first-parent", "-n1", &range],
+    )?;
+    let conflict = || {
+        anyhow::anyhow!(
+            "the base branch's changes since {} conflict with the PR's changes up to it",
+            short(prev)
+        )
+    };
+    if merge.is_empty() {
+        return Err(conflict());
+    }
+    let index_dir = tempfile::tempdir()?;
+    let index = index_dir.path().join("index");
+    let git = |args: &[&str]| -> Result<String> {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(git_dir)
+            .args(args)
+            .env("GIT_INDEX_FILE", &index)
+            .output()
+            .context("failed to run git")?;
+        if !out.status.success() {
+            bail!(
+                "`git {}` failed: {}",
+                args.join(" "),
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
+    };
+    git(&["read-tree", tree])?;
+    let until_merge = format!("{prev}..{merge}");
+    let not_base = format!("^{branch}");
+    for path in conflicted {
+        let own = git(&[
+            "rev-list",
+            "--no-merges",
+            &until_merge,
+            &not_base,
+            "--",
+            path,
+        ])?;
+        if !own.is_empty() {
+            return Err(conflict());
+        }
+        // `mode type id\tpath`, or nothing if the merge has no such file.
+        let entry = git(&["ls-tree", &merge, "--", path])?;
+        let meta = entry
+            .split_once('\t')
+            .map(|(meta, _)| meta.split(' ').collect::<Vec<_>>());
+        match meta {
+            Some(meta) if meta.len() == 3 => {
+                let info = format!("{},{},{path}", meta[0], meta[2]);
+                git(&["update-index", "--add", "--cacheinfo", &info])?;
+            }
+            _ => {
+                git(&["update-index", "--force-remove", "--", path])?;
+            }
+        }
+    }
+    git(&["write-tree"])
 }
 
 /// What `gh pr view --json` says about a pull request.
@@ -829,6 +1082,133 @@ fn walk_manifests(dir: &Path, out: &mut Vec<PathBuf>, depth: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `since_checkout` after merges, rebases and new commits of a PR.
+    #[test]
+    fn changes_since_an_earlier_commit_leave_out_the_base_branch() {
+        let repo = tempfile::tempdir().unwrap();
+        let dirs = tempfile::tempdir().unwrap();
+        let r = repo.path();
+        let git = |args: &[&str]| {
+            git_output(
+                r,
+                &[&["-c", "user.name=t", "-c", "user.email=t@t"], args].concat(),
+            )
+            .unwrap()
+        };
+        let write = |name: &str, text: &str| std::fs::write(r.join(name), text).unwrap();
+        let commit = |msg: &str| {
+            git(&["add", "."]);
+            git(&["commit", "-q", "-m", msg]);
+            git(&["rev-parse", "HEAD"])
+        };
+        let n = std::cell::Cell::new(0);
+        // Compares the PR's current head with `prev`, as `pr --since` does.
+        let since = |prev: &str| {
+            let head = git(&["rev-parse", "HEAD"]);
+            let base = git(&["merge-base", "main", &head]);
+            n.set(n.get() + 1);
+            let dir = dirs.path().join(n.get().to_string());
+            since_checkout(r, &dir, prev, "main", &base, &head)
+                .unwrap()
+                .map(|(commit, label)| {
+                    assert_eq!(commit, prev);
+                    let files = crate::files::changed_files(&dir, &r.join("."), &[".git"]);
+                    let paths: Vec<String> = files.into_iter().map(|f| f.path).collect();
+                    (paths, label)
+                })
+        };
+        git(&["init", "-q", "-b", "main"]);
+        write("a.txt", "a\n");
+        write("b.txt", "b\n");
+        commit("base");
+        git(&["checkout", "-q", "-b", "pr"]);
+        write("a.txt", "a, changed by the PR\n");
+        let first = commit("pr 1");
+
+        // Only the base branch changed, merged into the PR.
+        git(&["checkout", "-q", "main"]);
+        write("b.txt", "b, changed on main\n");
+        commit("main 1");
+        git(&["checkout", "-q", "pr"]);
+        git(&["merge", "-q", "--no-edit", "main"]);
+        assert_eq!(since(&first), None);
+
+        // A new commit after the merge: only its file differs, not main's.
+        write("c.txt", "c\n");
+        let second = commit("pr 2");
+        let (paths, label) = since(&first).unwrap();
+        assert_eq!(paths, ["c.txt"]);
+        assert!(label.contains("with the base branch's changes"), "{label}");
+        // From the merged commit no change needs replaying.
+        write("c.txt", "c, again\n");
+        commit("pr 3");
+        let (paths, label) = since(&second).unwrap();
+        assert_eq!(paths, ["c.txt"]);
+        assert_eq!(label, format!("since {}", short(&second)));
+
+        // Rebased onto a newer main without other changes.
+        let before = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-q", "main"]);
+        write("d.txt", "d\n");
+        commit("main 2");
+        git(&["checkout", "-q", "pr"]);
+        git(&["rebase", "-q", "main"]);
+        assert_eq!(since(&before), None);
+
+        // Main changes the PR's line; the PR merges it and resolves the
+        // conflict. Replaying main conflicts, and the PR has no commit of
+        // its own since: nothing changed.
+        let before = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-q", "main"]);
+        write("a.txt", "a, changed on main\n");
+        commit("main 3");
+        git(&["checkout", "-q", "pr"]);
+        assert!(
+            Command::new("git")
+                .arg("-C")
+                .arg(r)
+                .args(["merge", "-q", "main"])
+                .output()
+                .unwrap()
+                .status
+                .code()
+                == Some(1)
+        );
+        write("a.txt", "a, changed by both\n");
+        commit("merge main");
+        assert_eq!(since(&before), None);
+        // With a commit of its own after that, the conflicted file is
+        // compared from the merge, so only the new commit's file differs.
+        write("e.txt", "e\n");
+        commit("pr 4");
+        let (paths, _) = since(&before).unwrap();
+        assert_eq!(paths, ["e.txt"]);
+        // A commit of the PR's own changed the conflicted file before the
+        // merge: the comparison is given up.
+        let before = git(&["rev-parse", "HEAD"]);
+        git(&["checkout", "-q", "main"]);
+        write("a.txt", "a, changed on main again\n");
+        commit("main 4");
+        git(&["checkout", "-q", "pr"]);
+        write("a.txt", "a, changed by both, then by the PR\n");
+        commit("pr 5");
+        Command::new("git")
+            .arg("-C")
+            .arg(r)
+            .args(["merge", "-q", "main"])
+            .output()
+            .unwrap();
+        write("a.txt", "a, changed by all\n");
+        commit("merge main again");
+        write("f.txt", "f\n");
+        commit("pr 6");
+        let head = git(&["rev-parse", "HEAD"]);
+        let base = git(&["merge-base", "main", &head]);
+        let err =
+            since_checkout(r, &dirs.path().join("x"), &before, "main", &base, &head).unwrap_err();
+        assert!(err.to_string().contains("conflict"), "{err}");
+    }
 
     #[test]
     fn gh_json_is_parsed() {
