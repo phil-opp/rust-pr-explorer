@@ -226,6 +226,7 @@ mod tests {
             files: Vec::new(),
             externals: Default::default(),
             warnings: Vec::new(),
+            semver_checks: None,
         };
         out.meta.commits = vec![Commit {
             sha: "0123456789abcdef".to_string(),
