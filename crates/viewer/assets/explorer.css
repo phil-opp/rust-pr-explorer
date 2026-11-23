@@ -189,6 +189,10 @@ code { font-size: .92em; }
 .api-why.api-breaking, .api-why.api-unknown, .api-why.api-compatible { border: none; padding: 0 0 0 18px; display: block; cursor: auto; font: 13px var(--sans); color: var(--text); }
 .api-why.api-breaking li::marker { color: var(--removed); }
 .api-why.api-compatible { color: var(--muted); }
+.api-why .api-confirmed { color: var(--muted); list-style: none; margin-left: -14px; }
+.semver-tool { margin: -6px 0 14px; font: 13px var(--sans); color: var(--muted); }
+.semver-tool.warn pre { white-space: pre-wrap; font-size: 12px; margin: 4px 0 0; }
+.semver-unmatched { margin: 4px 0 0; padding-left: 18px; color: var(--text); }
 .semver-sum { margin: 0 0 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
 /* Code */

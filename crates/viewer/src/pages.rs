@@ -430,7 +430,9 @@ fn group_status(module: &Item) -> Option<Status> {
 pub fn render_overview(app: &App) {
     let d = &app.d;
     let all: Vec<&Item> = d.items().filter(|it| it.info.kind != Kind::Mod).collect();
-    let is_pub = |it: &Item| d.in_public_api(it) && changed(it);
+    // Also unchanged items that cargo-semver-checks labeled, e.g. a type
+    // that is no longer `Send` because of a change elsewhere.
+    let is_pub = |it: &Item| d.in_public_api(it) && (changed(it) || it.api.is_some());
     // Seen from outside the crate.
     const OUTSIDE: &str = "<extern>";
 
@@ -580,7 +582,8 @@ fn semver_summary(d: &Data) -> String {
     }
     let [breaking, unknown, compatible] = counts;
     if breaking + unknown + compatible == 0 {
-        return String::new();
+        // A failed run of cargo-semver-checks still says why.
+        return semver_checks_html(d);
     }
     let bump = if breaking > 0 {
         "a major version bump (minor before 1.0)"
@@ -601,8 +604,62 @@ fn semver_summary(d: &Data) -> String {
     .flatten()
     .collect();
     format!(
-        r#"<div class="semver-sum">{} <span class="dim">By Cargo's SemVer rules, this needs {bump}. Hover a label for why.</span></div>"#,
-        parts.join(" ")
+        r#"<div class="semver-sum">{} <span class="dim">By Cargo's SemVer rules, this needs {bump}. Hover a label for why.</span></div>{}"#,
+        parts.join(" "),
+        semver_checks_html(d),
+    )
+}
+
+/// How cargo-semver-checks was run, and what it found that no item shows.
+fn semver_checks_html(d: &Data) -> String {
+    let Some(r) = &d.out.semver_checks else {
+        return String::new();
+    };
+    if let Some(e) = &r.error {
+        return format!(
+            r#"<div class="semver-tool warn">cargo-semver-checks {} could not check this PR, so the labels come from the definitions alone: <pre>{}</pre></div>"#,
+            esc(&r.version),
+            esc(e)
+        );
+    }
+    let unmatched: String = r
+        .findings
+        .iter()
+        .filter(|f| f.item.is_none())
+        .map(|f| {
+            format!(
+                r#"<li><span class="api api-{}">{}</span> {}: <code>{}</code>{} <span class="dim">({})</span></li>"#,
+                f.level.css(),
+                f.level.label(),
+                esc(&f.title),
+                esc(&f.message),
+                f.location
+                    .as_deref()
+                    .map(|l| format!(r#" <span class="dim">at {}</span>"#, esc(l)))
+                    .unwrap_or_default(),
+                esc(&f.lint)
+            )
+        })
+        .collect();
+    let matched = r.findings.iter().filter(|f| f.item.is_some()).count();
+    format!(
+        r#"<div class="semver-tool">Also checked with cargo-semver-checks {} ({} lints, {}, {:.0} s): {} finding{} on the items below{}.{}</div>"#,
+        esc(&r.version),
+        r.checks,
+        esc(&r.features),
+        r.seconds,
+        matched,
+        if matched == 1 { "" } else { "s" },
+        if unmatched.is_empty() {
+            ""
+        } else {
+            ", and these, which match no item"
+        },
+        if unmatched.is_empty() {
+            String::new()
+        } else {
+            format!(r#"<ul class="semver-unmatched">{unmatched}</ul>"#)
+        }
     )
 }
 

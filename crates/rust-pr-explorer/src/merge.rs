@@ -77,6 +77,7 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
         externals,
         files: Vec::new(),
         warnings,
+        semver_checks: None,
     }
 }
 

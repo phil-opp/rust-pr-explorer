@@ -382,6 +382,10 @@ pub struct ApiChange {
     /// Why, one entry per change, e.g. "variant `B` added: exhaustive
     /// `match`es outside the crate break". Code in backticks.
     pub reasons: Vec<String>,
+    /// cargo-semver-checks lints that found what `reasons` already say,
+    /// by id: they confirm the label without adding a reason.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub confirmed_by: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -495,6 +499,53 @@ pub struct Output {
     #[serde(default)]
     pub externals: BTreeMap<String, External>,
     pub warnings: Vec<String>,
+    /// What cargo-semver-checks found, if it was run (`--semver-checks`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semver_checks: Option<SemverChecks>,
+}
+
+/// A run of cargo-semver-checks on the two versions. Its findings are
+/// folded into the items' SemVer labels; `findings` keeps all of them,
+/// with the item each one was matched to.
+#[derive(Serialize, Deserialize, Debug, Clone, Default)]
+pub struct SemverChecks {
+    /// Its version, e.g. `0.51.0`.
+    pub version: String,
+    /// Why it couldn't check the crates (e.g. the code doesn't build).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+    /// Which features it built with: "most features" (its default) or,
+    /// if the crates don't build that way, "default features".
+    #[serde(default)]
+    pub features: String,
+    /// Lints run, and how long the run took (both sides' rustdoc builds
+    /// included).
+    pub checks: u32,
+    pub seconds: f32,
+    pub findings: Vec<SemverFinding>,
+}
+
+/// One result of one cargo-semver-checks lint.
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SemverFinding {
+    /// The lint's id, e.g. `enum_variant_added`.
+    pub lint: String,
+    /// The lint's name, e.g. "enum variant added on exhaustive enum".
+    pub title: String,
+    /// Major lints are breaking, minor ones non-breaking.
+    pub level: ApiLevel,
+    /// What it found, without the file location, e.g. "variant
+    /// Error:DivisionByZero".
+    pub message: String,
+    /// The Cargo reference section the lint is about.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reference: Option<String>,
+    /// The item it was matched to, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub item: Option<String>,
+    /// Where it points, relative to the checkout, e.g. `src/lib.rs:21`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<String>,
 }
 
 /// An item outside the analyzed crates, as rust-analyzer describes it.

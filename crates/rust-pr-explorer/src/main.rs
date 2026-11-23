@@ -15,6 +15,7 @@ mod reformat;
 #[cfg(feature = "semantic")]
 mod semantic;
 mod semver;
+mod semver_checks;
 mod sigdiff;
 mod source;
 #[cfg(test)]
@@ -46,6 +47,14 @@ struct Cli {
     /// Only use this in a sandboxed environment: the PR's code gets executed.
     #[arg(long, global = true, env = "RUST_PR_EXPLORER_TRUST_PROJECT_CODE")]
     trust_project_code: bool,
+    /// Also run cargo-semver-checks on the two versions and add what it
+    /// finds to the SemVer labels. It builds both versions' rustdoc JSON,
+    /// which runs build scripts and procedural macros: like
+    /// `--trust-project-code`, only use this in a sandboxed environment.
+    /// rust-analyzer stays in its mode (much faster without
+    /// `--trust-project-code`).
+    #[arg(long, global = true)]
+    semver_checks: bool,
 }
 
 #[derive(Subcommand)]
@@ -88,7 +97,22 @@ fn main() -> Result<()> {
         Input::Git { repo, base, head } => source::Checkout::from_git(repo, base, head, trust)?,
         Input::Dirs { base, head } => source::Checkout::from_dirs(base, head, trust)?,
     };
-    let output = analyze_checkout(&checkout, !cli.syntax_only, trust);
+    let mut output = analyze_checkout(&checkout, !cli.syntax_only, trust);
+    if cli.semver_checks {
+        eprintln!("running cargo-semver-checks: build scripts and proc macros may run");
+        semver_checks::run(&checkout.base_dir, &checkout.head_dir, &mut output);
+        if let Some(r) = &output.semver_checks {
+            match &r.error {
+                Some(e) => eprintln!("warning: {e}"),
+                None => eprintln!(
+                    "cargo-semver-checks {}: {} findings in {:.0} s",
+                    r.version,
+                    r.findings.len(),
+                    r.seconds
+                ),
+            }
+        }
+    }
     for w in &output.warnings {
         eprintln!("warning: {w}");
     }

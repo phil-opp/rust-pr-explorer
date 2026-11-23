@@ -177,10 +177,17 @@ impl Data {
             ApiLevel::Unknown => "? ",
             ApiLevel::Compatible => "",
         };
+        let mut title = api.reasons.join("\n").replace('`', "");
+        if !api.confirmed_by.is_empty() {
+            title.push_str(&format!(
+                "\nConfirmed by cargo-semver-checks: {}",
+                api.confirmed_by.join(", ")
+            ));
+        }
         format!(
             r#"<span class="api api-{}" title="{}">{icon}{}</span>"#,
             api.level.css(),
-            esc(&api.reasons.join("\n").replace('`', "")),
+            esc(title.trim_start()),
             api.level.label()
         )
     }
@@ -201,6 +208,16 @@ impl Data {
             .iter()
             .filter(|r| !noted.contains(&r.as_str()))
             .map(|r| format!("<li>{}</li>", crate::code::note_html(r)))
+            .chain((!api.confirmed_by.is_empty()).then(|| {
+                format!(
+                    r#"<li class="api-confirmed">✓ cargo-semver-checks agrees: {}</li>"#,
+                    api.confirmed_by
+                        .iter()
+                        .map(|l| format!("<code>{}</code>", esc(l)))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            }))
             .collect();
         if lines.is_empty() {
             return String::new();
