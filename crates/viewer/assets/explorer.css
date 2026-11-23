@@ -678,3 +678,8 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .hunk-rv .rvc { gap: 4px; }
 .hunk-rv .rv-fold { display: none; }
 body:not(.reviewing) .hunk-rv:not(:has(.rvc.done, .rvc.stale)) { display: none; }
+#rv-bar #rv-keys { margin-left: 6px; min-width: 26px; color: var(--muted); }
+.keys { border-collapse: collapse; margin-top: 8px; }
+.keys td { padding: 4px 12px 4px 0; vertical-align: top; }
+.keys td:first-child { white-space: nowrap; }
+kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; background: var(--bg-alt); font-family: var(--mono); font-size: 12px; text-align: center; }
