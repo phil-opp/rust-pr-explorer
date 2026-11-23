@@ -801,6 +801,7 @@ mod tests {
     fn posts() {
         let c = |loc: bool| Comment {
             name: "f".into(),
+            part: String::new(),
             verdict: Verdict::Comment,
             text: "x".into(),
             loc: loc.then(|| Loc {
