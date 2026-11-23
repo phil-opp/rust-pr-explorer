@@ -884,6 +884,16 @@ pub fn next_open_where(after: Option<&str>, keep: impl Fn(&str) -> bool) -> Opti
         .cloned()
 }
 
+/// The unit before `of` in review order, reviewed or not: where `k` goes.
+/// None at the start of the order, or for a unit that isn't in it.
+pub fn prev_unit(of: &str) -> Option<String> {
+    REVIEW.with(|r| {
+        let r = r.borrow();
+        let i = r.order.iter().position(|u| u == of)?;
+        i.checked_sub(1).map(|i| r.order[i].clone())
+    })
+}
+
 /// The first item that the source of item `of` tags as new or changed
 /// (see `code::ref_tag`) and that still needs a review, in the order the
 /// source names them: where `Enter` goes in review mode.
@@ -903,6 +913,11 @@ pub fn next_open_call(d: &Data, of: &str) -> Option<String> {
         .map(|(_, id)| id)
         .find(|id| crate::code::ref_tag(d, id, of).is_some() && mark(id) != Some(Mark::Done))
         .map(str::to_string)
+}
+
+/// Whether a reviewed unit is shown whole again.
+pub fn is_unfolded(id: &str) -> bool {
+    REVIEW.with(|r| r.borrow().unfolded.contains(id))
 }
 
 /// Shows a reviewed unit whole again, or folds it back to one line.
@@ -963,7 +978,7 @@ fn snippet(text: &str) -> String {
 /// just the unit.
 fn actions(id: &str) -> String {
     if hunk_item(id).is_some() {
-        return r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve only this change (a, after j/k)">✓ Approve change</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change here (r, after j/k)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on this change (c, after j/k)">✎ Comment</button>"#.to_string();
+        return r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve only this change (a, after n/p)">✓ Approve change</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change here (r, after n/p)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on this change (c, after n/p)">✎ Comment</button>"#.to_string();
     }
     let n = hunks_of(id).len();
     if n > 1 {
@@ -1100,7 +1115,7 @@ pub fn update_progress() {
             let next = if all {
                 String::new()
             } else {
-                r#"<button id="rv-next" title="Go to the next unreviewed item (n)">Next ▸</button>"#
+                r#"<button id="rv-next" title="Go to the next unreviewed item (j)">Next ▸</button>"#
                     .to_string()
             };
             format!(

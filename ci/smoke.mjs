@@ -138,6 +138,26 @@ try {
       }
     }
 
+    // The review keys: `j` outlines the next unreviewed item, `?` shows
+    // the list of shortcuts and hides it again.
+    await page.click('#views [data-view="overview"]');
+    await page.locator("body").press("j");
+    await page
+      .locator(".rv-cur")
+      .first()
+      .waitFor({ state: "visible", timeout: 5_000 })
+      .catch(() => fail("`j` outlines no current item"));
+    await page.keyboard.press("?");
+    try {
+      await page.locator("#modal-b .keys").waitFor({ state: "visible", timeout: 5_000 });
+      await page.screenshot({ path: `${out_dir}/${scheme}-keys.png` });
+      await check_contrast(page, scheme, "keyboard shortcuts");
+      await page.keyboard.press("?");
+      await page.locator("#modal").waitFor({ state: "hidden", timeout: 5_000 });
+    } catch (e) {
+      fail(`\`?\` doesn't show and hide the shortcuts: ${e.message.split("\n")[0]}`);
+    }
+
     // Review mode is on by default, so the views above were checked with
     // the review bar and the verdict controls. Check the canvas once more
     // with it turned off.
