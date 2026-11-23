@@ -338,12 +338,7 @@ pub fn on_details_toggle(app: &mut App, el: &Element) {
         .and_then(|c| dom::data(&c, "gid"))
         .and_then(|g| g.parse::<u32>().ok());
     if let Some(gi) = gid.and_then(|g| app.s.canvas.by_gid(g)) {
-        let set = &mut app.s.canvas.groups[gi].open_src;
-        if open {
-            set.insert(id)
-        } else {
-            set.remove(&id)
-        };
+        app.s.canvas.groups[gi].open_src.insert(id, open);
     }
     draw_edges(app);
 }

@@ -4,6 +4,9 @@ use crate::code::{Seg, esc, marked_html};
 use model::{ApiLevel, External, Item, ItemInfo, Kind, Output, Status, UseCtx};
 use std::collections::HashMap;
 
+/// Body diffs with up to this many changed lines start open.
+pub const SMALL_BODY: usize = 20;
+
 pub struct Data {
     pub out: Output,
     /// Callers of each item: (caller id, guessed?).
@@ -714,10 +717,10 @@ impl Data {
     }
 
     /// The item's source as an expandable section, summarized by what
-    /// changed in it. `card`: inside a canvas card, which remembers
-    /// whether it is open.
+    /// changed in it. `open`: whether the reader opened or closed it,
+    /// if they did. `card`: inside a canvas card, which remembers that.
     #[cfg(test)]
-    pub fn source_html(&self, it: &Item, open: bool, card: bool) -> String {
+    pub fn source_html(&self, it: &Item, open: Option<bool>, card: bool) -> String {
         marked_html(self.source_seg(it, open, card, &Default::default()))
     }
 
@@ -726,7 +729,7 @@ impl Data {
     pub fn source_seg(
         &self,
         it: &Item,
-        open: bool,
+        open: Option<bool>,
         card: bool,
         unfolded: &std::collections::BTreeSet<usize>,
     ) -> Option<Seg> {
@@ -988,11 +991,12 @@ impl Data {
                 String::new()
             }
         );
-        // A small change is shown right away, the rest behind the summary.
-        const SMALL: usize = 4;
+        // A small change to the body or definition starts open, the rest
+        // behind the summary.
         let small = it.status == Status::Changed
             && it.changes.body
-            && (1..=SMALL).contains(&(added + removed));
+            && (1..=SMALL_BODY).contains(&(added + removed));
+        let open = open.unwrap_or(small);
         let stats = format!(
             r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>{}"#,
             if opts.ignore_ws {
@@ -1023,12 +1027,6 @@ impl Data {
             _ if added + removed > 0 => ("", format!("Source {stats} · {where_}")),
             _ => ("", format!("Source · {where_} · {} lines", it.source.len())),
         };
-        if small {
-            let html = format!(
-                r#"<div class="src src-small src-chg"><div class="src-sum">{summary}</div>{code}</div>"#
-            );
-            return Some(Seg::new(class, html));
-        }
         let html = format!(
             r#"<details class="src {}" {} {}><summary>{summary}</summary>{code}</details>"#,
             // The marker is drawn around it; this only colors the summary.

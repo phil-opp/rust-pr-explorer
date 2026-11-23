@@ -475,8 +475,8 @@ pub struct ChangedFile {
     /// Path relative to the repository root.
     pub path: String,
     pub status: Status,
-    /// `rust`, `python`, `markdown`, `toml`, `yaml`, `binary`, `symlink` or
-    /// `text`.
+    /// `rust`, `python`, `markdown`, `toml`, `yaml`, `css`, `binary`,
+    /// `symlink` or `text`.
     pub lang: String,
     /// Part of the Rust analysis (shown as items, not as a file).
     #[serde(default)]
@@ -522,6 +522,9 @@ pub struct ChangedFile {
     /// `extern` blocks).
     #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "python")]
     pub parts: Vec<PartChange>,
+    /// What changed in a CSS file, selector by selector.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub styles: Vec<StyleChange>,
     /// Both versions of a Markdown file, compared section by section in
     /// the viewer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -566,6 +569,63 @@ pub struct LockChange {
     /// another checksum: the published package itself differs.
     #[serde(default)]
     pub checksum_changed: bool,
+}
+
+/// A selector of a stylesheet whose properties changed. Its properties
+/// are those of every rule for it in the file (in the same context),
+/// merged by the cascade: what applies to an element it matches, as far as
+/// this file decides.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StyleChange {
+    /// The selector, normalized (`.a > .b`). Several when they changed in
+    /// the same way, as the selectors of one rule `h1, h2 { … }` do.
+    /// Nested rules are resolved (`.a { &:hover { … } }` is `.a:hover`).
+    /// For a statement (`@import …;`), the statement.
+    pub selectors: Vec<String>,
+    /// The at-rules around it, outermost first: `@media (width < 600px)`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub context: Vec<String>,
+    pub status: Status,
+    /// A statement at-rule (`@import`, `@charset`, `@layer a, b;`), which
+    /// has no properties.
+    #[serde(default)]
+    pub statement: bool,
+    /// First line of each rule for the selector, in the head version (base
+    /// for a removed one).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<usize>,
+    /// Properties added, removed or changed, and those whose declarations
+    /// changed while the value that applies didn't (with a `note`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub props: Vec<PropChange>,
+    /// The selector's other properties, as they apply in the head version
+    /// (`new` only).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unchanged: Vec<PropChange>,
+}
+
+/// One property of a selector, before and after.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropChange {
+    /// `color`, `--accent`.
+    pub name: String,
+    /// The value that applies, `None` if the property isn't set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old: Option<PropValue>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new: Option<PropValue>,
+    /// Why the declarations changed without effect, e.g. "Line 12 sets
+    /// `red`, but line 20 overrides it: no effect."
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub note: Option<String>,
+}
+
+/// A property's value (whitespace normalized, `!important` included) and
+/// the line of the declaration it comes from.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PropValue {
+    pub value: String,
+    pub line: usize,
 }
 
 /// A part of a file that changed: a Python function or class, a YAML

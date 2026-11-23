@@ -95,15 +95,17 @@ pre, .sig, .sbs { font-size: var(--code-size); }
 code { font-size: .92em; }
 
 /* Header */
+/* Two rows: what is shown (brand, PR title, settings, search), then how
+   to look at it (views, review). The PR title gets the room of the first. */
 #top {
-  height: 48px;
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 0 14px;
+  height: 84px;
+  box-sizing: border-box;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
+.top-row { height: 44px; display: flex; align-items: center; gap: 18px; padding: 0 14px; }
+.top-row.sub { height: 39px; border-top: 1px solid var(--border); gap: 14px; }
+#settings-btn { white-space: nowrap; }
 .brand { font-weight: 700; white-space: nowrap; }
 #pr-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 14px; }
 #pr-title b { color: var(--text); }
@@ -119,7 +121,7 @@ code { font-size: .92em; }
 #search-results div { padding: 4px 10px; cursor: pointer; font-family: var(--mono); font-size: 13px; }
 #search-results div:hover, #search-results div.sel { background: var(--bg-alt); }
 
-#layout { display: flex; height: calc(100% - 48px); }
+#layout { display: flex; height: calc(100% - 84px); }
 #sidebar {
   width: 260px; flex: none; overflow: auto; border-right: 1px solid var(--border);
   background: var(--panel); padding: 10px 0; font-size: 14px;
@@ -364,11 +366,8 @@ a.ref:hover { text-decoration: underline; }
 .card-b { padding: 6px 10px 12px; display: flex; flex-direction: column; gap: 10px; }
 .card > .members { padding: 8px 10px 10px; border-top: 1px solid var(--border); }
 .card-foot { padding: 8px 10px; border-top: 1px solid var(--border); background: var(--panel); border-radius: 0 0 8px 8px; display: flex; flex-direction: column; gap: 6px; }
-.card-b details.src, .card-b .src-small, .irow details.src, .irow .src-small { border-top: 1px solid var(--border); padding-top: 8px; }
-.src-sum { font-size: 12.5px; color: var(--muted); margin: 0 0 4px; }
-.src-small.src-chg .src-sum b { color: var(--changed); }
-.src-small pre, .src-small .sbs { margin-top: 0; }
-.src .ln.skip, .src-small .ln.skip, .sbs .skip { color: var(--muted); text-align: center; }
+.card-b details.src, .irow details.src { border-top: 1px solid var(--border); padding-top: 8px; }
+.src .ln.skip, .sbs .skip { color: var(--muted); text-align: center; }
 .sbs .skip { grid-column: 1 / -1; }
 .unfold { cursor: pointer; user-select: none; color: var(--link) !important; background: color-mix(in srgb, var(--link) 8%, transparent); font-family: var(--sans); font-size: 12px; text-align: left !important; padding-left: 12px !important; }
 .unfold:hover { background: color-mix(in srgb, var(--link) 16%, transparent); }
@@ -451,7 +450,7 @@ a.ref:hover { text-decoration: underline; }
 .sbs .ln.add { background: var(--added-bg); }
 .sbs .ln.del { background: var(--removed-bg); }
 .sbs .ln.gap { background: repeating-linear-gradient(135deg, transparent 0 4px, var(--border) 4px 5px); opacity: .5; }
-.card:has(details.src[open] .sbs), .card:has(.src-small .sbs) { width: 1080px; }
+.card:has(details.src[open] .sbs) { width: 1080px; }
 /* Removed lines are marked by their background and "-" alone. A changed
    line paired with its new version also has its changed words marked. */
 .ln.del .wc { background: color-mix(in srgb, var(--removed) 28%, transparent); text-decoration: line-through 1.5px var(--removed); border-radius: 2px; }
@@ -478,7 +477,6 @@ button.mini { font: inherit; font-size: 12px; padding: 1px 8px; }
 details.private-def > summary { cursor: pointer; font-size: 12.5px; color: var(--muted); margin: 2px 0; }
 details.private-def > summary b { color: var(--changed); font-weight: 600; }
 details.private-def .sigbox { margin-top: 4px; }
-.src-small details.src { border-top: none !important; padding-top: 0 !important; }
 
 /* Added and removed items: every part is new (or gone), so the item as a
    whole is marked: a badge, and a tinted, bordered background around it
@@ -589,17 +587,41 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 .md-h { font-weight: 600; font-size: 15px; margin: 4px 0; }
 .md-removed .md-h { text-decoration: line-through; text-decoration-color: var(--removed); color: var(--muted); }
 .irow.member.part { margin-top: 8px; }
+/* CSS files: a box per selector, its properties as a table. */
+.sel { color: var(--type); }
+.title-name.css-sel { font-weight: 600; }
+.css-rules { font-size: 12px; margin-left: auto; }
+.irow > .css-ctx, .irow > .css-props, .irow > .css-more { grid-column: 1 / -1; }
+.css-ctx { font-size: 12.5px; color: var(--muted); margin: 2px 0 4px; }
+.css-props { margin-top: 4px; justify-self: start; }
+.css-props code { white-space: pre-wrap; overflow-wrap: anywhere; }
+.css-props .css-ln { font-size: 12px; color: var(--muted); white-space: nowrap; padding-left: 16px; }
+.css-props tr.css-same td { opacity: .6; }
+.css-props tr.css-same td:first-child, .css-props tr.css-noop td:first-child { padding-left: 11px; }
+.css-props tr.css-noop .note { font-size: 12px; margin-top: 2px; }
+.css-more { margin-top: 4px; font-size: 13px; }
+.css-more > summary { cursor: pointer; color: var(--muted); }
 .ientry > .ihead { display: flex; align-items: center; gap: 8px; }
 #panic { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; background: var(--removed); color: #fff; padding: 10px 16px; font-size: 14px; }
 
 /* Review mode. The controls show in review mode; an existing mark always. */
 #rv-mode { white-space: nowrap; }
-#rv-mode.on { background: var(--reviewed); border-color: var(--reviewed); color: var(--bg); }
-#rv-mode.on::before { content: "☑ "; }
-#rv-mode:not(.on)::before { content: "☐ "; }
+/* In review mode, "Exit review" in the review bar takes its place. */
+.reviewing #rv-mode { display: none; }
 #rv-bar { display: none; align-items: center; gap: 8px; font-size: 13px; white-space: nowrap; }
 .reviewing #rv-bar { display: flex; }
 #rv-bar button { font-size: 12px; padding: 2px 8px; }
+/* Count and meter as one unit, stacked. */
+.rv-progress { display: inline-flex; flex-direction: column; gap: 3px; min-width: 90px; }
+.rv-progress .rv-count { font-size: 12px; line-height: 1.1; }
+.rv-progress.all .rv-count { color: var(--reviewed); font-weight: 600; }
+.rv-progress .rv-meter { width: 100%; }
+#rv-bar #rv-next { border-color: var(--link); color: var(--link); }
+#rv-bar #rv-finish.primary { background: var(--reviewed); border-color: var(--reviewed); color: var(--bg); font-weight: 600; }
+/* Removes every mark: kept apart from the other actions, and quiet. */
+#rv-bar #rv-clear { margin-left: 6px; border-color: transparent; background: none; color: var(--muted); }
+#rv-bar #rv-clear:hover { color: var(--removed); border-color: var(--removed); }
+#rv-bar #rv-exit { color: var(--muted); }
 .rv-meter { width: 70px; height: 6px; border-radius: 3px; background: var(--bg-alt); border: 1px solid var(--border); overflow: hidden; }
 .rv-meter span { display: block; height: 100%; background: var(--reviewed); }
 .rvc { display: inline-flex; gap: 4px; align-items: center; }
