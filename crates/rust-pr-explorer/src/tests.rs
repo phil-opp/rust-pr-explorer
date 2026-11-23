@@ -21,6 +21,7 @@ fn analyze_dirs(base: &Path, head: &Path) -> Output {
             pr: None,
             project: None,
             commits: Vec::new(),
+            versions: Default::default(),
         },
     )
 }
@@ -1133,12 +1134,12 @@ fn renamed_modules_keep_their_items() {
 
 #[test]
 fn test_only_code_is_items() {
-    let lib = "pub struct S;\n\nimpl S {\n    pub fn real(&self) {}\n\n    #[cfg(test)]\n    pub fn helper(&self) {}\n}\n\n#[cfg(test)]\npub fn only() {}\n\n#[cfg(test)]\nimpl S {\n    pub fn fixture() -> S {\n        S\n    }\n}\n\n#[cfg(test)]\nmod tests {\n    pub fn util() {}\n\n    #[test]\n    fn works() {\n        super::S.real();\n    }\n}\n";
+    let lib = "pub struct S;\n\nimpl S {\n    pub fn real(&self) {}\n\n    #[cfg(test)]\n    pub fn helper(&self) {}\n}\n\n#[cfg(test)]\npub fn only() {}\n\n#[cfg(test)]\nimpl S {\n    pub fn fixture() -> S {\n        S\n    }\n}\n\n#[cfg(test)]\nmod tests {\n    pub fn util() {}\n\n    #[test]\n    fn works() {\n        super::S.real();\n    }\n}\n\n#[tokio::test]\nasync fn loose() {}\n";
     let dir = write_crate(&[
         ("src/lib.rs", lib),
         (
             "tests/it.rs",
-            "#[test]\nfn outside() {\n    t::S.real();\n}\n",
+            "#[test]\nfn outside() {\n    t::S.real();\n}\n\nfn setup() {}\n\n#[tokio::test]\nasync fn waits() {\n    setup();\n}\n",
         ),
     ]);
     let an = Analyzer::run(dir.path(), &crate::source::find_crates(dir.path()));
@@ -1157,7 +1158,9 @@ fn test_only_code_is_items() {
         .filter(|i| i.info.test_only)
         .map(|i| i.info.id.as_str())
         .collect();
-    for name in ["helper", "only", "fixture", "tests", "util", "works"] {
+    for name in [
+        "helper", "only", "fixture", "tests", "util", "works", "loose",
+    ] {
         assert!(
             test_only
                 .iter()
@@ -1179,6 +1182,24 @@ fn test_only_code_is_items() {
         .find(|i| i.info.name == "outside")
         .unwrap();
     assert!(!outside.info.test_only);
+
+    // Test functions are marked as tests, in libraries and integration
+    // tests alike, also with an attribute macro such as `#[tokio::test]`.
+    // Helpers are not.
+    let is_test = |name: &str| {
+        an.items
+            .values()
+            .find(|i| i.info.name == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .info
+            .test
+    };
+    for name in ["works", "loose", "outside", "waits"] {
+        assert!(is_test(name), "{name}");
+    }
+    for name in ["helper", "only", "fixture", "util", "setup", "real"] {
+        assert!(!is_test(name), "{name}");
+    }
 }
 
 #[test]
@@ -1430,4 +1451,39 @@ fn derives_count_and_their_order_does_not() {
     assert!(api.reasons[0].contains("`Hash`"), "{:?}", api.reasons);
     // Reordered, not changed.
     assert_eq!(out.items["t::Same"].status, Status::Unchanged);
+}
+
+#[test]
+fn crate_versions_follow_the_workspace_and_publish() {
+    let tree = |version: &str| {
+        let dir = write_crate(&[
+            ("src/lib.rs", ""),
+            ("member/src/lib.rs", ""),
+            (
+                "member/Cargo.toml",
+                "[package]\nname = \"member-crate\"\nversion.workspace = true\npublish = false\n",
+            ),
+            ("tool/src/main.rs", "fn main() {}"),
+            ("tool/Cargo.toml", "[package]\nname = \"tool\"\n"),
+        ]);
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            format!(
+                "[workspace]\nmembers = [\"member\", \"tool\"]\n[workspace.package]\nversion = \"{version}\"\n[package]\nname = \"t\"\nversion = \"0.1.0\"\n"
+            ),
+        )
+        .unwrap();
+        dir
+    };
+    let (base, head) = (tree("1.4.2"), tree("2.0.0"));
+    let versions = crate::source::crate_versions(base.path(), head.path());
+    let v = |base: &str, head: &str, publish: bool| model::CrateVersion {
+        base: Some(base.into()),
+        head: Some(head.into()),
+        publish,
+    };
+    assert_eq!(versions["t"], v("0.1.0", "0.1.0", true));
+    assert_eq!(versions["member_crate"], v("1.4.2", "2.0.0", false));
+    // Binaries have no API.
+    assert_eq!(versions.len(), 2, "{versions:?}");
 }

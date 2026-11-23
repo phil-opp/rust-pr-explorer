@@ -291,14 +291,15 @@ fn item_row(
         None
     };
     let body = format!(
-        "{}{}",
+        "{}{}{}",
         d.api_reasons_html(it),
+        crate::impact::line_html(d, it),
         d.item_body_html(it, scope, false, src)
     );
     format!(
         r#"<div class="irow {} {} {} {}" data-id="{}">
         <div class="ihead"><span class="kind">{}</span>{} {} {} {}</div>
-        <div class="iacts">{}<button data-open="{}" title="Open on the canvas">Open ▸</button></div>
+        <div class="iacts">{}{}<button data-open="{}" title="Open on the canvas">Open ▸</button></div>
         {body}</div>"#,
         it.status.css(),
         if context { "context" } else { "" },
@@ -315,6 +316,13 @@ fn item_row(
         },
         d.api_badge(it),
         crate::review::control_html(&it.info.id),
+        crate::post::github_link(
+            d,
+            crate::post::item_loc(&d.out.files, it),
+            "gh-link",
+            "GitHub ↗",
+            "this item",
+        ),
         esc(&it.info.id),
     )
 }
@@ -501,7 +509,7 @@ pub fn render_overview(app: &App) {
             format!(
                 r#"<div class="irow"><div class="ihead"><a data-mod="{}" class="title-name"><span class="k-mod">{}</span></a>
                 <span class="dim">{} changed item{} not in the public API: {}</span><span class="rv-group">{}</span></div>
-                <div class="iacts"><button data-graph="{}">Internal call graph ▸</button></div></div>"#,
+                <div class="iacts"><button data-graph="{}">Internal call graph ▸</button></div>{}</div>"#,
                 esc(m),
                 esc(&d.mod_label(m)),
                 list.len(),
@@ -511,7 +519,8 @@ pub fn render_overview(app: &App) {
                     .collect::<Vec<_>>()
                     .join(", "),
                 crate::review::group_html(list.iter().map(|it| it.info.id.as_str())),
-                esc(m)
+                esc(m),
+                crate::impact::list_html(d, list),
             )
         })
         .collect();
@@ -575,29 +584,53 @@ pub fn render_overview(app: &App) {
 }
 
 /// How many public API changes are breaking, and the version bump that
-/// follows from that.
+/// follows from that: for each crate whose version is known, the exact
+/// version, and whether the PR's own version is enough.
 fn semver_summary(d: &Data) -> String {
+    use crate::bump::Level;
     use model::ApiLevel;
+    use std::collections::BTreeMap;
     let mut counts = [0usize; 3];
+    // The most severe level per crate.
+    let mut crates: BTreeMap<&str, Level> = BTreeMap::new();
     for it in d.items().filter(|it| d.in_public_api(it) && changed(it)) {
         if let Some(api) = &it.api {
-            counts[match api.level {
-                ApiLevel::Breaking => 0,
-                ApiLevel::Unknown => 1,
-                ApiLevel::Compatible => 2,
-            }] += 1;
+            let (i, level) = match api.level {
+                ApiLevel::Breaking => (0, Level::Breaking),
+                ApiLevel::Unknown => (1, Level::Unknown),
+                ApiLevel::Compatible => (2, Level::Compatible),
+            };
+            counts[i] += 1;
+            let krate = it.info.id.split("::").next().unwrap_or(&it.info.id);
+            let worst = crates.entry(krate).or_insert(level);
+            *worst = match (*worst, level) {
+                (Level::Breaking, _) | (_, Level::Breaking) => Level::Breaking,
+                (Level::Unknown, _) | (_, Level::Unknown) => Level::Unknown,
+                _ => Level::Compatible,
+            };
         }
     }
     let [breaking, unknown, compatible] = counts;
     if breaking + unknown + compatible == 0 {
         return String::new();
     }
-    let bump = if breaking > 0 {
-        "a major version bump (minor before 1.0)"
+    let versions: Vec<String> = crates
+        .iter()
+        .filter_map(|(name, level)| {
+            crate::bump::sentence(name, d.out.meta.versions.get(*name)?, *level)
+        })
+        .collect();
+    let bump = if !versions.is_empty() {
+        format!(
+            r#"<span title="Compared with the version on the base branch. If that one isn't released yet, the release may need less.">By Cargo's SemVer rules, {}</span>"#,
+            versions.join(" ")
+        )
+    } else if breaking > 0 {
+        "By Cargo's SemVer rules, this needs a major version bump (minor before 1.0).".to_string()
     } else if unknown > 0 {
-        "at least a minor version bump, depending on the changes to check by hand"
+        "By Cargo's SemVer rules, this needs at least a minor version bump, depending on the changes to check by hand.".to_string()
     } else {
-        "a minor version bump (patch before 1.0)"
+        "By Cargo's SemVer rules, this needs a minor version bump (patch before 1.0).".to_string()
     };
     let part = |n: usize, what: &str, css: &str| {
         (n > 0).then(|| format!(r#"<span class="api api-{css}">{n} {what}</span>"#))
@@ -611,7 +644,7 @@ fn semver_summary(d: &Data) -> String {
     .flatten()
     .collect();
     format!(
-        r#"<div class="semver-sum">{} <span class="dim">By Cargo's SemVer rules, this needs {bump}. Hover a label for why.</span></div>"#,
+        r#"<div class="semver-sum">{} <span class="dim">{bump} Hover a label for why.</span></div>"#,
         parts.join(" ")
     )
 }

@@ -4,6 +4,7 @@
 //! HTML strings; one listener per event type on the document dispatches
 //! on `data-*` attributes of the element that was clicked or dragged.
 
+mod bump;
 mod canvas;
 mod code;
 mod commit_filter;
@@ -11,6 +12,7 @@ mod css;
 mod data;
 mod dom;
 mod files;
+mod impact;
 mod js;
 mod keys;
 mod map;
@@ -20,6 +22,7 @@ mod post;
 mod review;
 mod route;
 mod settings;
+mod sha256;
 mod since;
 mod space;
 mod threads;
@@ -267,7 +270,8 @@ fn install_listeners() {
                 pick_search(app, i);
                 return;
             }
-            let _ = canvas::on_pointer_down(app, &el, &pev);
+            let _ =
+                canvas::on_pointer_down(app, &el, &pev) || space::on_pointer_down(app, &el, &pev);
         });
     });
     dom::listen(&doc, "pointermove", |ev| {
@@ -276,6 +280,7 @@ fn install_listeners() {
         };
         with_app(|app| {
             canvas::on_pointer_move(app, &pev);
+            space::on_pointer_move(app, &pev);
         });
     });
     // A touch the browser takes over (to scroll or zoom the page) ends
@@ -287,6 +292,7 @@ fn install_listeners() {
             };
             with_app(|app| {
                 canvas::on_pointer_up(app, &pev);
+                space::on_pointer_up(app);
             });
         });
     }
@@ -370,6 +376,21 @@ fn install_listeners() {
             && with_app(|app| keys::on_key(app, k)) == Some(true)
         {
             ev.prevent_default();
+            return;
+        }
+        // Ctrl+Z on the canvas closes what the last "calls" or "callers"
+        // click opened, unless typing (where it undoes the text).
+        if let Some(k) = ev.dyn_ref::<KeyboardEvent>()
+            && k.key().eq_ignore_ascii_case("z")
+            && (k.ctrl_key() || k.meta_key())
+            && !k.shift_key()
+            && !dom::target_element(&ev)
+                .is_some_and(|t| matches!(t.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT"))
+        {
+            let undone = with_app(|app| app.s.view == View::Canvas && canvas::undo_expansion(app));
+            if undone == Some(true) {
+                ev.prevent_default();
+            }
             return;
         }
         // Ctrl+Enter in the comment editor saves with its verdict.
@@ -486,6 +507,10 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
     }
     if let Some(b) = dom::closest(el, "[data-unfold], [data-unfold-all]") {
         canvas::on_unfold(app, &b);
+        return;
+    }
+    if let Some(b) = dom::closest(el, "[data-impact]") {
+        canvas::show_impact(app, &dom::data(&b, "impact").unwrap_or_default());
         return;
     }
     if dom::closest(el, "#view-canvas").is_some() && canvas::on_click(app, el) {
@@ -1015,8 +1040,9 @@ fn on_mouse_over(app: &mut App, el: &Element) {
         Some(id) => {
             let it = d.item(&id).unwrap();
             html.push_str(&format!(
-                "<div>{} · {}</div>",
+                "<div>{}{} · {}</div>",
                 it.info.kind.label(),
+                if it.info.test { " · test" } else { "" },
                 if d.external(&id).is_some() {
                     "outside the analyzed crates · click for its docs".to_string()
                 } else {
@@ -1085,11 +1111,12 @@ fn render_search(app: &mut App) {
         .enumerate()
         .map(|(i, it)| {
             format!(
-                r#"<div class="{}" data-i="{i}"><span class="dot {}"></span> <span class="kind">{}</span> {}</div>"#,
+                r#"<div class="{}" data-i="{i}"><span class="dot {}"></span> <span class="kind">{}</span> {} {}</div>"#,
                 if i == app.s.search_sel { "sel" } else { "" },
                 it.status.css(),
                 it.info.kind.label(),
-                esc(d.short_path(&it.info.id))
+                esc(d.short_path(&it.info.id)),
+                data::test_tag_of(it),
             )
         })
         .collect();

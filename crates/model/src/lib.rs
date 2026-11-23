@@ -200,6 +200,11 @@ pub struct ItemInfo {
     /// trait. Never part of the public API.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub test_only: bool,
+    /// A test function: marked `#[test]`, or by an attribute macro that
+    /// wraps it, such as `#[tokio::test]`. Set in integration tests too,
+    /// where `test_only` is not.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub test: bool,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -441,6 +446,19 @@ pub struct Meta {
     /// one touched. Empty without a git history (`dirs`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub commits: Vec<Commit>,
+    /// The library crates' versions in `Cargo.toml`, by crate name.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub versions: BTreeMap<String, CrateVersion>,
+}
+
+/// A library crate's version on both sides.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct CrateVersion {
+    /// `None`: the crate is new, or its version can't be read.
+    pub base: Option<String>,
+    pub head: Option<String>,
+    /// Whether the head's manifest allows publishing it.
+    pub publish: bool,
 }
 
 /// A commit of the compared range, and the changes of the page it made.

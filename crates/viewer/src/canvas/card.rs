@@ -1,5 +1,6 @@
 //! The HTML of one card: its tabs, the active item and its links.
 
+use super::open::Related;
 use super::{Canvas, Group};
 use crate::code::{Links, code_html, docs_html, esc};
 use crate::data::{Data, changed, kind_order};
@@ -46,6 +47,39 @@ fn hidden_badge(d: &Data, scope: &str, list: &[String], what: &str) -> String {
     )
 }
 
+/// A "calls", "callers" or "used by" button. Once clicked, it is shown
+/// pressed, and a second click closes the cards it opened.
+fn toggle_button(
+    c: &Canvas,
+    id: &str,
+    kind: Related,
+    act: &str,
+    title: &str,
+    label: &str,
+) -> String {
+    if c.is_expanded(id, kind) {
+        format!(
+            r#"<button data-act="{act}" class="on" aria-pressed="true" title="Close the cards this opened (Ctrl+Z closes the last ones opened)">{label}</button>"#
+        )
+    } else {
+        format!(
+            r#"<button data-act="{act}" title="{}">{label}</button>"#,
+            esc(title)
+        )
+    }
+}
+
+/// "GitHub ↗": the item's first changed line in the pull request's diff.
+fn gh_link(d: &Data, it: &Item) -> String {
+    crate::post::github_link(
+        d,
+        crate::post::item_loc(&d.out.files, it),
+        "gh-link",
+        "GitHub ↗",
+        "this item",
+    )
+}
+
 pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     let Some(it) = d.item(&g.active) else {
         return String::new();
@@ -88,10 +122,24 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         // Callers first: they open to the left of the card, callees to the
         // right.
         if !callers.is_empty() {
-            acts.push_str(&format!(r#"<button data-act="callers" title="Show what calls this">◂ callers <span class="n">{}</span></button>"#, callers.len()));
+            acts.push_str(&toggle_button(
+                c,
+                id,
+                Related::Callers,
+                "callers",
+                "Show what calls this",
+                &format!(r#"◂ callers <span class="n">{}</span>"#, callers.len()),
+            ));
         }
         if !callees.is_empty() {
-            acts.push_str(&format!(r#"<button data-act="callees" title="Show what this calls">calls ▸ <span class="n">{}</span></button>"#, callees.len()));
+            acts.push_str(&toggle_button(
+                c,
+                id,
+                Related::Callees,
+                "callees",
+                "Show what this calls",
+                &format!(r#"calls ▸ <span class="n">{}</span>"#, callees.len()),
+            ));
         }
         if !users.is_empty() {
             let mut ctxs: BTreeMap<UseCtx, usize> = BTreeMap::new();
@@ -103,10 +151,17 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
                 .map(|(c, n)| format!("{n} in {}", c.plural()))
                 .collect::<Vec<_>>()
                 .join(", ");
-            acts.push_str(&format!(
-                r#"<button data-act="uses" title="Show where this is used: {w}">◂ used by <span class="n">{} ({w})</span></button>"#,
-                users.len(),
-                w = esc(&wher)
+            acts.push_str(&toggle_button(
+                c,
+                id,
+                Related::UsedBy,
+                "uses",
+                &format!("Show where this is used: {wher}"),
+                &format!(
+                    r#"◂ used by <span class="n">{} ({})</span>"#,
+                    users.len(),
+                    esc(&wher)
+                ),
             ));
         }
         if !it.info.children.is_empty() {
@@ -219,12 +274,13 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
                     m.status.css()
                 };
                 html.push_str(&format!(
-                    r#"<div class="mitem {}"><span class="dot {dot}"></span><a class="ref" data-id="{}" data-kind="{}" data-path="{}">{}</a>{}</div>"#,
+                    r#"<div class="mitem {}"><span class="dot {dot}"></span><a class="ref" data-id="{}" data-kind="{}" data-path="{}">{}</a>{}{}</div>"#,
                     if m.info.vis_scope.is_some() { "private" } else { "" },
                     esc(&m.info.id),
                     m.info.kind.css(),
                     esc(&m.info.id),
                     esc(&m.info.name),
+                    crate::data::test_tag_of(m),
                     if m.info.vis_scope.is_some() { format!(r#"<span class="vis">{}</span>"#, esc(&m.info.vis_label)) } else { String::new() }
                 ));
             }
@@ -252,6 +308,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
             )
         })
         .unwrap_or_default();
+    let impact = crate::impact::line_html(d, it);
     let context = match (context, folded) {
         (false, _) => "",
         (true, false) => "context",
@@ -260,9 +317,9 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     format!(
         r#"<div class="card cs-{} {context}" data-gid="{}" style="left:{}px;top:{}px">
         {tabs}
-        <div class="card-h"><span class="kind">{}</span>{} {}<span class="grow"></span>{}<span class="x" data-close="{}" title="Close">×</span></div>
+        <div class="card-h"><span class="kind">{}</span>{} {}<span class="grow"></span>{}{}<span class="x" data-close="{}" title="Close">×</span></div>
         <div class="card-loc">{}</div>
-        <div class="card-b">{impl_header}{body}{}</div>{members}{}{}</div>"#,
+        <div class="card-b">{impl_header}{impact}{body}{}</div>{members}{}{}</div>"#,
         it.status.css(),
         g.gid,
         g.x,
@@ -271,6 +328,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         d.title_html(it, false),
         d.vis_html(it),
         d.status_html(it),
+        gh_link(d, it),
         esc(id),
         if external.is_some() {
             String::new()
