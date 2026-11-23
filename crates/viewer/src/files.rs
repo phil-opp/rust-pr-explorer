@@ -2,7 +2,8 @@
 //! definitions, Markdown sections, and plain line diffs for the rest.
 
 use crate::code::{
-    Links, Seg, code_html, esc, markdown_diff_segs, markdown_file_html, marked_html, sig_diff_html,
+    Links, Seg, code_html, esc, mark_changed_tokens, markdown_diff_segs, markdown_file_html,
+    marked_html, sig_diff_html,
 };
 use crate::data::Data;
 use crate::yaml;
@@ -32,18 +33,14 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
     // YAML block scalars span lines; each side keeps its own state.
     let (mut old_yaml, mut new_yaml) = (yaml::State::default(), yaml::State::default());
     let mut body = String::new();
+    // Removed lines whose changed words are marked.
+    let mut paired = vec![false; lines.len()];
+    let mut codes: Vec<String> = Vec::with_capacity(lines.len());
     for l in lines {
         if l.0 == '@' {
             (old_yaml, new_yaml) = (yaml::State::default(), yaml::State::default());
-            let mut it = l.1.split(' ').filter_map(|n| n.parse::<usize>().ok());
-            old_line = it.next().unwrap_or(1);
-            new_line = it.next().unwrap_or(1);
-            body.push_str(&format!(
-                r#"<span class="ln skip">⋯ line {new_line}</span>"#
-            ));
-            continue;
         }
-        let code = match lang {
+        codes.push(match lang {
             "rust" | "python" => code_html(d, &l.1, Links::None),
             "yaml" => match l.0 {
                 '-' => yaml::line_html(&mut old_yaml, &l.1),
@@ -54,9 +51,37 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
                 }
             },
             _ => esc(&l.1),
-        };
+        });
+    }
+    // Removed lines directly followed by added ones pair up (the first
+    // with the first, and so on) and get their changed words marked.
+    let mut i = 0;
+    while i < lines.len() {
+        let dels = lines[i..].iter().take_while(|l| l.0 == '-').count();
+        let adds = lines[i + dels..].iter().take_while(|l| l.0 == '+').count();
+        for k in 0..dels.min(adds) {
+            let (o, n) = (i + k, i + dels + k);
+            if let Some((a, b)) = mark_changed_tokens(&codes[o], &codes[n]) {
+                codes[o] = a;
+                codes[n] = b;
+                paired[o] = true;
+            }
+        }
+        i += (dels + adds).max(1);
+    }
+    for ((l, code), paired) in lines.iter().zip(codes).zip(paired) {
+        if l.0 == '@' {
+            let mut it = l.1.split(' ').filter_map(|n| n.parse::<usize>().ok());
+            old_line = it.next().unwrap_or(1);
+            new_line = it.next().unwrap_or(1);
+            body.push_str(&format!(
+                r#"<span class="ln skip">⋯ line {new_line}</span>"#
+            ));
+            continue;
+        }
         let (class, no) = match l.0 {
             '+' => ("add", new_line),
+            '-' if paired => ("del wl", old_line),
             '-' => ("del", old_line),
             _ => ("", new_line),
         };

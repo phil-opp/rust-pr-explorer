@@ -72,9 +72,8 @@ fn diff_segs(
     doc_comment: bool,
 ) -> Vec<Seg> {
     use similar::{Algorithm, DiffOp, capture_diff_slices};
-    let (old, new) = (clean_marks(old), clean_marks(new));
-    let (a, a_defs) = doc_blocks(&old);
-    let (b, b_defs) = doc_blocks(&new);
+    let (a, a_defs) = doc_blocks(old);
+    let (b, b_defs) = doc_blocks(new);
     let no_refs = BTreeMap::new();
     let block = |text: &str, defs: &str, refs: &BTreeMap<String, Ref>, bar: &'static str| {
         let html = if text.lines().all(is_link_def) {
@@ -95,6 +94,31 @@ fn diff_segs(
         };
         Seg::new(bar, html)
     };
+    // Changed blocks: their changed words marked in place, or, if that
+    // can't be shown well, the new blocks plus the old ones on demand.
+    let changed = |out: &mut Vec<Seg>, old: &[String], new: &[String]| {
+        // Both sides link the same way, so that only real changes differ.
+        let render = |blocks: &[String], defs: &str| -> String {
+            blocks
+                .iter()
+                .map(|t| block(t, defs, refs, "m-chg").html)
+                .collect()
+        };
+        if let Some(html) = word_diff_html(&render(old, &a_defs), &render(new, &b_defs)) {
+            out.push(Seg::new("m-chg", html));
+            return;
+        }
+        for t in new {
+            out.push(block(t, &b_defs, refs, "m-chg"));
+        }
+        let previous = marked_html(old.iter().map(|t| block(t, &a_defs, &no_refs, "m-del")));
+        out.push(Seg::new(
+            "",
+            format!(
+                r#"<details class="dblk-old"><summary>previous text</summary>{previous}</details>"#
+            ),
+        ));
+    };
     let mut out = Vec::new();
     for op in capture_diff_slices(Algorithm::Myers, &a, &b) {
         let (old_range, new_range) = (op.old_range(), op.new_range());
@@ -114,41 +138,13 @@ fn diff_segs(
                     out.push(block(t, &a_defs, &no_refs, "m-del"));
                 }
             }
-            DiffOp::Replace { .. }
-                if old_range.len() == new_range.len()
-                    && old_range
-                        .clone()
-                        .zip(new_range.clone())
-                        .all(|(i, j)| word_diff_md(&a[i], &b[j]).is_some()) =>
-            {
-                // Paragraphs that changed a few words: mark the words.
+            DiffOp::Replace { .. } if old_range.len() == new_range.len() => {
+                // Paragraph by paragraph.
                 for (i, j) in old_range.zip(new_range) {
-                    let md = word_diff_md(&a[i], &b[j]).unwrap_or_default();
-                    out.push(Seg::new(
-                        "m-chg",
-                        format!(
-                            r#"<div class="docs"><div class="dblk">{}</div></div>"#,
-                            marked_docs_html(d, &format!("{md}\n{b_defs}"), refs, doc_comment)
-                        ),
-                    ));
+                    changed(&mut out, &a[i..i + 1], &b[j..j + 1]);
                 }
             }
-            DiffOp::Replace { .. } => {
-                for t in &b[new_range] {
-                    out.push(block(t, &b_defs, refs, "m-chg"));
-                }
-                let previous = marked_html(
-                    a[old_range]
-                        .iter()
-                        .map(|t| block(t, &a_defs, &no_refs, "m-del")),
-                );
-                out.push(Seg::new(
-                    "",
-                    format!(
-                        r#"<details class="dblk-old"><summary>previous text</summary>{previous}</details>"#
-                    ),
-                ));
-            }
+            DiffOp::Replace { .. } => changed(&mut out, &a[old_range], &b[new_range]),
         }
     }
     out
@@ -160,91 +156,67 @@ pub fn docs_diff_html(d: &Data, old: &str, new: &str, refs: &BTreeMap<String, Re
     marked_html(docs_diff_segs(d, old, new, refs))
 }
 
-// Private-use characters that mark word changes in Markdown before it is
-// rendered; they are turned into tags afterwards.
-const INS_OPEN: char = '\u{E000}';
-const INS_CLOSE: char = '\u{E001}';
-const DEL_OPEN: char = '\u{E002}';
-const DEL_CLOSE: char = '\u{E003}';
-
-/// Words, runs of whitespace, and single other characters.
-fn word_tokens(s: &str) -> Vec<&str> {
+/// Splits rendered HTML into tags, character references, words, runs of
+/// whitespace and single other characters.
+fn html_tokens(s: &str) -> Vec<&str> {
     let mut out = Vec::new();
-    let mut start = 0;
-    let class = |c: char| {
-        if c.is_alphanumeric() || c == '_' {
-            0
-        } else if c.is_whitespace() {
-            1
-        } else {
-            2
-        }
-    };
-    let chars: Vec<(usize, char)> = s.char_indices().collect();
-    for k in 0..chars.len() {
-        let (i, c) = chars[k];
-        let end = chars.get(k + 1).map_or(s.len(), |&(j, _)| j);
-        let next = chars.get(k + 1).map(|&(_, n)| class(n));
-        if class(c) == 2 || next != Some(class(c)) {
-            out.push(&s[start..end]);
-            start = end;
-        }
-        let _ = i;
+    let mut rest = s;
+    while let Some(c) = rest.chars().next() {
+        let len = match c {
+            '<' => rest.find('>').map_or(1, |i| i + 1),
+            '&' => rest[..rest.len().min(12)]
+                .find(';')
+                .filter(|&i| rest[1..i].chars().all(|c| c.is_alphanumeric() || c == '#'))
+                .map_or(1, |i| i + 1),
+            c if c.is_whitespace() => rest
+                .find(|c: char| !c.is_whitespace())
+                .unwrap_or(rest.len()),
+            c if c.is_alphanumeric() || c == '_' => rest
+                .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+                .unwrap_or(rest.len()),
+            c => c.len_utf8(),
+        };
+        out.push(&rest[..len]);
+        rest = &rest[len..];
     }
     out
 }
 
-/// A paragraph's changes word by word, as Markdown with change marks, if
-/// that can be shown without changing how the Markdown parses: the change
-/// must not touch Markdown syntax, link text or targets, or the start of
-/// a line, and most of the text must be unchanged. `None` otherwise.
-pub(super) fn word_diff_md(old: &str, new: &str) -> Option<String> {
+fn is_tag(t: &str) -> bool {
+    t.starts_with('<') && t.len() > 1
+}
+
+/// Visible text other than whitespace.
+fn is_text(t: &str) -> bool {
+    !is_tag(t) && !t.trim().is_empty()
+}
+
+/// A paragraph's changes word by word: the new HTML with removed text in
+/// `<del>` and added text in `<ins>`. It keeps the new version's structure
+/// (removed text only brings along inline tags that open and close within
+/// it), so the result is valid wherever the new HTML is. `None` for code
+/// blocks, and for text rewritten so much that marking words won't help.
+pub(super) fn word_diff_html(old: &str, new: &str) -> Option<String> {
     use similar::{Algorithm, DiffOp, capture_diff_slices};
-    let fenced = |t: &str| {
-        let t = t.trim_start();
-        t.starts_with("```") || t.starts_with("~~~") || t.starts_with("    ")
-    };
-    if fenced(old) || fenced(new) || old.lines().any(is_link_def) || new.lines().any(is_link_def) {
+    if old.contains("<pre") || new.contains("<pre") {
         return None;
     }
-    let (a, b) = (word_tokens(old), word_tokens(new));
-    // Per token: whether it may be marked (not syntax, not inside a link's
-    // brackets or target, not at the start of a line).
-    let markable = |toks: &[&str]| -> Vec<bool> {
-        let mut out = Vec::with_capacity(toks.len());
-        // `target`: parenthesis depth inside a link destination, which
-        // may itself contain balanced parentheses.
-        let (mut bracket, mut target, mut angle) = (0i32, 0i32, false);
-        let mut line_start = true;
-        let mut prev = "";
-        for t in toks {
-            let syntax = t.chars().all(|c| "*_[]()<>#!|~`\\-+=:".contains(c))
-                || t.starts_with('_')
-                || t.ends_with('_');
-            let ws = t.chars().all(char::is_whitespace);
-            let inside = bracket > 0 || target > 0 || angle;
-            out.push(!syntax && !inside && !(line_start && !ws));
-            match *t {
-                "[" => bracket += 1,
-                "]" => bracket -= 1,
-                "(" if prev == "]" || target > 0 => target += 1,
-                ")" if target > 0 => target -= 1,
-                "<" => angle = true,
-                ">" => angle = false,
-                _ => {}
-            }
-            if t.contains('\n') {
-                line_start = true;
-            } else if !ws {
-                line_start = false;
-            }
-            prev = t;
-        }
-        out
+    let (a, b) = (html_tokens(old), html_tokens(new));
+    // A line break in a paragraph is just a space.
+    let norm = |toks: &[&str]| -> Vec<String> {
+        toks.iter()
+            .map(|t| {
+                if t.trim().is_empty() {
+                    " ".to_string()
+                } else {
+                    t.to_string()
+                }
+            })
+            .collect()
     };
-    let (ma, mb) = (markable(&a), markable(&b));
-    let ops = capture_diff_slices(Algorithm::Myers, &a, &b);
-    let words = |toks: &[&str]| toks.iter().filter(|t| !t.trim().is_empty()).count();
+    let (ka, kb) = (norm(&a), norm(&b));
+    let ops = capture_diff_slices(Algorithm::Myers, &ka, &kb);
+    let words = |toks: &[&str]| toks.iter().filter(|t| is_text(t)).count();
     let same: usize = ops
         .iter()
         .filter_map(|op| match op {
@@ -252,100 +224,201 @@ pub(super) fn word_diff_md(old: &str, new: &str) -> Option<String> {
             _ => None,
         })
         .sum();
-    if same * 2 < words(&a).max(words(&b)) {
+    // At least half of the shorter version must remain.
+    if same * 2 < words(&a).min(words(&b)) {
         return None;
     }
-    // Segments: unchanged token ranges, or changes (old range, new range).
-    // Changes separated only by whitespace are merged, so that a rewritten
-    // phrase reads as one removal and one insertion.
-    enum Seg {
-        Same(std::ops::Range<usize>),
-        Change(std::ops::Range<usize>, std::ops::Range<usize>),
-    }
-    let mut segs: Vec<Seg> = Vec::new();
+    // Segments: unchanged (old range, new range), or changed. Changes
+    // separated only by whitespace are merged, so that a rewritten phrase
+    // reads as one removal and one insertion.
+    type R = std::ops::Range<usize>;
+    let mut segs: Vec<(bool, R, R)> = Vec::new();
     for op in ops {
         let (o, n) = (op.old_range(), op.new_range());
-        match op {
-            DiffOp::Equal { .. } => segs.push(Seg::Same(n)),
-            _ => {
-                let ws_between = match segs.as_slice() {
-                    [.., Seg::Change(..), Seg::Same(r)] => {
-                        b[r.clone()].iter().all(|t| t.trim().is_empty())
+        if let DiffOp::Equal { .. } = op {
+            segs.push((false, o, n));
+            continue;
+        }
+        let ws_between = match segs.as_slice() {
+            [.., (true, ..), (false, _, r)] => {
+                !b[r.clone()].iter().any(|t| is_text(t) || is_tag(t))
+            }
+            _ => false,
+        };
+        if ws_between {
+            segs.pop();
+        }
+        match segs.last_mut() {
+            Some((true, po, pn)) => {
+                po.end = o.end;
+                pn.end = n.end;
+            }
+            _ => segs.push((true, o, n)),
+        }
+    }
+    // Short unchanged bits between changes ("of", "that", a comma) make a
+    // rewritten sentence hard to read: they join the changes around them
+    // when they are no longer than either.
+    let chars = |toks: &[&str]| -> usize {
+        toks.iter()
+            .filter(|t| is_text(t))
+            .map(|t| t.chars().count())
+            .sum()
+    };
+    let size = |o: &R, n: &R| chars(&a[o.clone()]).max(chars(&b[n.clone()]));
+    let mut k = 1;
+    while k + 1 < segs.len() {
+        let (chg, ref o, ref n) = segs[k];
+        let (before, after) = (&segs[k - 1], &segs[k + 1]);
+        if !chg
+            && before.0
+            && after.0
+            && size(o, n) <= size(&before.1, &before.2).min(size(&after.1, &after.2))
+        {
+            let (o_end, n_end) = (after.1.end, after.2.end);
+            segs[k - 1].1.end = o_end;
+            segs[k - 1].2.end = n_end;
+            segs.drain(k..k + 2);
+            k = k.saturating_sub(1).max(1);
+        } else {
+            k += 1;
+        }
+    }
+    // A change of tags alone (a link target, emphasis) would be invisible:
+    // extend it to the next word, which then shows as changed.
+    let mut k = 0;
+    while k < segs.len() {
+        let (chg, o, n) = segs[k].clone();
+        let tags_only = chg
+            && !a[o.clone()].iter().chain(&b[n.clone()]).any(|t| is_text(t))
+            && a[o.clone()].iter().chain(&b[n.clone()]).any(|t| is_tag(t));
+        if !tags_only {
+            k += 1;
+            continue;
+        }
+        // Swallow what follows up to and including the next word.
+        loop {
+            let (next_chg, so, sn) = segs.get(k + 1).cloned()?;
+            let word = b[sn.clone()].iter().position(|t| is_text(t));
+            match word {
+                Some(w) if !next_chg && w + 1 < sn.len() => {
+                    let cut = w + 1;
+                    segs[k].1.end = so.start + cut;
+                    segs[k].2.end = sn.start + cut;
+                    segs[k + 1] = (false, so.start + cut..so.end, sn.start + cut..sn.end);
+                    break;
+                }
+                _ => {
+                    segs[k].1.end = so.end;
+                    segs[k].2.end = sn.end;
+                    segs.remove(k + 1);
+                    let has_word = word.is_some() || a[so].iter().any(|t| is_text(t));
+                    if has_word {
+                        break;
                     }
-                    _ => false,
-                };
-                if ws_between {
-                    let Some(Seg::Same(r)) = segs.pop() else {
-                        unreachable!()
-                    };
-                    let Some(Seg::Change(po, pn)) = segs.pop() else {
-                        unreachable!()
-                    };
-                    // The whitespace is in both versions.
-                    let olen = r.len();
-                    segs.push(Seg::Change(
-                        po.start..po.end + olen + o.len(),
-                        pn.start..n.end,
-                    ));
-                } else if let Some(Seg::Change(po, pn)) = segs.last_mut()
-                    && po.end == o.start
-                    && pn.end == n.start
-                {
-                    po.end = o.end;
-                    pn.end = n.end;
-                } else {
-                    segs.push(Seg::Change(o, n));
                 }
             }
         }
+        // A change right after it (closing tags, say) joins it.
+        if let Some((true, no, nn)) = segs.get(k + 1).cloned() {
+            segs[k].1.end = no.end;
+            segs[k].2.end = nn.end;
+            segs.remove(k + 1);
+        }
+        k += 1;
     }
     let mut out = String::new();
-    let mark = |out: &mut String, toks: &[&str], ok: &[bool], open: char, close: char| -> bool {
-        if toks.is_empty() {
-            return true;
+    for (chg, o, n) in segs {
+        if !chg {
+            out.push_str(&b[n].concat());
+            continue;
         }
-        if toks.iter().any(|t| t.contains('\n')) || !ok.iter().all(|&m| m) {
-            return false;
+        let (old, new) = (&a[o], &b[n]);
+        if old.iter().any(|t| is_text(t)) {
+            let keep_tags = inline_balanced(old);
+            let text: String = old
+                .iter()
+                .filter(|t| keep_tags || !is_tag(t))
+                .copied()
+                .collect();
+            // Spaces before it stay outside the mark, as for insertions.
+            out.push_str(&text[..text.len() - text.trim_start().len()]);
+            out.push_str(&format!(r#"<del class="wd">{}</del>"#, text.trim()));
         }
-        out.push(open);
-        out.push_str(&toks.concat());
-        out.push(close);
-        true
-    };
-    for seg in segs {
-        let fine = match seg {
-            Seg::Same(n) => {
-                out.push_str(&b[n].concat());
-                true
+        // The new tokens in order, their text marked: as a whole if its
+        // tags are inline ones, else between the tags.
+        if new.iter().any(|t| is_text(t)) && inline_balanced(new) {
+            let run = new.concat();
+            let inner = run.trim();
+            let lead = &run[..run.len() - run.trim_start().len()];
+            let trail = &run[run.trim_end().len()..];
+            out.push_str(&format!(r#"{lead}<ins class="wd">{inner}</ins>{trail}"#));
+            continue;
+        }
+        let mut k = 0;
+        while k < new.len() {
+            if is_tag(new[k]) {
+                out.push_str(new[k]);
+                k += 1;
+                continue;
             }
-            Seg::Change(o, n) => {
-                mark(&mut out, &a[o.clone()], &ma[o], DEL_OPEN, DEL_CLOSE)
-                    && mark(&mut out, &b[n.clone()], &mb[n], INS_OPEN, INS_CLOSE)
+            let end = new[k..]
+                .iter()
+                .position(|t| is_tag(t))
+                .map_or(new.len(), |e| k + e);
+            let run = new[k..end].concat();
+            if new[k..end].iter().any(|t| is_text(t)) {
+                // Spaces around the words stay outside the mark.
+                let inner = run.trim();
+                let lead = &run[..run.len() - run.trim_start().len()];
+                let trail = &run[run.trim_end().len()..];
+                out.push_str(&format!(r#"{lead}<ins class="wd">{inner}</ins>{trail}"#));
+            } else {
+                out.push_str(&run);
             }
-        };
-        if !fine {
-            return None;
+            k = end;
         }
     }
     Some(out)
 }
 
-/// Renders Markdown carrying word change marks.
-fn marked_docs_html(d: &Data, md: &str, refs: &BTreeMap<String, Ref>, doc_comment: bool) -> String {
-    render_markdown(d, md, refs, doc_comment)
-        .replace(INS_OPEN, r#"<ins class="wd">"#)
-        .replace(INS_CLOSE, "</ins>")
-        .replace(DEL_OPEN, r#"<del class="wd">"#)
-        .replace(DEL_CLOSE, "</del>")
+/// Whether the tags among some tokens are inline ones that each close
+/// again among them, so that they can be kept in removed text.
+fn inline_balanced(toks: &[&str]) -> bool {
+    let mut stack = Vec::new();
+    for t in toks.iter().filter(|t| is_tag(t)) {
+        let (close, body) = match t.strip_prefix("</") {
+            Some(b) => (true, b),
+            None => (false, &t[1..]),
+        };
+        let name: String = body
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric())
+            .collect();
+        if !matches!(
+            name.as_str(),
+            "code" | "em" | "strong" | "a" | "span" | "del"
+        ) {
+            return false;
+        }
+        if close {
+            if stack.pop() != Some(name) {
+                return false;
+            }
+        } else {
+            stack.push(name);
+        }
+    }
+    stack.is_empty()
 }
 
 /// Docs before and after, side by side, with changed paragraphs aligned.
 pub fn docs_compare_html(d: &Data, it: &model::Item) -> String {
     use similar::{Algorithm, DiffOp, capture_diff_slices};
-    let old = clean_marks(it.old_docs.as_deref().unwrap_or(""));
-    let new = clean_marks(&it.info.docs);
-    let (a, a_defs) = doc_blocks(&old);
-    let (b, b_defs) = doc_blocks(&new);
+    let old = it.old_docs.as_deref().unwrap_or("");
+    let new = &it.info.docs;
+    let (a, a_defs) = doc_blocks(old);
+    let (b, b_defs) = doc_blocks(new);
     let no_refs = BTreeMap::new();
     let render =
         |blocks: &[String], defs: &str, refs: &BTreeMap<String, Ref>, bar: &'static str| {
@@ -386,7 +459,77 @@ pub fn docs_compare_html(d: &Data, it: &model::Item) -> String {
     )
 }
 
-/// Removes the characters used as change marks from text to render.
-fn clean_marks(s: &str) -> String {
-    s.replace([INS_OPEN, INS_CLOSE, DEL_OPEN, DEL_CLOSE], "\u{FFFD}")
+/// Two versions of a changed line of highlighted code, with the text that
+/// differs between them wrapped in `<span class="wc">`. Only the text is
+/// compared, not the highlighting or links around it, and a change of
+/// whitespace alone isn't marked. `None` if less than half of the shorter
+/// line remains, where marking words wouldn't help.
+pub fn mark_changed_tokens(old: &str, new: &str) -> Option<(String, String)> {
+    use similar::{Algorithm, DiffOp, capture_diff_slices};
+    let (a, b) = (html_tokens(old), html_tokens(new));
+    // Positions of the text tokens, and what they are compared by.
+    let text = |toks: &[&str]| -> (Vec<usize>, Vec<String>) {
+        toks.iter()
+            .enumerate()
+            .filter(|(_, t)| !is_tag(t))
+            .map(|(i, t)| {
+                let key = if t.trim().is_empty() { " " } else { t };
+                (i, key.to_string())
+            })
+            .unzip()
+    };
+    let ((ia, ka), (ib, kb)) = (text(&a), text(&b));
+    let mut changed_a = vec![false; a.len()];
+    let mut changed_b = vec![false; b.len()];
+    let mut same = 0;
+    for op in capture_diff_slices(Algorithm::Myers, &ka, &kb) {
+        if let DiffOp::Equal { new_index, len, .. } = op {
+            same += ib[new_index..new_index + len]
+                .iter()
+                .filter(|&&i| is_text(b[i]))
+                .count();
+            continue;
+        }
+        for &i in &ia[op.old_range()] {
+            changed_a[i] = is_text(a[i]);
+        }
+        for &i in &ib[op.new_range()] {
+            changed_b[i] = is_text(b[i]);
+        }
+    }
+    let words = |toks: &[&str]| toks.iter().filter(|t| is_text(t)).count();
+    if same * 2 < words(&a).min(words(&b)) {
+        return None;
+    }
+    // Marks runs of changed text; whitespace between two changed tokens
+    // of a run belongs to it.
+    let render = |toks: &[&str], changed: &[bool]| -> String {
+        let mut out = String::new();
+        let mut open = false;
+        for (k, t) in toks.iter().enumerate() {
+            let inner_ws = !is_tag(t)
+                && !is_text(t)
+                && open
+                && toks[k + 1..]
+                    .iter()
+                    .zip(&changed[k + 1..])
+                    .find(|(t, _)| is_tag(t) || is_text(t))
+                    .is_some_and(|(t, &c)| !is_tag(t) && c);
+            let mark = changed[k] || inner_ws;
+            if open && !mark {
+                out.push_str("</span>");
+                open = false;
+            }
+            if mark && !open {
+                out.push_str(r#"<span class="wc">"#);
+                open = true;
+            }
+            out.push_str(t);
+        }
+        if open {
+            out.push_str("</span>");
+        }
+        out
+    };
+    Some((render(&a, &changed_a), render(&b, &changed_b)))
 }
