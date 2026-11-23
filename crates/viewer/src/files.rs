@@ -7,7 +7,7 @@ use crate::code::{
 };
 use crate::data::Data;
 use crate::yaml;
-use model::{ChangedFile, ManifestChange, PyChange, SourceLine, Status};
+use model::{ChangedFile, Kind, ManifestChange, PyChange, SourceLine, Status};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Changes up to this many lines are shown directly, larger ones folded.
@@ -353,13 +353,28 @@ pub fn markdown_html(d: &Data, old: &str, new: &str) -> String {
 }
 
 fn file_card(d: &Data, f: &ChangedFile) -> String {
+    // An analyzed file's items are on its module's page; what is left here
+    // is code that belongs to no item.
+    let module = f
+        .analyzed
+        .then(|| {
+            d.items()
+                .find(|it| it.info.kind == Kind::Mod && it.info.file == f.path)
+        })
+        .flatten();
     let outside = if f.analyzed {
         format!(
-            r#"<div class="mark m-chg"><div class="note">{} changed line{} of this file {} outside every item (a macro invocation without a name, an <code>extern</code> block, test code, …), so the items above don't show {}. The line diff shows the whole file.</div></div>"#,
+            r#"<div class="note">This file's items and docs are shown {}. Below are only the {} changed line{} that belong to no item, such as test code, a macro call or an <code>extern</code> block.</div>"#,
+            match module {
+                Some(m) => format!(
+                    r#"on the page of <a data-mod="{}"><code>{}</code></a>"#,
+                    esc(&m.info.id),
+                    esc(&d.mod_label(&m.info.id))
+                ),
+                None => "with the Rust items".to_string(),
+            },
             f.outside_items,
             if f.outside_items == 1 { "" } else { "s" },
-            if f.outside_items == 1 { "is" } else { "are" },
-            if f.outside_items == 1 { "it" } else { "them" },
         )
     } else {
         String::new()
@@ -384,16 +399,27 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
     } else if f.hunks.is_empty() {
         String::new()
     } else {
-        let small = f.added + f.removed <= SMALL && structured.is_empty();
+        let small = if f.analyzed {
+            f.outside_items <= SMALL
+        } else {
+            f.added + f.removed <= SMALL && structured.is_empty()
+        };
         format!(
             r#"<details class="src" {}><summary>{} {}</summary>{}</details>"#,
             if small { "open" } else { "" },
-            if structured.is_empty() {
+            if f.analyzed {
+                "Lines outside items"
+            } else if structured.is_empty() {
                 "Diff"
             } else {
                 "Line diff"
             },
-            stats(f.added, f.removed),
+            if f.analyzed {
+                // The hunks' context lines are not part of the count.
+                format!(r#"<span class="dim">{}</span>"#, f.outside_items)
+            } else {
+                stats(f.added, f.removed)
+            },
             hunks_html(d, &f.hunks, &f.lang)
         )
     };

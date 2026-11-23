@@ -438,6 +438,8 @@ pub struct ChangedFile {
     pub removed: u32,
     /// The changed lines with 3 lines of context. `@` lines start a hunk
     /// and hold "old_line new_line". Empty for binary or very large files.
+    /// For an analyzed file, only the changes outside every item (the
+    /// items show the others).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hunks: Vec<SourceLine>,
     /// The file was too large to diff line by line.

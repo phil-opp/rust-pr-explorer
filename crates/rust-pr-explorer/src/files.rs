@@ -228,14 +228,59 @@ pub fn changed_files(base: &Path, head: &Path, skip: &[&str]) -> Vec<ChangedFile
     out
 }
 
+/// A range of lines, 1-based and inclusive.
+pub type Span = (usize, usize);
+
+/// Line spans of a Rust file's imports (`use`,
+/// `extern crate`) and module declarations (`mod name;`), with their
+/// attributes: they show in the items they affect, not as code of their
+/// own. Empty if the file doesn't parse.
+pub fn declaration_lines(text: &str) -> Vec<Span> {
+    use syn::spanned::Spanned;
+    fn walk(items: &[syn::Item], out: &mut Vec<(usize, usize)>) {
+        for item in items {
+            let attrs = match item {
+                syn::Item::Use(u) => &u.attrs,
+                syn::Item::ExternCrate(e) => &e.attrs,
+                syn::Item::Mod(m) if m.content.is_none() => &m.attrs,
+                syn::Item::Mod(m) => {
+                    if let Some((_, inner)) = &m.content {
+                        walk(inner, out);
+                    }
+                    continue;
+                }
+                _ => continue,
+            };
+            let start = attrs
+                .iter()
+                .map(|a| a.span().start().line)
+                .chain([item.span().start().line])
+                .min()
+                .unwrap_or(0);
+            out.push((start, item.span().end().line));
+        }
+    }
+    let mut out = Vec::new();
+    if let Ok(file) = syn::parse_file(text) {
+        walk(&file.items, &mut out);
+    }
+    out
+}
+
 /// How many changed lines of an analyzed Rust file lie outside every
 /// item: changes the item view doesn't show. Imports and module
-/// declarations (their effect is on the items), blank lines and comments
-/// don't count.
-pub fn outside_items<'a>(file: &ChangedFile, items: impl Iterator<Item = &'a model::Item>) -> u32 {
+/// declarations (their effect is on the items; `decls` are their lines in
+/// the base and head file, from [`declaration_lines`]), blank lines and
+/// comments don't count. Returns their number, and the hunks reduced to
+/// them (with context).
+pub fn outside_items<'a>(
+    file: &ChangedFile,
+    items: impl Iterator<Item = &'a model::Item>,
+    decls: (&[Span], &[Span]),
+) -> (u32, Vec<SourceLine>) {
     // Line spans (1-based, inclusive) of the items on each side.
-    let mut old: Vec<(usize, usize)> = Vec::new();
-    let mut new: Vec<(usize, usize)> = Vec::new();
+    let mut old: Vec<(usize, usize)> = decls.0.to_vec();
+    let mut new: Vec<(usize, usize)> = decls.1.to_vec();
     for it in items.filter(|i| i.info.kind != model::Kind::Mod) {
         let count = |tags: &[char]| it.source.iter().filter(|l| tags.contains(&l.0)).count();
         let old_file = it.old_file.as_deref().unwrap_or(&it.info.file);
@@ -264,34 +309,61 @@ pub fn outside_items<'a>(file: &ChangedFile, items: impl Iterator<Item = &'a mod
             || ((t.starts_with("impl ") || t.starts_with("impl<") || t.starts_with("unsafe impl"))
                 && t.ends_with('{'))
     };
+    // Each line of the hunks with its base and head line numbers, and
+    // whether it is a change outside every item.
     let (mut o, mut n) = (0usize, 0usize);
-    let mut count = 0;
+    let mut rows: Vec<(usize, usize, bool)> = Vec::new();
     for l in &file.hunks {
-        match l.0 {
+        let (lo, ln) = (o, n);
+        let outside = match l.0 {
             '@' => {
                 let mut it = l.1.split(' ').filter_map(|x| x.parse::<usize>().ok());
                 o = it.next().unwrap_or(1);
                 n = it.next().unwrap_or(1);
+                false
             }
             '+' => {
-                if !inside(&new, n) && !ignorable(&l.1) {
-                    count += 1;
-                }
                 n += 1;
+                !inside(&new, ln) && !ignorable(&l.1)
             }
             '-' => {
-                if !inside(&old, o) && !ignorable(&l.1) {
-                    count += 1;
-                }
                 o += 1;
+                !inside(&old, lo) && !ignorable(&l.1)
             }
             _ => {
                 o += 1;
                 n += 1;
+                false
             }
+        };
+        rows.push((lo, ln, outside));
+    }
+    let count = rows.iter().filter(|r| r.2).count() as u32;
+    // Only those changes, with context, in hunks of their own.
+    let mut out = Vec::new();
+    let mut open = false;
+    for (i, l) in file.hunks.iter().enumerate() {
+        let keep = l.0 != '@' && (rows[i].2 || near_change(&rows, &file.hunks, i));
+        if keep {
+            if !open {
+                out.push(SourceLine('@', format!("{} {}", rows[i].0, rows[i].1)));
+                open = true;
+            }
+            out.push(l.clone());
+        } else {
+            open = false;
         }
     }
-    count
+    (count, out)
+}
+
+/// Whether hunk line `i` is within [`CONTEXT`] lines of a change outside
+/// every item, in the same hunk.
+fn near_change(rows: &[(usize, usize, bool)], hunks: &[SourceLine], i: usize) -> bool {
+    let same_hunk = |a: usize, b: usize| !hunks[a.min(b) + 1..=a.max(b)].iter().any(|l| l.0 == '@');
+    let lo = i.saturating_sub(CONTEXT);
+    let hi = (i + CONTEXT).min(rows.len() - 1);
+    (lo..=hi).any(|j| rows[j].2 && same_hunk(i, j))
 }
 
 /// One `Cargo.toml` entry as written, on one line.
