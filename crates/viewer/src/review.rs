@@ -565,9 +565,10 @@ pub fn load(d: &Data) {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     notes.retain(|id, _| marks.contains_key(id));
+    // On unless the reader turned it off before.
     let on = store
         .and_then(|s| s.get_item(MODE_KEY).ok().flatten())
-        .is_some_and(|v| v == "on");
+        .is_none_or(|v| v != "off");
     let (hunks, prints) = hunks_and_prints(d, &units);
     let order = call_order(d, &units);
     REVIEW.with(|r| {
@@ -857,12 +858,12 @@ fn snippet(text: &str) -> String {
 /// just the unit.
 fn actions(id: &str) -> String {
     if hunk_item(id).is_some() {
-        return r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve only this change">✓ Approve change</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change here">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on this change">✎ Comment</button>"#.to_string();
+        return r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve only this change (a, after j/k)">✓ Approve change</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change here (r, after j/k)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on this change (c, after j/k)">✎ Comment</button>"#.to_string();
     }
     let n = hunks_of(id).len();
     if n > 1 {
         return format!(
-            r#"<span class="rv-scope" title="These buttons give the whole item one verdict. Each change also has its own buttons.">Whole item ({n} changes):</span><button class="rv-btn approve" data-rv-act="approve" title="Approve the whole item and go to the next one">✓ Approve item</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on the whole item">✎ Comment</button>"#
+            r#"<span class="rv-scope" title="These buttons give the whole item one verdict. Each change also has its own buttons.">Whole item ({n} changes):</span><button class="rv-btn approve" data-rv-act="approve" title="Approve the whole item and go to the next one (a)">✓ Approve item</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on the whole item (c)">✎ Comment</button>"#
         );
     }
     ACTIONS.to_string()

@@ -21,6 +21,7 @@ mod route;
 mod settings;
 mod since;
 mod space;
+mod threads;
 mod yaml;
 
 use code::esc;
@@ -487,7 +488,7 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         canvas::show_module_graph(app, &dom::data(&b, "graph").unwrap_or_default());
         return;
     }
-    if let Some(f) = dom::closest(el, "#sidebar [data-goto-file]") {
+    if let Some(f) = dom::closest(el, "[data-goto-file]") {
         let path = dom::data(&f, "goto-file").unwrap_or_default();
         set_view(app, View::Overview);
         if let Some(card) = dom::query_all("#view-overview .ientry.file[data-file]")
