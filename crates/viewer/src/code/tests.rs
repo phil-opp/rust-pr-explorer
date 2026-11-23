@@ -664,3 +664,14 @@ fn changed_code_lines_mark_changed_tokens() {
     // A different line: no marks.
     assert_eq!(mark_changed_tokens("one two three", "four five six"), None);
 }
+
+#[test]
+fn ampersand_before_multibyte_text_does_not_panic() {
+    // The 12th byte after `&` falls inside `⋯`.
+    let (old, new) = mark_changed_tokens("a &amp; x ⋯ y", "a &amp;  x⋯⋯ z").unwrap();
+    assert!(
+        old.contains("&amp;") && new.contains("&amp;"),
+        "{old} {new}"
+    );
+    assert!(word_diff_html("&a b c ⋯ d", "&a b c ⋯ e").is_some());
+}

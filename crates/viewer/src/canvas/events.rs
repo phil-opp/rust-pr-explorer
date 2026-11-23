@@ -7,6 +7,7 @@ use super::{
     open::{Related, close_tab, expand, members_as_tabs},
     place, render, visible,
 };
+use crate::data::within;
 use crate::{App, View, dom, toast};
 use web_sys::{Element, PointerEvent, WheelEvent};
 
@@ -106,10 +107,35 @@ pub fn on_pointer_down(app: &mut App, el: &Element, ev: &PointerEvent) -> bool {
         return false;
     }
     let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
+    let d = app.d.clone();
     let c = &mut app.s.canvas;
+    if let Some(frame) = dom::closest(el, "[data-frame]") {
+        let m = dom::data(&frame, "frame").unwrap_or_default();
+        ev.prevent_default();
+        let cards = c
+            .groups
+            .iter()
+            .filter(|g| {
+                visible(&d, c, g) && d.item(&g.active).is_some_and(|it| within(d.mod_of(it), &m))
+            })
+            .map(|g| (g.gid, g.x, g.y))
+            .collect();
+        c.drag = Some(Drag::Frame {
+            sx: x,
+            sy: y,
+            cards,
+        });
+        return true;
+    }
     if let Some(card) = dom::closest(el, ".card") {
-        let handle = dom::closest(el, ".card-h, .card-tabs").is_some();
-        if !handle || dom::closest(el, "[data-close], button, a").is_some() {
+        // Cards are moved by their header, tabs, location line, footer, or
+        // border; not by code or text, which can be selected.
+        let handle = el == &card
+            || dom::closest(el, ".card-h, .card-tabs, .card-loc").is_some()
+            || el
+                .matches(".card-foot, .card-acts, .card-rv")
+                .unwrap_or(false);
+        if !handle || dom::closest(el, "[data-close], button, a, input, textarea").is_some() {
             return false;
         }
         let Some(gi) = dom::data(&card, "gid")
@@ -179,6 +205,20 @@ pub fn on_pointer_move(app: &mut App, ev: &PointerEvent) {
                 dom::toggle_class(&target, "hover-target", true);
             }
         }
+        Some(Drag::Frame { sx, sy, ref cards }) => {
+            let (dx, dy) = ((x - sx) / c.pan.k, (y - sy) / c.pan.k);
+            for &(gid, gx, gy) in cards {
+                let Some(gi) = c.by_gid(gid) else { continue };
+                let g = &mut c.groups[gi];
+                g.x = gx + dx;
+                g.y = gy + dy;
+                if let Some(el) = card_el(gid) {
+                    dom::set_style(&el, "left", &format!("{}px", g.x));
+                    dom::set_style(&el, "top", &format!("{}px", g.y));
+                }
+            }
+            draw_edges(app);
+        }
         Some(Drag::Pan { sx, sy, px, py }) => {
             c.pan.x = px + x - sx;
             c.pan.y = py + y - sy;
@@ -222,25 +262,67 @@ pub fn on_pointer_up(app: &mut App, ev: &PointerEvent) {
     }
 }
 
+/// Wheel input as in other canvas and map tools: scrolling moves the view
+/// vertically, Shift+scrolling horizontally, and Ctrl+scrolling (or a
+/// pinch on a touchpad, which arrives as such) zooms around the pointer.
+/// A sideways touchpad swipe moves the view horizontally.
 pub fn on_wheel(app: &mut App, el: &Element, ev: &WheelEvent) {
-    if dom::closest(el, ".card").is_some() && !ev.ctrl_key() {
-        return;
-    }
-    ev.prevent_default();
     let Some(vp) = dom::by_id("viewport") else {
         return;
     };
     let r = vp.get_bounding_client_rect();
-    let (mx, my) = (
-        ev.client_x() as f64 - r.left(),
-        ev.client_y() as f64 - r.top(),
-    );
+    // Deltas in lines or pages, as some mice send them, in pixels.
+    let unit = match ev.delta_mode() {
+        WheelEvent::DOM_DELTA_LINE => 16.0,
+        WheelEvent::DOM_DELTA_PAGE => r.height(),
+        _ => 1.0,
+    };
+    let (mut dx, mut dy) = (ev.delta_x() * unit, ev.delta_y() * unit);
     let c = &mut app.s.canvas;
-    let k = (c.pan.k * (-ev.delta_y() * 0.0015).exp()).clamp(0.2, 2.0);
-    c.pan.x = mx - (mx - c.pan.x) * k / c.pan.k;
-    c.pan.y = my - (my - c.pan.y) * k / c.pan.k;
-    c.pan.k = k;
+    if ev.ctrl_key() || ev.meta_key() {
+        ev.prevent_default();
+        let (mx, my) = (
+            ev.client_x() as f64 - r.left(),
+            ev.client_y() as f64 - r.top(),
+        );
+        let k = (c.pan.k * (-dy * 0.0015).exp()).clamp(0.2, 2.0);
+        c.pan.x = mx - (mx - c.pan.x) * k / c.pan.k;
+        c.pan.y = my - (my - c.pan.y) * k / c.pan.k;
+        c.pan.k = k;
+        apply_pan(c);
+        return;
+    }
+    if ev.shift_key() && dx == 0.0 {
+        (dx, dy) = (dy, 0.0);
+    }
+    // Leave sideways scrolling to code that is wider than its card.
+    if dy == 0.0 && scrolls_sideways(el, dx) {
+        return;
+    }
+    ev.prevent_default();
+    c.pan.x -= dx;
+    c.pan.y -= dy;
     apply_pan(c);
+}
+
+/// Whether a sideways scrolling box around `el` inside its card (code
+/// blocks, tabs) can still scroll by `dx`.
+fn scrolls_sideways(el: &Element, dx: f64) -> bool {
+    let mut cur = Some(el.clone());
+    while let Some(e) = cur {
+        if e.class_list().contains("card") {
+            return false;
+        }
+        let max = (e.scroll_width() - e.client_width()) as f64;
+        if max > 0.0 && e.matches("pre, .sig, .sbs, .card-tabs").unwrap_or(false) {
+            let left = e.scroll_left() as f64;
+            if (dx < 0.0 && left > 0.0) || (dx > 0.0 && left < max - 1.0) {
+                return true;
+            }
+        }
+        cur = e.parent_element();
+    }
+    false
 }
 
 /// Remembers which source views are expanded across re-renders.

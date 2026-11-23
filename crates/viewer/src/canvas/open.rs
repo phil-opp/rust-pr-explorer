@@ -1,7 +1,7 @@
 //! Opening and closing cards and tabs, and expanding an item's relatives.
 
 use super::{
-    CARD_W, EXPAND_LIMIT, apply_pan, card_el, edges::draw_edges, height_of, place, render,
+    CARD_W, EXPAND_LIMIT, apply_pan, card_el, edges::draw_edges, height_of, place, render, visible,
 };
 use crate::data::changed;
 use crate::{App, View, dom, toast};
@@ -9,8 +9,50 @@ use model::{Item, Kind};
 
 /// Places `id` on the canvas, next to the card of `from` if given.
 pub fn open(app: &mut App, id: &str, from: Option<&str>, switch_view: bool) {
+    open_at(app, id, from, switch_view, None);
+}
+
+/// Opens the next item to review, for a top-down walk through the call
+/// graph: right of a card that calls it, in the next column, or else in a
+/// new column right of every card. Then moves the view to it.
+pub fn open_for_review(app: &mut App, id: &str, reviewed: Option<&str>) {
     let d = app.d.clone();
-    let Some(it) = d.item(id) else { return };
+    let c = &app.s.canvas;
+    let vis: Vec<&super::Group> = c.groups.iter().filter(|g| visible(&d, c, g)).collect();
+    let caller = d.callers.get(id).and_then(|callers| {
+        // Prefer the card just reviewed.
+        let on = |f: &str| vis.iter().copied().find(|g| g.active == f);
+        reviewed
+            .filter(|r| callers.iter().any(|f| f == r))
+            .and_then(on)
+            .or_else(|| callers.iter().find_map(|f| on(f)))
+    });
+    let at = (c.group_of(id).is_none() && !vis.is_empty()).then(|| match caller {
+        Some(g) => (g.x + CARD_W + 120.0, g.y),
+        None => {
+            let x = vis.iter().map(|g| g.x).fold(f64::MIN, f64::max) + CARD_W + 120.0;
+            let y = reviewed
+                .and_then(|r| vis.iter().find(|g| g.active == r))
+                .map_or_else(|| vis.iter().map(|g| g.y).fold(f64::MAX, f64::min), |g| g.y);
+            (x, y)
+        }
+    });
+    let from = caller.map(|g| g.active.clone());
+    if let Some(gid) = open_at(app, id, from.as_deref(), true, at) {
+        // Also when the card is partly in view.
+        reveal(gid, true);
+    }
+}
+
+fn open_at(
+    app: &mut App,
+    id: &str,
+    from: Option<&str>,
+    switch_view: bool,
+    at: Option<(f64, f64)>,
+) -> Option<u32> {
+    let d = app.d.clone();
+    let it = d.item(id)?;
     let c = &mut app.s.canvas;
     if !d.visible_from(id, &c.scope) {
         let before = d.mod_label(&c.scope);
@@ -27,9 +69,10 @@ pub fn open(app: &mut App, id: &str, from: Option<&str>, switch_view: bool) {
             gi
         }
         None => {
-            let (x, y) = match from.and_then(|f| c.group_of(f)) {
-                Some(fi) => (c.groups[fi].x + CARD_W + 80.0, c.groups[fi].y),
-                None => {
+            let (x, y) = match (at, from.and_then(|f| c.group_of(f))) {
+                (Some(at), _) => at,
+                (None, Some(fi)) => (c.groups[fi].x + CARD_W + 80.0, c.groups[fi].y),
+                (None, None) => {
                     let width = dom::by_id("viewport")
                         .map_or(1000.0, |v| v.get_bounding_client_rect().width());
                     (
@@ -62,8 +105,9 @@ pub fn open(app: &mut App, id: &str, from: Option<&str>, switch_view: bool) {
     flash(gid);
     settle(gid);
     if switch_view {
-        ensure_visible(gid);
+        reveal(gid, false);
     }
+    Some(gid)
 }
 
 /// After a new card is rendered, moves it if its real height makes it
@@ -93,7 +137,9 @@ fn flash(gid: u32) {
     });
 }
 
-fn ensure_visible(gid: u32) {
+/// Moves the view to a card: always if `force`, otherwise only if the card
+/// is out of view.
+fn reveal(gid: u32, force: bool) {
     dom::raf(move || {
         crate::with_app(|app| {
             let c = &mut app.s.canvas;
@@ -105,7 +151,7 @@ fn ensure_visible(gid: u32) {
             let g = &c.groups[gi];
             let sx = g.x * c.pan.k + c.pan.x;
             let sy = g.y * c.pan.k + c.pan.y;
-            if sx < 0.0 || sy < 0.0 || sx > r.width() - 100.0 || sy > r.height() - 100.0 {
+            if force || sx < 0.0 || sy < 0.0 || sx > r.width() - 100.0 || sy > r.height() - 100.0 {
                 c.pan.x = r.width() / 2.0 - (g.x + CARD_W / 2.0) * c.pan.k;
                 c.pan.y = 60.0 - g.y * c.pan.k;
                 apply_pan(c);

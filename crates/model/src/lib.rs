@@ -498,9 +498,12 @@ pub struct ChangedFile {
     /// Structured changes of a `Cargo.toml`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub manifest: Vec<ManifestChange>,
-    /// Changed definitions of a Python file.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub python: Vec<PyChange>,
+    /// The file's changed parts, each shown as a box: functions and
+    /// classes of a Python file, keys of a YAML file, and for an analyzed
+    /// Rust file the code that belongs to no item (tests, macro calls,
+    /// `extern` blocks).
+    #[serde(default, skip_serializing_if = "Vec::is_empty", alias = "python")]
+    pub parts: Vec<PartChange>,
     /// Both versions of a Markdown file, compared section by section in
     /// the viewer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -523,16 +526,21 @@ pub struct ManifestChange {
     pub new: Option<String>,
 }
 
-/// A Python function or class that changed.
+/// A part of a file that changed: a Python function or class, a YAML
+/// key, or a piece of Rust code outside the analyzed items.
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
-pub struct PyChange {
-    /// Qualified name, as Python's `__qualname__` (`Class.method`,
-    /// `outer.<locals>.inner`), or `<module>` for top-level code.
+pub struct PartChange {
+    /// Qualified name: for Python as `__qualname__` (`Class.method`,
+    /// `outer.<locals>.inner`) or `<module>` for top-level code, for YAML
+    /// the key path (`jobs.test`), for Rust the path in the file
+    /// (`tests::adds`).
     pub name: String,
-    /// `def`, `async def`, `class` or `module`.
+    /// Python: `def`, `async def`, `class` or `module`. YAML: `key`. Rust:
+    /// `test`, `bench`, `fn`, `struct`, `impl`, `macro call`, `extern`, ….
     pub kind: String,
     pub status: Status,
-    /// The header (`def f(a, b) -> int`), decorators included.
+    /// The header (`def f(a, b) -> int`, `#[test] fn adds()`), decorators
+    /// and attributes included.
     pub sig: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_sig: Option<String>,

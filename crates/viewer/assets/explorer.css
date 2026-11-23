@@ -144,6 +144,12 @@ code { font-size: .92em; }
 .side-legend div { margin: 3px 0; }
 .legend-dots { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .legend-dots > span { display: inline-flex; align-items: center; gap: 5px; }
+.side-h-n { text-transform: none; letter-spacing: 0; margin-left: 4px; }
+.tree.files { padding-left: 6px; }
+.file-row .fn { font-family: var(--mono); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; min-width: 0; white-space: nowrap; }
+.file-row .fdir { color: var(--muted); font-size: 11.5px; margin-left: 6px; }
+.file-row.gen .fn { opacity: .7; }
+.file-row .cnt { flex: none; font-family: var(--mono); }
 .side-opt { display: flex; align-items: center; gap: 6px; padding: 8px 14px 0; font-size: 12px; color: var(--muted); cursor: pointer; }
 .side-note { padding: 2px 14px 8px; font-size: 12px; color: var(--muted); }
 .side-warn { padding: 6px 14px; font-size: 12px; color: var(--removed); }
@@ -291,6 +297,10 @@ a.ref:hover { text-decoration: underline; }
 .frame rect.frame-bg { fill: var(--bg); fill-opacity: .55; stroke: none; }
 .frame rect.priv { stroke: var(--private); stroke-dasharray: 6 4; stroke-width: 1; }
 .frame text { font: 600 13px var(--mono); fill: var(--mod); }
+/* Module frames are moved by their border or their name. */
+.frame rect.frame-grip { stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: grab; }
+.frame text[data-frame] { pointer-events: auto; cursor: grab; user-select: none; }
+.card-h, .card-tabs, .card-loc { cursor: grab; }
 .frame text.priv { fill: var(--private); font-size: 11px; font-weight: 400; }
 .edge { fill: none; stroke-width: 1.6; }
 .edge.call { stroke: var(--fn); }
@@ -568,7 +578,7 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 .manifest .mf-old, .manifest .mf-new { padding-left: 24px; }
 .md-h { font-weight: 600; font-size: 15px; margin: 4px 0; }
 .md-removed .md-h { text-decoration: line-through; text-decoration-color: var(--removed); color: var(--muted); }
-.irow.member.py { margin-top: 8px; }
+.irow.member.part { margin-top: 8px; }
 .ientry > .ihead { display: flex; align-items: center; gap: 8px; }
 #panic { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; background: var(--removed); color: #fff; padding: 10px 16px; font-size: 14px; }
 

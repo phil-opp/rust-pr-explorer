@@ -465,6 +465,17 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         canvas::show_module_graph(app, &dom::data(&b, "graph").unwrap_or_default());
         return;
     }
+    if let Some(f) = dom::closest(el, "#sidebar [data-goto-file]") {
+        let path = dom::data(&f, "goto-file").unwrap_or_default();
+        set_view(app, View::Overview);
+        if let Some(card) = dom::query_all("#view-overview .ientry.file[data-file]")
+            .into_iter()
+            .find(|c| dom::data(c, "file").as_deref() == Some(path.as_str()))
+        {
+            reveal(&card);
+        }
+        return;
+    }
     if let Some(m) = dom::closest(el, "[data-mod]") {
         app.s.module = dom::data(&m, "mod").unwrap_or_default();
         set_view(app, View::Module);
@@ -796,7 +807,7 @@ fn go_next(app: &mut App, from: Option<String>) {
         return;
     }
     if app.s.view == View::Canvas {
-        canvas::open(app, &next, None, true);
+        canvas::open_for_review(app, &next, from.as_deref());
         return;
     }
     let Some(module) = app.d.item(&next).map(|it| app.d.mod_of(it).to_string()) else {

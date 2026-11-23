@@ -68,6 +68,54 @@ fn edge_path(a: Rect, b: Rect) -> String {
     }
 }
 
+/// A connector from a call site at height `y` in card `a` to card `b`: it
+/// leaves `a` at the side facing `b`, level with the call.
+fn site_path(a: Rect, y: f64, b: Rect) -> String {
+    let dir = if b.x + b.w / 2.0 >= a.x + a.w / 2.0 {
+        1.0
+    } else {
+        -1.0
+    };
+    let p1 = (if dir > 0.0 { a.x + a.w } else { a.x }, y);
+    // Into the near side of `b` if it is beside `a`, else into its top.
+    let (p2, c2) = if (dir > 0.0 && b.x > p1.0 + 20.0) || (dir < 0.0 && b.x + b.w < p1.0 - 20.0) {
+        let p2 = (
+            if dir > 0.0 { b.x } else { b.x + b.w },
+            b.y + 40.0_f64.min(b.h / 2.0),
+        );
+        let dx = ((p2.0 - p1.0).abs() / 2.0).max(40.0);
+        (p2, (p2.0 - dir * dx, p2.1))
+    } else {
+        let p2 = (b.x + b.w / 2.0, b.y);
+        (p2, (p2.0, p2.1 - ((p2.1 - y).abs() / 2.0).max(40.0)))
+    };
+    let dx = ((p2.0 - p1.0).abs() / 2.0).max(40.0);
+    format!(
+        "M{},{} C{},{} {},{} {},{}",
+        p1.0,
+        p1.1,
+        p1.0 + dir * dx,
+        p1.1,
+        c2.0,
+        c2.1,
+        p2.0,
+        p2.1
+    )
+}
+
+/// The height, in canvas coordinates, of the first visible call site of
+/// `to` in the expanded source of card `g`.
+fn call_site_y(g: &Group, to: &str, k: f64) -> Option<f64> {
+    let card = card_el(g.gid)?;
+    let top = card.get_bounding_client_rect().top();
+    dom::query_all_in(&card, "details.src[open] a.ref[data-id]")
+        .into_iter()
+        .filter(|a| dom::data(a, "id").as_deref() == Some(to))
+        .map(|a| a.get_bounding_client_rect())
+        .find(|r| r.height() > 0.0)
+        .map(|r| g.y + (r.top() + r.height() / 2.0 - top) / k)
+}
+
 /// Draws call, use, member and link connectors between visible cards.
 pub fn draw_edges(app: &App) {
     let d = &app.d;
@@ -79,6 +127,7 @@ pub fn draw_edges(app: &App) {
         .collect();
     let mut seen: BTreeSet<(u32, u32)> = BTreeSet::new();
     let mut out = String::new();
+    let k = c.pan.k;
     let mut add = |ga: &Group, gb: &Group, class: &str, title: String| {
         let base = class.split(' ').next().unwrap_or("");
         let reverse_seen = base == "link" && seen.contains(&(gb.gid, ga.gid));
@@ -96,7 +145,11 @@ pub fn draw_edges(app: &App) {
         };
         out.push_str(&format!(
             r#"<path class="edge {class}" d="{}" {marker}><title>{}</title></path>"#,
-            edge_path(a, b),
+            match base {
+                "call" => call_site_y(ga, &gb.active, k).map(|y| site_path(a, y, b)),
+                _ => None,
+            }
+            .unwrap_or_else(|| edge_path(a, b)),
             esc(&title)
         ));
     };
@@ -257,7 +310,7 @@ fn draw_frames(app: &App, rects: &HashMap<u32, Rect>) {
             parent.frames.push(b);
         }
         let mut s = format!(
-            r#"<g class="frame"><rect class="frame-bg" x="{x}" y="{y}" width="{w}" height="{h}" rx="12"/><rect x="{x}" y="{y}" width="{w}" height="{h}" rx="12"/><text x="{}" y="{}">{}{}</text>"#,
+            r#"<g class="frame"><rect class="frame-bg" x="{x}" y="{y}" width="{w}" height="{h}" rx="12"/><rect x="{x}" y="{y}" width="{w}" height="{h}" rx="12"/><rect class="frame-grip" data-frame="{m}" x="{x}" y="{y}" width="{w}" height="{h}" rx="12"><title>Drag to move this module's cards</title></rect><text data-frame="{m}" x="{}" y="{}">{}{}</text>"#,
             b.x + 12.0,
             b.y + 20.0,
             esc(&d.mod_label(&m)),
@@ -266,6 +319,7 @@ fn draw_frames(app: &App, rects: &HashMap<u32, Rect>) {
             } else {
                 String::new()
             },
+            m = esc(&m),
             x = b.x,
             y = b.y,
             w = b.w,

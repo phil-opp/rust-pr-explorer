@@ -1,7 +1,8 @@
 //! Every file a PR changes, with a line diff, and structured changes where
-//! the format is understood (`Cargo.toml`, Python, Markdown).
+//! the format is understood (`Cargo.toml`, Python, YAML, Markdown).
 
-use model::{ChangedFile, ManifestChange, SourceLine, Status};
+use crate::parts::{Def, Span, compare_defs, rust_outline};
+use model::{ChangedFile, ManifestChange, PartChange, SourceLine, Status};
 use similar::{ChangeTag, TextDiff};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -210,7 +211,11 @@ pub fn changed_files(base: &Path, head: &Path, skip: &[&str]) -> Vec<ChangedFile
                 file.added = added;
                 file.removed = removed;
                 match file.lang.as_str() {
-                    "python" => file.python = crate::python::compare(old, new),
+                    "python" => file.parts = crate::python::compare(old, new),
+                    "yaml" => {
+                        use crate::parts::{compare_defs, yaml_outline};
+                        file.parts = compare_defs(&yaml_outline(old), &yaml_outline(new), old, new);
+                    }
                     "markdown" => {
                         file.old_text = Some(old.clone());
                         file.new_text = Some(new.clone());
@@ -228,59 +233,23 @@ pub fn changed_files(base: &Path, head: &Path, skip: &[&str]) -> Vec<ChangedFile
     out
 }
 
-/// A range of lines, 1-based and inclusive.
-pub type Span = (usize, usize);
-
-/// Line spans of a Rust file's imports (`use`,
-/// `extern crate`) and module declarations (`mod name;`), with their
-/// attributes: they show in the items they affect, not as code of their
-/// own. Empty if the file doesn't parse.
-pub fn declaration_lines(text: &str) -> Vec<Span> {
-    use syn::spanned::Spanned;
-    fn walk(items: &[syn::Item], out: &mut Vec<(usize, usize)>) {
-        for item in items {
-            let attrs = match item {
-                syn::Item::Use(u) => &u.attrs,
-                syn::Item::ExternCrate(e) => &e.attrs,
-                syn::Item::Mod(m) if m.content.is_none() => &m.attrs,
-                syn::Item::Mod(m) => {
-                    if let Some((_, inner)) = &m.content {
-                        walk(inner, out);
-                    }
-                    continue;
-                }
-                _ => continue,
-            };
-            let start = attrs
-                .iter()
-                .map(|a| a.span().start().line)
-                .chain([item.span().start().line])
-                .min()
-                .unwrap_or(0);
-            out.push((start, item.span().end().line));
-        }
-    }
-    let mut out = Vec::new();
-    if let Ok(file) = syn::parse_file(text) {
-        walk(&file.items, &mut out);
-    }
-    out
-}
-
-/// How many changed lines of an analyzed Rust file lie outside every
-/// item: changes the item view doesn't show. Imports and module
-/// declarations (their effect is on the items; `decls` are their lines in
-/// the base and head file, from [`declaration_lines`]), blank lines and
-/// comments don't count. Returns their number, and the hunks reduced to
-/// them (with context).
+/// The changes of an analyzed Rust file that the item view doesn't show:
+/// code outside every item. Code the analysis skips (tests, macro calls,
+/// `extern` blocks, …) is split into parts (`texts` are the base and head
+/// file); the rest are changed lines outside items and parts. Imports and
+/// module declarations (their effect is on the items), blank lines and
+/// comments don't count. Returns the number of those lines, the hunks
+/// reduced to them (with context), and the changed parts.
 pub fn outside_items<'a>(
     file: &ChangedFile,
     items: impl Iterator<Item = &'a model::Item>,
-    decls: (&[Span], &[Span]),
-) -> (u32, Vec<SourceLine>) {
+    texts: (&str, &str),
+) -> (u32, Vec<SourceLine>, Vec<PartChange>) {
     // Line spans (1-based, inclusive) of the items on each side.
-    let mut old: Vec<(usize, usize)> = decls.0.to_vec();
-    let mut new: Vec<(usize, usize)> = decls.1.to_vec();
+    let (old_parts, old_decls) = rust_outline(texts.0);
+    let (new_parts, new_decls) = rust_outline(texts.1);
+    let mut old: Vec<Span> = Vec::new();
+    let mut new: Vec<Span> = Vec::new();
     for it in items.filter(|i| i.info.kind != model::Kind::Mod) {
         let count = |tags: &[char]| it.source.iter().filter(|l| tags.contains(&l.0)).count();
         let old_file = it.old_file.as_deref().unwrap_or(&it.info.file);
@@ -294,7 +263,23 @@ pub fn outside_items<'a>(
             old.push((start, start + n.saturating_sub(1)));
         }
     }
-    let inside = |spans: &[(usize, usize)], l: usize| spans.iter().any(|&(a, b)| a <= l && l <= b);
+    let inside = |spans: &[Span], l: usize| spans.iter().any(|&(a, b)| a <= l && l <= b);
+    // Parts that no item covers (in test targets, tests are items).
+    let outside = |parts: Vec<Def>, items: &[Span]| -> Vec<Def> {
+        parts
+            .into_iter()
+            .filter(|d| !(d.first + 1..=d.last + 1).any(|l| inside(items, l)))
+            .collect()
+    };
+    let (old_parts, new_parts) = (outside(old_parts, &old), outside(new_parts, &new));
+    let parts = compare_defs(&old_parts, &new_parts, texts.0, texts.1);
+    for (spans, decls, parts) in [
+        (&mut old, old_decls, &old_parts),
+        (&mut new, new_decls, &new_parts),
+    ] {
+        spans.extend(decls);
+        spans.extend(parts.iter().map(|d| (d.first + 1, d.last + 1)));
+    }
     let ignorable = |text: &str| {
         let t = text.trim();
         t.is_empty()
@@ -354,7 +339,7 @@ pub fn outside_items<'a>(
             open = false;
         }
     }
-    (count, out)
+    (count, out, parts)
 }
 
 /// Whether hunk line `i` is within [`CONTEXT`] lines of a change outside
