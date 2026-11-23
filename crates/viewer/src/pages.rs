@@ -4,14 +4,76 @@ use crate::App;
 use crate::code::esc;
 use crate::data::{Data, changed, kind_order};
 use crate::dom;
-use model::{Item, Kind, Status};
+use model::{ChangedFile, Item, Kind, Status};
 use std::collections::BTreeMap;
 
-/// Whether the sidebar shows. Without any Rust change, a tree of unchanged
-/// modules only gets in the way, so it shows only on the module pages, where
-/// it is the way to browse the modules.
-pub fn sidebar_shown(app: &App) -> bool {
+/// Whether the sidebar lists the modules. Without any Rust change, a tree of
+/// unchanged modules only gets in the way, so it shows only on the module
+/// pages, where it is the way to browse the modules.
+fn modules_shown(app: &App) -> bool {
     app.d.rust_changed() || (app.s.view == crate::View::Module && !app.d.roots().is_empty())
+}
+
+/// Whether the sidebar shows: it lists the changed modules and files.
+pub fn sidebar_shown(app: &App) -> bool {
+    modules_shown(app) || !app.d.out.files.is_empty()
+}
+
+/// Every changed file, with its status and line counts. A Rust file whose
+/// changes are all inside items opens its module's page; any other file
+/// opens its entry in the overview.
+fn files_html(d: &Data) -> String {
+    let mut files: Vec<&ChangedFile> = d.out.files.iter().collect();
+    if files.is_empty() {
+        return String::new();
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    let (added, removed) = files
+        .iter()
+        .fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
+    let rows: String = files
+        .iter()
+        .map(|f| {
+            let module = (f.analyzed && f.outside_items == 0)
+                .then(|| {
+                    d.items()
+                        .find(|it| it.info.kind == Kind::Mod && it.info.file == f.path)
+                })
+                .flatten();
+            let target = match module {
+                Some(m) => format!(r#"data-mod="{}""#, esc(&m.info.id)),
+                None => format!(r#"data-goto-file="{}""#, esc(&f.path)),
+            };
+            let (dir, name) = match f.path.rsplit_once('/') {
+                Some((dir, name)) => (dir.to_string(), name),
+                None => (String::new(), f.path.as_str()),
+            };
+            let counts = if f.lang == "binary" {
+                r#"<span class="dim">bin</span>"#.to_string()
+            } else {
+                format!(
+                    r#"<span class="d-add">+{}</span> <span class="d-del">−{}</span>"#,
+                    f.added, f.removed
+                )
+            };
+            format!(
+                r#"<li><div class="tree-row file-row {}" {target} title="{}{}"><span class="dot {}"></span><span class="fn">{}<span class="fdir">{}</span></span><span class="cnt">{counts}</span></div></li>"#,
+                if f.generated.is_some() { "gen" } else { "" },
+                esc(&f.path),
+                f.generated
+                    .as_deref()
+                    .map(|g| format!(" ({})", esc(g)))
+                    .unwrap_or_default(),
+                f.status.css(),
+                esc(name),
+                esc(&dir),
+            )
+        })
+        .collect();
+    format!(
+        r#"<div class="side-h">Files <span class="side-h-n">{} · <span class="d-add">+{added}</span> <span class="d-del">−{removed}</span></span></div><ul class="tree files">{rows}</ul>"#,
+        files.len()
+    )
 }
 
 fn warnings_html(d: &Data) -> String {
@@ -29,6 +91,11 @@ pub fn render_sidebar(app: &App) {
         dom::toggle_class(&el, "hidden", !shown);
     }
     if !shown {
+        return;
+    }
+    let files = files_html(d);
+    if !modules_shown(app) {
+        dom::set_html("sidebar", &format!("{files}{}", warnings_html(d)));
         return;
     }
     fn submodules<'a>(d: &'a Data, m: &str) -> Vec<&'a Item> {
@@ -143,7 +210,7 @@ pub fn render_sidebar(app: &App) {
     dom::set_html(
         "sidebar",
         &format!(
-            r#"<div class="side-h">Modules</div>{note}<ul class="tree">{roots}</ul>{toggle}
+            r#"<div class="side-h">Modules</div>{note}<ul class="tree">{roots}</ul>{toggle}{files}
             <div class="side-legend">
               <div class="legend-dots"><span><span class="dot added"></span> added</span><span><span class="dot changed"></span> changed</span><span><span class="dot removed"></span> removed</span></div>
               <div>No symbol: unchanged.</div>

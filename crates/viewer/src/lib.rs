@@ -465,6 +465,17 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         canvas::show_module_graph(app, &dom::data(&b, "graph").unwrap_or_default());
         return;
     }
+    if let Some(f) = dom::closest(el, "#sidebar [data-goto-file]") {
+        let path = dom::data(&f, "goto-file").unwrap_or_default();
+        set_view(app, View::Overview);
+        if let Some(card) = dom::query_all("#view-overview .ientry.file[data-file]")
+            .into_iter()
+            .find(|c| dom::data(c, "file").as_deref() == Some(path.as_str()))
+        {
+            reveal(&card);
+        }
+        return;
+    }
     if let Some(m) = dom::closest(el, "[data-mod]") {
         app.s.module = dom::data(&m, "mod").unwrap_or_default();
         set_view(app, View::Module);

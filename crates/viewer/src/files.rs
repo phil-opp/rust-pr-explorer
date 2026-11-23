@@ -496,12 +496,13 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
         )
     };
     format!(
-        r#"<div class="ientry file {}"><div class="irow"><div class="ihead"><span class="title-name">{}</span><span class="kind">{}</span>{}{}</div><div class="iacts">{}{}</div></div>{outside}{structured}{lines}</div>"#,
+        r#"<div class="ientry file {}" data-file="{}"><div class="irow"><div class="ihead"><span class="title-name">{}</span><span class="kind">{}</span>{}{}</div><div class="iacts">{}{}</div></div>{outside}{structured}{lines}</div>"#,
         match f.status {
             Status::Added => "whole whole-added",
             Status::Removed => "whole whole-removed",
             _ => "",
         },
+        esc(&f.path),
         esc(&f.path),
         esc(&f.lang),
         badge(f.status),
