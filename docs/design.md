@@ -31,6 +31,21 @@ crates/viewer            the page's front end (wasm, web-sys, pulldown-cmark)
 
 The CLI's build script runs a nested `cargo build` of the viewer for `wasm32-unknown-unknown`, in its own target directory. It then generates the JavaScript bindings with `wasm-bindgen-cli-support`, used as a library. `main.rs` embeds both outputs with `include_bytes!`. A plain `cargo build` therefore produces a complete tool; the only extra requirement is the wasm target (`rustup target add wasm32-unknown-unknown`).
 
+### Size of the wasm module
+
+The module is embedded in every page as base64, so its size is paid by every page. The viewer is built with the `wasm-release` profile (`opt-level = "s"`, one codegen unit, link-time optimization), and `wasm-bindgen` drops the name and producers sections. Measured on the viewer at the time of the change:
+
+| Step | Module | Page (demo) |
+|---|---|---|
+| before: `release` profile, names kept | 1.99 MB | about 2.86 MB |
+| name section removed | 1.28 MB | |
+| plus LTO (`wasm-release`) | 1.22 MB | 1.83 MB |
+| plus `wasm-opt -Os` (feature `wasm-opt`) | 0.96 MB | 1.49 MB |
+
+The function names were 37% of the module; they only help when debugging a panic in the browser. `wasm-opt` is opt-in because the `wasm-opt` crate compiles Binaryen (C++) from source, which takes about 5 minutes and needs a C++ compiler; `opt-level = "z"` saved only 1% more than `"s"`, so the viewer stays at `"s"`.
+
+Replacing `serde_json` with a more compact format was considered and not done. The JSON deserializer and the derived visitors are roughly 130 kB of the module before `wasm-opt` (by `twiggy`), and a binary format such as `postcard` would still need the derived visitors. The model also relies on `skip_serializing_if`, `flatten` and internally tagged enums, which only work with self-describing formats like JSON; and binary data would have to be embedded as base64. The `similar` crate is larger (about 240 kB before `wasm-opt`, mostly copies of its diff algorithms for each element type), so it would be the next place to look.
+
 ## Two analysis layers
 
 ### 1. Syntactic analysis (always on)
@@ -169,7 +184,7 @@ The current split uses rust-analyzer where only type inference helps: method cal
 - **Leptos, Yew or Dioxus** would make the views declarative. They add compile time and API churn, and the views are re-rendered wholesale anyway: they are small, and the canvas positions cards absolutely.
 - **A native GUI (egui)** removes the browser and the generated JavaScript glue. It would lose text selection, rustdoc-like typography, and the ability to share one HTML file. It would also need a display to test, unlike the headless browser used now.
 
-The chosen design is plain `web-sys`: views render HTML strings, and one listener per event type dispatches on `data-*` attributes. It keeps the dependency set small (`wasm-bindgen`, `web-sys`, `js-sys`, `serde_json`, `pulldown-cmark`) and produces about 1.2 MB of wasm.
+The chosen design is plain `web-sys`: views render HTML strings, and one listener per event type dispatches on `data-*` attributes. It keeps the dependency set small (`wasm-bindgen`, `web-sys`, `js-sys`, `serde_json`, `pulldown-cmark`, `similar`) and produces about 1.2 MB of wasm (1 MB with `wasm-opt`; see [Size of the wasm module](#size-of-the-wasm-module)).
 
 ### Git access with `gix` — not implemented
 
@@ -180,4 +195,3 @@ The tool calls the `git` binary to clone, fetch pull request refs, compute merge
 - Opt-in rustdoc JSON in trusted mode, for an exact public API.
 - Public-API computation via rust-analyzer's `hir` (exact re-exports, `doc(hidden)`).
 - Show the PR description (`gh pr view --json body`).
-- Smaller wasm, for example by replacing `serde_json` with a more compact format, or by running `wasm-opt`.
