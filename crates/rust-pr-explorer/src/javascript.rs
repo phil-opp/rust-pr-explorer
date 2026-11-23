@@ -116,7 +116,8 @@ impl Lexer {
             }
             j += 1;
         }
-        j
+        // A backslash as the last character steps past the end.
+        j.min(self.chars.len())
     }
 
     /// The end (exclusive) of a template literal starting at `i`.
@@ -134,7 +135,8 @@ impl Lexer {
             }
             j += 1;
         }
-        j
+        // A backslash as the last character steps past the end.
+        j.min(self.chars.len())
     }
 
     /// The end (after its `}`) of a `${…}` expression starting at `i`.
@@ -976,6 +978,13 @@ window.addEventListener("load", main);
         let names: Vec<&str> = c.iter().map(|p| p.name.as_str()).collect();
         assert_eq!(names, ["b", "c"]);
         assert!(!c[0].cosmetic && c[1].cosmetic);
+    }
+
+    #[test]
+    fn never_panics_on_trailing_backslash() {
+        for src in ["'\\", "`\\", "`${'\\", "x = \"a\\"] {
+            outline(src);
+        }
     }
 
     #[test]

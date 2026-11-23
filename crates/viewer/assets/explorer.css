@@ -10,11 +10,11 @@
   --type: #ad378a;
   --trait: #6e4fc4;
   --fn: #8f6529;
-  --mod: #3873ad;
-  --macro: #068000;
+  --mod: #366ea6;
+  --macro: #067d00;
   --kw: #8959a8;
-  --str: #718c00;
-  --num: #c18401;
+  --str: #5e7400;
+  --num: #916301;
   --comment: #6a6c68;
   --added: #1a7f37;
   --added-bg: #e6f6ea;
@@ -183,6 +183,7 @@ code { font-size: .92em; }
 .st-unchanged { color: var(--muted); background: var(--bg-alt); }
 .st-cosmetic { color: var(--muted); background: transparent; border: 1px dashed var(--border); }
 .st-test { color: var(--muted); background: transparent; border: 1px solid var(--border); }
+.st-testfn { color: var(--text); background: var(--bg-alt); }
 .st-inner { color: var(--changed); background: transparent; border: 1px solid var(--changed-bg); }
 .vis { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; white-space: nowrap; }
 .vis.pub { color: var(--added); border-color: var(--added-bg); }
@@ -196,6 +197,13 @@ code { font-size: .92em; }
 .api-why.api-breaking, .api-why.api-unknown, .api-why.api-compatible { border: none; padding: 0 0 0 18px; display: block; cursor: auto; font: 13px var(--sans); color: var(--text); }
 .api-why.api-breaking li::marker { color: var(--removed); }
 .api-why.api-compatible { color: var(--muted); }
+/* Impact of internal changes: the public items that reach them. */
+.impact { font: 13px var(--sans); margin: 2px 0 6px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
+.impact-h { font-weight: 600; }
+.impact.none { color: var(--muted); }
+.impact button, .impact-list button { font-size: 12px; padding: 0 6px; }
+.impact-list { margin: 2px 0 0; padding-left: 18px; font: 13px var(--sans); }
+.impact-list li { margin: 2px 0; }
 .semver-sum { margin: 0 0 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
 /* Code */
@@ -291,7 +299,7 @@ a.ref:hover { text-decoration: underline; }
 .irow + .irow, .whole + .irow { margin-top: 10px; }
 .irow .ihead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .irow .iacts { display: flex; gap: 4px; align-items: start; }
-.irow > .sigbox, .irow > .docs, .irow > details, .irow > .mark, .irow > .docs-acts { grid-column: 1 / -1; }
+.irow > .sigbox, .irow > .docs, .irow > details, .irow > .mark, .irow > .docs-acts, .irow > .impact, .irow > .impact-list { grid-column: 1 / -1; }
 .irow .docs { margin: 0; }
 .irow.context { opacity: .75; }
 /* Members (methods, associated items) are small cards inside their item. */
@@ -394,7 +402,7 @@ a.ref:hover { text-decoration: underline; }
 .card-b details.src, .irow details.src { border-top: 1px solid var(--border); padding-top: 8px; }
 .src .ln.skip, .sbs .skip { color: var(--muted); text-align: center; }
 .sbs .skip { grid-column: 1 / -1; }
-.unfold { cursor: pointer; user-select: none; color: var(--link) !important; background: color-mix(in srgb, var(--link) 8%, transparent); font-family: var(--sans); font-size: 12px; text-align: left !important; padding-left: 12px !important; }
+.unfold { cursor: pointer; user-select: none; color: color-mix(in srgb, var(--link) 85%, var(--text)) !important; background: color-mix(in srgb, var(--link) 8%, transparent); font-family: var(--sans); font-size: 12px; text-align: left !important; padding-left: 12px !important; }
 .unfold:hover { background: color-mix(in srgb, var(--link) 16%, transparent); }
 .src .ln.unfold::before { content: none; }
 .fold { display: contents; }
@@ -503,23 +511,21 @@ a.card-badge[data-drill]:hover { border-style: solid; }
 .ln.add .wc { background: color-mix(in srgb, var(--added) 28%, transparent); border-radius: 2px; }
 /* Changed words have a stronger background than their line, on which the
    syntax colors fall below the WCAG AA contrast ratio (4.5:1). Inside them,
-   the syntax colors move toward the text color just enough to keep it. A
-   comment's or string's color is set outside the changed words, so it is set
-   again inside them. */
-.ln .wc, .sig-diff ins.sd {
-  --type: #842d6b; --trait: #584099; --fn: #664b25; --mod: #2b5278; --macro: #095e05;
-  --kw: #634278; --str: #475607; --num: #694a09; --comment: #4e504d; --link: #225380;
+   the syntax colors move toward the text color just enough to keep it: the
+   variables for tokens inside a changed word, and `color` for a changed word
+   inside a token (a comment, a string, a name), whose color it inherits. */
+.ln .wc, .sig-diff ins.sd, .sig-diff .wrap ins.edge {
+  --type: #842d6b; --trait: #584099; --fn: #674a21; --mod: #2b5279; --macro: #095e05;
+  --kw: #634278; --str: #475605; --num: #6b4a06; --comment: #4e504d; --link: #225380;
+  color: color-mix(in srgb, currentColor 50%, var(--text));
 }
 @media (prefers-color-scheme: dark) {
-  .ln .wc, .sig-diff ins.sd {
+  .ln .wc, .sig-diff ins.sd, .sig-diff .wrap ins.edge {
     --type: #e9b7dd; --trait: #cebef9; --fn: #e4c095; --mod: #a9caee; --macro: #88d988;
     --kw: #d6bdea; --str: #b1d17b; --num: #e3c37b; --comment: #c6c6ca; --link: #a1cbf1;
+    color: color-mix(in srgb, currentColor 55%, var(--text));
   }
 }
-.kw .wc { color: var(--kw); }
-.str .wc { color: var(--str); }
-.num .wc { color: var(--num); }
-.cm .wc { color: var(--comment); }
 
 /* Word changes in docs: inserted words underlined, removed ones struck out. */
 ins.wd { text-decoration: underline 2px var(--added); text-underline-offset: 3px; background: var(--added-bg); }
@@ -581,6 +587,11 @@ details.private-def .sigbox { margin-top: 4px; }
 
 /* Module map. */
 #space-alt { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; overflow: auto; background: var(--bg-alt); }
+/* Dragged by its background to pan, like the canvas; links and matrix cells
+   keep their own cursor. */
+#space-alt { cursor: grab; }
+#space-alt.panning { cursor: grabbing; user-select: none; }
+#space-alt :is(a, button, input, select, label, [data-mx-a], .mm-more) { cursor: pointer; }
 .mm-wrap { position: relative; display: inline-block; min-width: 100%; padding: 32px 40px 60px; box-sizing: border-box; }
 #mm-edges { position: absolute; left: 0; top: 0; pointer-events: none; overflow: visible; z-index: 2; }
 /* Centered when it fits; otherwise it starts at the left edge and scrolls. */
@@ -768,7 +779,22 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .rv-q { white-space: pre-wrap; color: var(--text); font-size: 13px; border-left: 3px solid var(--border); padding-left: 8px; margin-top: 2px; }
 /* Review controls at the top of each hunk of a source diff with several. */
 .hunk-rv { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 3px 8px; margin: 4px 0 2px; background: var(--bg-alt); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); font: 12px var(--sans); white-space: normal; }
+/* The controls stay in view while the code scrolls sideways: they stick to
+   the left edge and are as wide as the visible part of the code, the width
+   of the scrolling box (a container, so `cqw` measures it). Without this,
+   they scroll away with long lines, and side by side they start past the
+   right edge. */
+.src-code > pre, .src-code > .sbs, pre.hunks { container-type: inline-size; }
+.hunk-rv { position: sticky; left: 0; z-index: 1; box-sizing: border-box; width: 100cqw; justify-self: start; }
 .sbs .hunk-rv { grid-column: 1 / -1; }
+/* A unified diff is one grid column as wide as its longest line, so the
+   added and removed backgrounds go on under long lines when the code
+   scrolls sideways (as a block, each line was only as wide as the view). */
+.src-code > pre, pre.hunks { display: grid; grid-template-columns: minmax(max-content, 1fr); }
+pre .rt-row { max-width: min(760px, 100cqw); }
+/* Folded and skipped lines stay in view too, so their centred label isn't
+   off to the side of a wide diff. */
+.src-code > pre .ln.skip, pre.hunks .ln.skip, .src-code > .sbs .skip { position: sticky; left: 0; box-sizing: border-box; width: 100cqw; justify-self: start; }
 .hunk-rv .hunk-at { color: var(--muted); margin-right: auto; }
 .hunk-rv .rvc { gap: 4px; }
 .hunk-rv .hunk-at { font-weight: 600; color: var(--text); }
@@ -777,6 +803,16 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .rv-scope { color: var(--muted); font-size: 12px; white-space: nowrap; }
 body:not(.reviewing) .rv-scope { display: none; }
 .hunk-rv .rv-fold { display: none; }
+/* "GitHub ↗": opens an item or a change in the pull request's diff on
+   GitHub. Outside review mode, a change's link floats at the right of its
+   first line; in review mode it is part of the change's bar. */
+a.gh-link { font: 12px var(--sans); color: var(--link); white-space: nowrap; text-decoration: none; }
+a.gh-link:hover { text-decoration: underline; }
+.iacts a.gh-link { align-self: center; margin-right: 4px; }
+.hunk-gh { display: block; height: 0; text-align: right; position: relative; z-index: 1; }
+.hunk-gh a.gh-link { position: relative; top: 1px; margin-right: 6px; padding: 0 5px; border-radius: 3px; background: var(--bg-code); }
+.sbs .hunk-gh { grid-column: 1 / -1; }
+body.reviewing .hunk-rv + .hunk-gh, .hunk-rv:has(.rvc.done, .rvc.stale) + .hunk-gh { display: none; }
 body:not(.reviewing) .hunk-rv:not(:has(.rvc.done, .rvc.stale)) { display: none; }
 /* Showing what one commit changed. */
 .commit-pick { display: flex; align-items: center; gap: 6px; font-size: 13px; }
