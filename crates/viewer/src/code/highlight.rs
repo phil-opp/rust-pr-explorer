@@ -72,11 +72,30 @@ pub fn ref_html(d: &Data, text: &str, r: &Ref, extra: &str) -> String {
     }
 }
 
-/// `new` for a reference to an item that the PR adds, so that source
-/// views can point out what is new.
-fn new_class(d: &Data, r: &Ref) -> &'static str {
-    match r.id.as_deref().and_then(|id| d.item(id)) {
-        Some(it) if it.status == Status::Added && d.external(&it.info.id).is_none() => "new",
+/// Classes that point out, in source views, a reference to an item that
+/// the PR adds (`new`), or a call of a function that it changes (`chg`),
+/// as each of them needs a review of its own. Names of changed types are
+/// not marked: they are everywhere, and calls are what a top-down review
+/// follows. Once that item is reviewed, `rv-ok` adds a ✓ in review
+/// mode (kept up to date by `review::refresh`). Not for references of an
+/// item to itself (a recursive call), which need no review of their own.
+fn mark_class(d: &Data, r: &Ref, of: &str) -> &'static str {
+    let Some(it) =
+        r.id.as_deref()
+            .filter(|&id| id != of)
+            .and_then(|id| d.item(id))
+    else {
+        return "";
+    };
+    if d.external(&it.info.id).is_some() || !crate::review::is_unit_item(it) {
+        return "";
+    }
+    let done = crate::review::mark(&it.info.id) == Some(crate::review::Mark::Done);
+    match (it.status, done) {
+        (Status::Added, false) => "new",
+        (Status::Added, true) => "new rv-ok",
+        (Status::Changed, false) if it.info.kind.is_callable() => "chg",
+        (Status::Changed, true) if it.info.kind.is_callable() => "chg rv-ok",
         _ => "",
     }
 }
@@ -93,10 +112,12 @@ pub enum Links<'a> {
         at: &'a [u32],
         base: usize,
     },
-    /// A line of source: names are linked by `line:column`.
+    /// A line of source: names are linked by `line:column`. `of` is the
+    /// item the source belongs to.
     Source {
         line: usize,
         refs: &'a BTreeMap<String, Ref>,
+        of: &'a str,
     },
 }
 
@@ -187,9 +208,9 @@ pub fn code_html(d: &Data, text: &str, links: Links) -> String {
                 // A method call or field access.
                 out.push('.');
                 match links {
-                    Links::Source { line, refs } => {
+                    Links::Source { line, refs, of } => {
                         match refs.get(&format!("{line}:{}", start + 1)) {
-                            Some(r) => out.push_str(&ref_html(d, name, r, new_class(d, r))),
+                            Some(r) => out.push_str(&ref_html(d, name, r, mark_class(d, r, of))),
                             None => out.push_str(&esc(name)),
                         }
                     }
@@ -202,10 +223,12 @@ pub fn code_html(d: &Data, text: &str, links: Links) -> String {
                     {
                         out.push_str(&path_html(d, &path, refs))
                     }
-                    Links::Source { line, refs } => match refs.get(&format!("{line}:{start}")) {
-                        Some(r) => out.push_str(&ref_html(d, &path, r, new_class(d, r))),
-                        None => out.push_str(&plain_path(&path)),
-                    },
+                    Links::Source { line, refs, of } => {
+                        match refs.get(&format!("{line}:{start}")) {
+                            Some(r) => out.push_str(&ref_html(d, &path, r, mark_class(d, r, of))),
+                            None => out.push_str(&plain_path(&path)),
+                        }
+                    }
                     _ => out.push_str(&plain_path(&path)),
                 }
             }

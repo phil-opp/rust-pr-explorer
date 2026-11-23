@@ -220,7 +220,11 @@ details.src.src-chg > summary b { color: var(--changed); }
 a.ref:hover { text-decoration: underline; }
 /* In source views: names of items the PR adds. */
 .ref.new { font-weight: 700; text-decoration: underline 2px var(--added); text-underline-offset: 3px; }
-.ref.new::after { content: "new"; display: inline-block; font-family: var(--sans); font-size: 9px; font-weight: 700; line-height: 0; vertical-align: super; margin-left: 1px; color: var(--added); }
+.ref.new::after, .ref.chg::after { content: "new"; display: inline-block; font-family: var(--sans); font-size: 9px; font-weight: 700; line-height: 0; vertical-align: super; margin-left: 1px; color: var(--added); }
+.ref.chg { font-weight: 700; text-decoration: underline 2px var(--changed); text-underline-offset: 3px; }
+.ref.chg::after { content: "changed"; color: var(--changed); }
+.reviewing .ref.new.rv-ok::after { content: "new ✓"; color: var(--reviewed); }
+.reviewing .ref.chg.rv-ok::after { content: "changed ✓"; color: var(--reviewed); }
 .ref.ext { color: inherit; border-bottom: 1px dotted var(--border); cursor: help; }
 .ref.on-canvas { background: var(--highlight); box-shadow: 0 0 0 1px var(--highlight); }
 .title-name { font-family: var(--mono); font-weight: 600; }

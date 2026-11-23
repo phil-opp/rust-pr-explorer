@@ -816,6 +816,7 @@ impl Data {
         let old_links = |o: usize| Links::Source {
             line: old_start + o,
             refs: old_refs,
+            of: &it.info.id,
         };
         // Changed lines with their changed words marked.
         let mut marked_old: HashMap<usize, String> = HashMap::new();
@@ -829,6 +830,7 @@ impl Data {
                     Links::Source {
                         line: new_start + n,
                         refs: &it.info.source_refs,
+                        of: &it.info.id,
                     },
                 );
                 if let Some((a, b)) = crate::code::mark_changed_tokens(&old_html, &new_html) {
@@ -847,6 +849,7 @@ impl Data {
                 Links::Source {
                     line: new_start + n,
                     refs: &it.info.source_refs,
+                    of: &it.info.id,
                 },
             )
         };

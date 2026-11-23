@@ -759,6 +759,12 @@ fn refresh(id: &str) {
             el.set_inner_html(&inner);
         }
     }
+    // References to the unit in source views get or lose their ✓.
+    for el in dom::query_all("a.ref.new, a.ref.chg") {
+        if dom::data(&el, "id").as_deref() == Some(id) {
+            dom::toggle_class(&el, "rv-ok", m == Mark::Done);
+        }
+    }
     update_progress();
 }
 
@@ -1133,6 +1139,40 @@ mod tests {
         assert!(hunk_controls("c::root_fn", &[13], &[]).contains(&esc(&h[0].id)));
         assert!(!hunk_controls("c::root_fn", &[13], &[]).contains(&esc(&h[1].id)));
         assert!(hunk_controls("c::root_fn", &[23], &[11]).contains(&esc(&h[1].id)));
+    }
+
+    #[test]
+    fn references_to_reviewed_items_get_a_check() {
+        let mut out = data().out;
+        let f = out.items.get_mut("c::root_fn").unwrap();
+        f.changes.body = true;
+        f.source = vec![sl('+', "    late();"), sl('+', "    new_fn();")];
+        for (at, to) in [("9:4", "c::b::late"), ("10:4", "c::a::new_fn")] {
+            f.info.source_refs.insert(
+                at.into(),
+                model::Ref {
+                    id: Some(to.into()),
+                    path: to.into(),
+                },
+            );
+        }
+        let d = Data::new(out);
+        let late = print_of_in(&d, "c::b::late");
+        set(&d, &[("c::b::late", late)]);
+        let html = d.source_html(d.item("c::root_fn").unwrap(), Some(true), false);
+        assert!(
+            html.contains(r#"<a class="ref chg rv-ok" data-id="c::b::late""#),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"<a class="ref new" data-id="c::a::new_fn""#),
+            "{html}"
+        );
+    }
+
+    fn print_of_in(d: &Data, id: &str) -> u64 {
+        set(d, &[]);
+        print_of(id)
     }
 
     #[test]
