@@ -1,0 +1,22 @@
+name: PR Explorer
+
+# Builds the explorer page for every pull request and links it in a comment.
+# Uses the action from the PR's own checkout, so a PR that changes the tool
+# shows itself with its own version.
+on:
+  pull_request:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-explorer-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./
