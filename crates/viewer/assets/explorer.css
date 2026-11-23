@@ -144,6 +144,7 @@ code { font-size: .92em; }
 .side-legend div { margin: 3px 0; }
 .legend-dots { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .legend-dots > span { display: inline-flex; align-items: center; gap: 5px; }
+.side-opt { display: flex; align-items: center; gap: 6px; padding: 8px 14px 0; font-size: 12px; color: var(--muted); cursor: pointer; }
 .side-note { padding: 2px 14px 8px; font-size: 12px; color: var(--muted); }
 .side-warn { padding: 6px 14px; font-size: 12px; color: var(--removed); }
 

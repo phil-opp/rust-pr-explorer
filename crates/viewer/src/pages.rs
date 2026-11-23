@@ -31,17 +31,35 @@ pub fn render_sidebar(app: &App) {
     if !shown {
         return;
     }
-    fn tree(app: &App, m: &str) -> String {
-        let d = &app.d;
-        let Some(it) = d.item(m) else {
-            return String::new();
-        };
+    fn submodules<'a>(d: &'a Data, m: &str) -> Vec<&'a Item> {
         let mut subs: Vec<&Item> = d
             .mod_children_items(m)
             .into_iter()
             .filter(|c| c.info.kind == Kind::Mod)
             .collect();
         subs.sort_by(|a, b| a.info.name.cmp(&b.info.name));
+        subs
+    }
+    fn count(d: &Data, m: &str) -> usize {
+        1 + submodules(d, m)
+            .iter()
+            .map(|s| count(d, &s.info.id))
+            .sum::<usize>()
+    }
+    // Unchanged modules are left out unless asked for, except the open
+    // module page's module and its parents.
+    fn tree(app: &App, m: &str, hidden: &mut usize) -> String {
+        let d = &app.d;
+        let Some(it) = d.item(m) else {
+            return String::new();
+        };
+        let open = app.s.view == crate::View::Module
+            && (app.s.module == m || app.s.module.starts_with(&format!("{m}::")));
+        if !app.s.side_all && !d.touched(it) && !open {
+            *hidden += count(d, m);
+            return String::new();
+        }
+        let subs = submodules(d, m);
         let changes = d.changes_in(m, false);
         let n = changes.len();
         // In review mode: how many still need a review.
@@ -90,23 +108,42 @@ pub fn render_sidebar(app: &App) {
                 format!(
                     r#"<ul class="tree">{}</ul>"#,
                     subs.iter()
-                        .map(|s| tree(app, &s.info.id))
+                        .map(|s| tree(app, &s.info.id, hidden))
                         .collect::<String>()
                 )
             }
         )
     }
-    let roots: String = d.roots().iter().map(|r| tree(app, r)).collect();
+    let mut hidden = 0;
+    let roots: String = d
+        .roots()
+        .iter()
+        .map(|r| tree(app, r, &mut hidden))
+        .collect();
     let warnings = warnings_html(d);
     let note = if d.rust_changed() {
         ""
     } else {
         r#"<div class="side-note">No module changed in this PR.</div>"#
     };
+    // Offered only when it would show more.
+    let toggle = if hidden > 0 || app.s.side_all {
+        format!(
+            r#"<label class="side-opt"><input type="checkbox" id="side-all" {}> show unchanged modules{}</label>"#,
+            if app.s.side_all { "checked" } else { "" },
+            if hidden > 0 {
+                format!(" ({hidden})")
+            } else {
+                String::new()
+            }
+        )
+    } else {
+        String::new()
+    };
     dom::set_html(
         "sidebar",
         &format!(
-            r#"<div class="side-h">Modules</div>{note}<ul class="tree">{roots}</ul>
+            r#"<div class="side-h">Modules</div>{note}<ul class="tree">{roots}</ul>{toggle}
             <div class="side-legend">
               <div class="legend-dots"><span><span class="dot added"></span> added</span><span><span class="dot changed"></span> changed</span><span><span class="dot removed"></span> removed</span></div>
               <div>No symbol: unchanged.</div>

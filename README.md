@@ -75,7 +75,7 @@ The action never builds or runs the PR's code, so it has no `--trust-project-cod
 
 Lists only the public items that were added, changed or removed, nested by module, with their rustdoc-style signature and docs. A type whose methods changed appears as context with the changed members below it. Items are listed where rustdoc documents them: at their definition path when that is public, otherwise at a re-export, marked "re-export of …" (a `#[doc(inline)]` re-export first, a `#[doc(no_inline)]` one last). Items marked `#[doc(hidden)]`, or reachable only through hidden modules or hidden `pub use`s, are not part of the public API; an item that becomes hidden shows as "no longer public". Items of other crates that a crate re-exports (`pub use serde::Serialize;`) are part of its API too: they are listed as re-exports with the other crate's docs, so adding, removing or retargeting such a `pub use` is an API change. Internal changes are summarized per module, with a link to each module's internal call graph.
 
-The sidebar lists the modules with a status symbol and the number of changed items in each. When the PR changes no Rust item, the sidebar is hidden, except on the module pages, where it is the way to browse the modules.
+The sidebar lists the modules that changed or contain changes, with a status symbol and the number of changed items in each. Unchanged modules are left out (except the open module and its parents); **show unchanged modules** lists them too. When the PR changes no Rust item, the sidebar is hidden, except on the module pages, where it is the way to browse the modules.
 
 ### Files outside the Rust analysis
 
