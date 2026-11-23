@@ -492,6 +492,15 @@ pub struct ChangedFile {
     /// items show the others).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hunks: Vec<SourceLine>,
+    /// For an analyzed file: the line numbers of all its added lines (in
+    /// the PR's version) and removed lines (in the base), including those
+    /// inside items, which `hunks` leaves out. A review comment on an item
+    /// is posted to GitHub on one of them, since GitHub only takes
+    /// comments on lines its diff shows.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub added_lines: Vec<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed_lines: Vec<u32>,
     /// The file was too large to diff line by line.
     #[serde(default)]
     pub too_large: bool,
