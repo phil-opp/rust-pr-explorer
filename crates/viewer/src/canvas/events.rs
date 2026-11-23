@@ -117,6 +117,25 @@ pub fn on_pointer_down(app: &mut App, el: &Element, ev: &PointerEvent) -> bool {
     let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
     let d = app.d.clone();
     let c = &mut app.s.canvas;
+    if ev.pointer_type() == "touch" {
+        c.touches.retain(|t| t.0 != ev.pointer_id());
+        c.touches.push((ev.pointer_id(), x, y));
+        if c.touches.len() > 1 {
+            // A second finger turns panning into a pinch.
+            if matches!(c.drag, None | Some(Drag::Pan { .. }))
+                && let Some((d0, mx, my)) = pinch_geometry(&c.touches)
+            {
+                ev.prevent_default();
+                c.drag = Some(Drag::Pinch {
+                    d0,
+                    mx,
+                    my,
+                    pan: c.pan,
+                });
+            }
+            return true;
+        }
+    }
     if let Some(frame) = dom::closest(el, "[data-frame]") {
         let m = dom::data(&frame, "frame").unwrap_or_default();
         ev.prevent_default();
@@ -186,9 +205,23 @@ fn drop_target(x: f64, y: f64, dragged: u32) -> Option<Element> {
     (gid != dragged && y - card.get_bounding_client_rect().top() < 60.0).then_some(card)
 }
 
+/// The distance between the first two touch points, and their midpoint in
+/// viewport coordinates.
+fn pinch_geometry(touches: &[(i32, f64, f64)]) -> Option<(f64, f64, f64)> {
+    let &[(_, x1, y1), (_, x2, y2), ..] = touches else {
+        return None;
+    };
+    let r = dom::by_id("viewport")?.get_bounding_client_rect();
+    let d = (x2 - x1).hypot(y2 - y1).max(1.0);
+    Some((d, (x1 + x2) / 2.0 - r.left(), (y1 + y2) / 2.0 - r.top()))
+}
+
 pub fn on_pointer_move(app: &mut App, ev: &PointerEvent) {
     let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
     let c = &mut app.s.canvas;
+    if let Some(t) = c.touches.iter_mut().find(|t| t.0 == ev.pointer_id()) {
+        (t.1, t.2) = (x, y);
+    }
     match c.drag {
         Some(Drag::Card {
             gid,
@@ -232,12 +265,24 @@ pub fn on_pointer_move(app: &mut App, ev: &PointerEvent) {
             c.pan.y = py + y - sy;
             apply_pan(c);
         }
+        Some(Drag::Pinch { d0, mx, my, pan }) => {
+            let Some((d, nx, ny)) = pinch_geometry(&c.touches) else {
+                return;
+            };
+            // The point that was under the fingers' midpoint stays under it.
+            let k = (pan.k * d / d0).clamp(0.2, 2.0);
+            c.pan.x = nx - (mx - pan.x) * k / pan.k;
+            c.pan.y = ny - (my - pan.y) * k / pan.k;
+            c.pan.k = k;
+            apply_pan(c);
+        }
         None => {}
     }
 }
 
 pub fn on_pointer_up(app: &mut App, ev: &PointerEvent) {
     let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
+    app.s.canvas.touches.retain(|t| t.0 != ev.pointer_id());
     let Some(drag) = app.s.canvas.drag.take() else {
         return;
     };
