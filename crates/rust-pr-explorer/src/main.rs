@@ -139,6 +139,7 @@ fn analyze_checkout(
             pr: checkout.pr.clone(),
             project: checkout.project.clone(),
             commits: Vec::new(),
+            versions: source::crate_versions(&checkout.base_dir, &checkout.head_dir),
         },
     );
     // Files the Rust analysis covers: one per module.

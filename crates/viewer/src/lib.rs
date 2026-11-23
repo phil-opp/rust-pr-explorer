@@ -4,6 +4,7 @@
 //! HTML strings; one listener per event type on the document dispatches
 //! on `data-*` attributes of the element that was clicked or dragged.
 
+mod bump;
 mod canvas;
 mod code;
 mod commit_filter;

@@ -21,6 +21,7 @@ fn analyze_dirs(base: &Path, head: &Path) -> Output {
             pr: None,
             project: None,
             commits: Vec::new(),
+            versions: Default::default(),
         },
     )
 }
@@ -1430,4 +1431,39 @@ fn derives_count_and_their_order_does_not() {
     assert!(api.reasons[0].contains("`Hash`"), "{:?}", api.reasons);
     // Reordered, not changed.
     assert_eq!(out.items["t::Same"].status, Status::Unchanged);
+}
+
+#[test]
+fn crate_versions_follow_the_workspace_and_publish() {
+    let tree = |version: &str| {
+        let dir = write_crate(&[
+            ("src/lib.rs", ""),
+            ("member/src/lib.rs", ""),
+            (
+                "member/Cargo.toml",
+                "[package]\nname = \"member-crate\"\nversion.workspace = true\npublish = false\n",
+            ),
+            ("tool/src/main.rs", "fn main() {}"),
+            ("tool/Cargo.toml", "[package]\nname = \"tool\"\n"),
+        ]);
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            format!(
+                "[workspace]\nmembers = [\"member\", \"tool\"]\n[workspace.package]\nversion = \"{version}\"\n[package]\nname = \"t\"\nversion = \"0.1.0\"\n"
+            ),
+        )
+        .unwrap();
+        dir
+    };
+    let (base, head) = (tree("1.4.2"), tree("2.0.0"));
+    let versions = crate::source::crate_versions(base.path(), head.path());
+    let v = |base: &str, head: &str, publish: bool| model::CrateVersion {
+        base: Some(base.into()),
+        head: Some(head.into()),
+        publish,
+    };
+    assert_eq!(versions["t"], v("0.1.0", "0.1.0", true));
+    assert_eq!(versions["member_crate"], v("1.4.2", "2.0.0", false));
+    // Binaries have no API.
+    assert_eq!(versions.len(), 2, "{versions:?}");
 }
