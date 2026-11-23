@@ -6,12 +6,14 @@
 
 mod canvas;
 mod code;
+mod commit_filter;
 mod css;
 mod data;
 mod dom;
 mod files;
 mod impact;
 mod js;
+mod keys;
 mod map;
 mod nav;
 mod pages;
@@ -21,6 +23,7 @@ mod route;
 mod settings;
 mod since;
 mod space;
+mod threads;
 mod yaml;
 
 use code::esc;
@@ -73,6 +76,9 @@ pub struct State {
     /// The unit last shown by "next unreviewed", where the next search
     /// continues.
     rv_current: Option<String>,
+    /// The hunk of `rv_current` that `j` and `k` last moved to, which the
+    /// verdict keys then act on.
+    rv_hunk: Option<String>,
 }
 
 pub struct App {
@@ -133,6 +139,7 @@ pub fn start() {
             search: Vec::new(),
             search_sel: 0,
             rv_current: None,
+            rv_hunk: None,
         },
         d,
     };
@@ -140,6 +147,7 @@ pub fn start() {
     review::load(&app.d);
     let title = app.d.header_html();
     dom::set_html("pr-title", &title);
+    dom::set_html("commit-menu", &commit_filter::menu_html(&app.d));
     APP.with(|a| *a.borrow_mut() = Some(app));
     install_listeners();
     with_app(nav::start);
@@ -167,8 +175,10 @@ pub fn set_view(app: &mut App, view: View) {
         );
     }
     // Show or hide the sidebar first, so that the view lays out at its final width.
-    if let Some(el) = dom::by_id("sidebar") {
-        dom::toggle_class(&el, "hidden", !pages::sidebar_shown(app));
+    for id in ["sidebar", "side-btn"] {
+        if let Some(el) = dom::by_id(id) {
+            dom::toggle_class(&el, "hidden", !pages::sidebar_shown(app));
+        }
     }
     match view {
         View::Overview => pages::render_overview(app),
@@ -215,6 +225,13 @@ pub fn open_modal(title: &str, body: &str) {
 pub fn close_modal() {
     if let Some(m) = dom::by_id("modal") {
         dom::toggle_class(&m, "hidden", true);
+        // Keys go to the page again, not to the hidden comment field.
+        if let Some(f) = dom::document().active_element()
+            && m.contains(Some(&f))
+            && let Some(f) = f.dyn_ref::<web_sys::HtmlElement>()
+        {
+            let _ = f.blur();
+        }
     }
 }
 
@@ -262,14 +279,18 @@ fn install_listeners() {
             canvas::on_pointer_move(app, &pev);
         });
     });
-    dom::listen(&doc, "pointerup", |ev| {
-        let Ok(pev) = ev.dyn_into::<PointerEvent>() else {
-            return;
-        };
-        with_app(|app| {
-            canvas::on_pointer_up(app, &pev);
+    // A touch the browser takes over (to scroll or zoom the page) ends
+    // like a lifted finger.
+    for name in ["pointerup", "pointercancel"] {
+        dom::listen(&doc, name, |ev| {
+            let Ok(pev) = ev.dyn_into::<PointerEvent>() else {
+                return;
+            };
+            with_app(|app| {
+                canvas::on_pointer_up(app, &pev);
+            });
         });
-    });
+    }
     // Not passive: zooming prevents the page from scrolling.
     dom::listen_with(&doc, "wheel", false, false, |ev| {
         let (Some(el), Ok(wev)) = (dom::target_element(&ev), ev.dyn_into::<WheelEvent>()) else {
@@ -314,6 +335,13 @@ fn install_listeners() {
         with_app(|app| {
             if settings::on_change(&el) {
                 set_view(app, app.s.view);
+            } else if el.id() == "commit-filter" {
+                let value = el
+                    .dyn_ref::<web_sys::HtmlSelectElement>()
+                    .map(|s| s.value())
+                    .unwrap_or_default();
+                commit_filter::set(&app.d, value.parse().ok());
+                set_view(app, app.s.view);
             } else if el.id() == "show-unchanged" {
                 app.s.show_unchanged = el
                     .dyn_ref::<web_sys::HtmlInputElement>()
@@ -338,18 +366,11 @@ fn install_listeners() {
     });
     // Not passive: Ctrl+Enter in the comment editor prevents the newline.
     dom::listen_with(&doc, "keydown", false, false, |ev| {
-        // `n`: the next unreviewed item, in review mode, unless typing.
+        // Review keys (`n`, `a`, `j`, `?`, …), unless typing.
         if let Some(k) = ev.dyn_ref::<KeyboardEvent>()
-            && k.key() == "n"
-            && !(k.ctrl_key() || k.meta_key() || k.alt_key())
-            && review::is_on()
-            && !dom::target_element(&ev)
-                .is_some_and(|t| matches!(t.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT"))
+            && with_app(|app| keys::on_key(app, k)) == Some(true)
         {
-            with_app(|app| {
-                let from = app.s.rv_current.clone();
-                go_next(app, from, false);
-            });
+            ev.prevent_default();
             return;
         }
         // Ctrl+Enter in the comment editor saves with its verdict.
@@ -431,6 +452,24 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         }
         dom::toggle_class(&panel, "hidden", true);
     }
+    // On a narrow screen the sidebar is a drawer over the view, opened by
+    // its button. Picking one of its rows or clicking outside closes it.
+    if let Some(body) = dom::document().body() {
+        let open = body.class_list().contains("side-open");
+        if dom::closest(el, "#side-btn").is_some() {
+            dom::toggle_class(&body, "side-open", !open);
+            return;
+        }
+        if open && dom::closest(el, "#sidebar").is_none() {
+            // Only closes: the click wasn't aimed at what the drawer covered.
+            ev.prevent_default();
+            dom::toggle_class(&body, "side-open", false);
+            return;
+        }
+        if open && dom::closest(el, ".tree-row").is_some() {
+            dom::toggle_class(&body, "side-open", false);
+        }
+    }
     if on_review_click(app, el) {
         return;
     }
@@ -476,6 +515,16 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         }
         return;
     }
+    if dom::closest(el, "[data-commit-clear]").is_some() {
+        commit_filter::set(&app.d, None);
+        if let Some(s) = dom::by_id("commit-filter")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlSelectElement>().ok())
+        {
+            s.set_value("");
+        }
+        set_view(app, app.s.view);
+        return;
+    }
     if let Some(b) = dom::closest(el, "[data-open]") {
         canvas::open(app, &dom::data(&b, "open").unwrap_or_default(), None, true);
         return;
@@ -484,7 +533,7 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         canvas::show_module_graph(app, &dom::data(&b, "graph").unwrap_or_default());
         return;
     }
-    if let Some(f) = dom::closest(el, "#sidebar [data-goto-file]") {
+    if let Some(f) = dom::closest(el, "[data-goto-file]") {
         let path = dom::data(&f, "goto-file").unwrap_or_default();
         set_view(app, View::Overview);
         if let Some(card) = dom::query_all("#view-overview .ientry.file[data-file]")
@@ -569,6 +618,10 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
         pages::render_sidebar(app);
         return true;
     }
+    if dom::closest(el, "#rv-keys").is_some() {
+        open_modal("Keyboard shortcuts", &keys::cheat_sheet_html());
+        return true;
+    }
     if dom::closest(el, "#rv-next").is_some() {
         let from = app.s.rv_current.clone();
         go_next(app, from, false);
@@ -599,7 +652,8 @@ fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String)
     review::set_mark(&app.d, id, Some(review::Note { verdict, text }));
     if let Some(item) = review::hunk_item(id) {
         app.s.rv_current = Some(item.clone());
-        if let Some(next) = review::next_open_hunk(id) {
+        app.s.rv_hunk = review::next_open_hunk(id);
+        if let Some(next) = app.s.rv_hunk.clone() {
             // The canvas doesn't scroll like a page; the hunk is in its card.
             if app.s.view != View::Canvas {
                 reveal_unit(&format!("view-{}", app.s.view.name()), &next);
@@ -794,6 +848,7 @@ fn go_next(app: &mut App, from: Option<String>, stay: bool) {
             Some(next) => {
                 if let Some(c) = control(&next) {
                     app.s.rv_current = Some(next);
+                    app.s.rv_hunk = None;
                     reveal(&c);
                 }
             }
@@ -817,28 +872,38 @@ fn go_next(app: &mut App, from: Option<String>, stay: bool) {
         toast(&all_reviewed());
         return;
     };
-    app.s.rv_current = Some(next.clone());
-    if let Some(c) = control(&next) {
-        reveal(&c);
+    show_unit(app, &next, from.as_deref());
+}
+
+/// Makes `unit` the current unit and shows it: on the overview or module
+/// page that is open if it is listed there, else on its module's page (a
+/// file on the overview), or as a card next to `from` when the canvas is
+/// open.
+fn show_unit(app: &mut App, unit: &str, from: Option<&str>) {
+    app.s.rv_current = Some(unit.to_string());
+    app.s.rv_hunk = None;
+    if matches!(app.s.view, View::Overview | View::Module)
+        && reveal_unit(&format!("view-{}", app.s.view.name()), unit)
+    {
         return;
     }
-    if next.starts_with("file:") {
+    if unit.starts_with("file:") {
         set_view(app, View::Overview);
-        reveal_unit("view-overview", &next);
+        reveal_unit("view-overview", unit);
         return;
     }
     if app.s.view == View::Canvas {
-        canvas::open_for_review(app, &next, from.as_deref());
+        canvas::open_for_review(app, unit, from);
         return;
     }
-    let Some(module) = app.d.item(&next).map(|it| app.d.mod_of(it).to_string()) else {
+    let Some(module) = app.d.item(unit).map(|it| app.d.mod_of(it).to_string()) else {
         return;
     };
     app.s.module = module;
     set_view(app, View::Module);
-    if !reveal_unit("view-module", &next) {
+    if !reveal_unit("view-module", unit) {
         // Not listed on a page (shouldn't happen): the canvas shows anything.
-        canvas::open(app, &next, None, true);
+        canvas::open(app, unit, None, true);
     }
 }
 

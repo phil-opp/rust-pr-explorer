@@ -32,7 +32,12 @@ pub fn sidebar_shown(app: &App) -> bool {
 /// changes are all inside items opens its module's page; any other file
 /// opens its entry in the overview.
 fn files_html(d: &Data) -> String {
-    let mut files: Vec<&ChangedFile> = d.out.files.iter().collect();
+    let mut files: Vec<&ChangedFile> = d
+        .out
+        .files
+        .iter()
+        .filter(|f| crate::commit_filter::file_in(&f.path))
+        .collect();
     if files.is_empty() {
         return String::new();
     }
@@ -275,10 +280,11 @@ fn item_row(
         _ => d.title_html(it, false),
     };
     // What changed in the body, expandable to the diff; the whole source
-    // of new and removed items.
+    // of new and removed items, and of items with review threads.
     let src = if it.changes.body
         || it.changes.cosmetic
         || matches!(it.status, Status::Added | Status::Removed)
+        || !d.item_threads(&it.info.id).is_empty()
     {
         d.source_seg(it, None, false, &Default::default())
     } else {
@@ -551,6 +557,8 @@ pub fn render_overview(app: &App) {
         {}
         {}
         {}
+        {}
+        {}
         {}"#,
         esc(meta
             .pr
@@ -558,7 +566,9 @@ pub fn render_overview(app: &App) {
             .and_then(|p| p.title.as_deref())
             .unwrap_or(&meta.title)),
         d.compared_html(),
+        crate::commit_filter::banner_html(d),
         description_html(d),
+        crate::threads::overview_html(d),
         crate::files::manifests_html(d),
         rust_html,
         crate::files::other_files_html(d),
@@ -571,7 +581,7 @@ pub fn render_overview(app: &App) {
 fn semver_summary(d: &Data) -> String {
     use model::ApiLevel;
     let mut counts = [0usize; 3];
-    for it in d.items().filter(|it| d.in_public_api(it)) {
+    for it in d.items().filter(|it| d.in_public_api(it) && changed(it)) {
         if let Some(api) = &it.api {
             counts[match api.level {
                 ApiLevel::Breaking => 0,
@@ -833,12 +843,13 @@ pub fn render_module_page(app: &App) {
         );
     }
     let html = format!(
-        r#"<div class="crumbs">{crumbs}</div>
+        r#"{}<div class="crumbs">{crumbs}</div>
         <h1><span class="kind">{}</span> {} {} {}</h1>
         <div class="sub">{} · <label><input type="checkbox" id="show-unchanged" {}> show unchanged items</label> ·
           <button id="mod-graph">Internal call graph on canvas ▸</button></div>
         {}
         {sections}"#,
+        crate::commit_filter::banner_html(d),
         match (d.is_root(module), module.info.id.contains(':')) {
             // `binary repl`, `test calc`: the title says what it is.
             (true, true) => "",

@@ -16,6 +16,7 @@ fn empty() -> Data {
             resolution: String::new(),
             pr: None,
             project: None,
+            commits: Vec::new(),
         },
         crates: vec!["c".into()],
         items: BTreeMap::new(),
@@ -138,6 +139,8 @@ fn structured_signature_diff() {
         notes: vec![model::DiffNote {
             text: "variant `B` removed".into(),
             groups: vec![1],
+            member: Some("B".into()),
+            docs: None,
         }],
     };
     let html = structured_diff_html(&d, &diff, &BTreeMap::new(), &[]);
@@ -171,6 +174,7 @@ fn method_links_by_position_only() {
         Links::Source {
             line: 7,
             refs: &sites,
+            of: "c::f",
         },
     );
     assert_eq!(html.matches("c::A::get").count(), 1, "{html}");
@@ -688,7 +692,7 @@ fn ampersand_before_multibyte_text_does_not_panic() {
 }
 
 #[test]
-fn source_links_both_versions_and_marks_new_items() {
+fn source_links_both_versions_and_marks_new_and_changed_items() {
     use model::{Item, Kind, SourceLine, Status};
     let item = |id: &str, status: Status| Item {
         status,
@@ -712,13 +716,22 @@ fn source_links_both_versions_and_marks_new_items() {
         SourceLine(' ', "fn f() {".into()),
         SourceLine('-', "    old_helper();".into()),
         SourceLine('+', "    new_helper();".into()),
-        SourceLine(' ', "}".into()),
+        SourceLine(' ', "    tweaked();".into()),
+        SourceLine(' ', "    same();".into()),
+        SourceLine(' ', "    f();".into()),
+        SourceLine(' ', "Thing".into()),
     ];
     // Old line 5, new line 11, each at column 4.
     it.old_source_refs.insert("5:4".into(), r("c::old_helper"));
     it.info
         .source_refs
         .insert("11:4".into(), r("c::new_helper"));
+    it.info.source_refs.insert("12:4".into(), r("c::tweaked"));
+    it.info.source_refs.insert("13:4".into(), r("c::same"));
+    // A recursive call.
+    it.info.source_refs.insert("14:4".into(), r("c::f"));
+    // A changed type, named at the closing brace's line for brevity.
+    it.info.source_refs.insert("15:0".into(), r("c::Thing"));
     let mut out = empty().out;
     out.items.insert("c::f".into(), it.clone());
     out.items.insert(
@@ -727,6 +740,13 @@ fn source_links_both_versions_and_marks_new_items() {
     );
     out.items
         .insert("c::new_helper".into(), item("c::new_helper", Status::Added));
+    out.items
+        .insert("c::tweaked".into(), item("c::tweaked", Status::Changed));
+    out.items
+        .insert("c::same".into(), item("c::same", Status::Unchanged));
+    let mut thing = item("c::Thing", Status::Changed);
+    thing.info.kind = Kind::Struct;
+    out.items.insert("c::Thing".into(), thing);
     let d = Data::new(out);
     let html = d.source_html(&it, Some(true), false);
     assert!(
@@ -737,6 +757,15 @@ fn source_links_both_versions_and_marks_new_items() {
         html.contains(r#"<a class="ref new" data-id="c::new_helper""#),
         "{html}"
     );
+    assert!(
+        html.contains(r#"<a class="ref chg" data-id="c::tweaked""#),
+        "{html}"
+    );
+    assert!(
+        html.contains(r#"<a class="ref " data-id="c::same""#),
+        "{html}"
+    );
+    assert!(html.contains(r#"<a class="ref " data-id="c::f""#), "{html}");
 }
 
 #[test]
@@ -769,6 +798,21 @@ fn small_new_items_start_open() {
     // The reader's choice wins.
     let html = d.source_html(&item(Status::Added, Kind::Fn, 5), Some(false), false);
     assert!(!html.contains("open>"), "{html}");
+}
+
+#[test]
+fn member_docs_split_after_the_first_paragraph() {
+    use super::sig_diff::split_first_paragraph;
+    assert_eq!(split_first_paragraph("One line."), ("One line.", ""));
+    assert_eq!(
+        split_first_paragraph("First\nstill first.\n\nSecond.\n\nThird."),
+        ("First\nstill first.", "Second.\n\nThird.")
+    );
+    // A blank line inside a code block doesn't end the paragraph.
+    assert_eq!(
+        split_first_paragraph("```\na\n\nb\n```\n\nAfter."),
+        ("```\na\n\nb\n```", "After.")
+    );
 }
 
 #[test]
@@ -858,4 +902,53 @@ fn moved_lines_are_marked_with_where_they_went() {
     assert!(html.contains("(1 moved)"), "{html}");
     // The other removed line is an ordinary one, with its words marked.
     assert_eq!(html.matches(" mv\"").count(), 1, "{html}");
+}
+
+#[test]
+fn inline_diffs_number_old_and_new_lines() {
+    use model::{Item, SourceLine, Status};
+    let d = empty();
+    let mut it = Item {
+        status: Status::Changed,
+        ..Default::default()
+    };
+    it.changes.body = true;
+    it.info.kind = model::Kind::Fn;
+    it.old_line = Some(4);
+    it.info.line = 10;
+    it.source = vec![
+        SourceLine(' ', "fn f() {".into()),
+        SourceLine('-', "    a();".into()),
+        SourceLine('+', "    b();".into()),
+        SourceLine(' ', "}".into()),
+    ];
+    let html = d.source_html(&it, Some(true), false);
+    for want in [
+        r#"<span class="lno" data-o="4" data-n="10"></span><span class="sg" data-t="">"#,
+        r#"<span class="lno" data-o="5" data-n=""></span><span class="sg" data-t="-">"#,
+        r#"<span class="lno" data-o="" data-n="11"></span><span class="sg" data-t="+">"#,
+        r#"<span class="lno" data-o="6" data-n="12"></span>"#,
+        r#"style="--lnw: 2ch""#,
+    ] {
+        assert!(html.contains(want), "{want}\n{html}");
+    }
+    // File diffs: numbered from the hunk header on.
+    let html = crate::files::hunks_html(
+        &d,
+        &[
+            SourceLine('@', "98 120".into()),
+            SourceLine(' ', "a".into()),
+            SourceLine('-', "b".into()),
+            SourceLine('+', "c".into()),
+        ],
+        "",
+    );
+    for want in [
+        r#"<span class="lno" data-o="98" data-n="120"></span>"#,
+        r#"<span class="lno" data-o="99" data-n=""></span>"#,
+        r#"<span class="lno" data-o="" data-n="121"></span>"#,
+        r#"style="--lnw: 3ch""#,
+    ] {
+        assert!(html.contains(want), "{want}\n{html}");
+    }
 }

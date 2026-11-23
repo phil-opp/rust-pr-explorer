@@ -281,6 +281,13 @@ pub struct DiffNote {
     pub text: String,
     /// Groups of the spans this note describes.
     pub groups: Vec<u32>,
+    /// The field or variant the note is about, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
+    /// Its doc comment (Markdown): the new one, or for a removed member
+    /// the old one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
 }
 
 /// A signature diff aligned on syntax: parameters, generic parameters,
@@ -430,6 +437,33 @@ pub struct Meta {
     /// hash, so that the page doesn't contain the paths.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// The commits between base and head, oldest first, with what each
+    /// one touched. Empty without a git history (`dirs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commits: Vec<Commit>,
+}
+
+/// A commit of the compared range, and the changes of the page it made.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct Commit {
+    pub sha: String,
+    /// The first line of its message.
+    pub title: String,
+    pub author: String,
+    /// ISO 8601.
+    pub date: String,
+    /// More than one parent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub merge: bool,
+    /// Changed items with a line that this commit added and that is still
+    /// in the PR's version, or a line of the base that this commit
+    /// removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<String>,
+    /// Changed files the commit modified (relative to the analyzed
+    /// directory), whether or not their change survives.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
 }
 
 /// FNV-1a: the same value on every platform and with every Rust version
@@ -478,6 +512,50 @@ pub struct PrMeta {
     /// so the page's diff may not be the one GitHub shows.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub custom_base: bool,
+    /// The PR's review threads on GitHub when the page was built, open and
+    /// resolved, in the order GitHub lists them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub threads: Vec<ReviewThread>,
+}
+
+/// A review thread of a pull request: comments on a line of a file.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReviewThread {
+    /// The file, relative to the repository root.
+    pub path: String,
+    /// The line it is on in the PR's current diff: in the PR's version of
+    /// the file, or in the base's with `left`. `None` when the thread is
+    /// outdated (its line is gone) or on the whole file.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    /// The first line, for a comment on several lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start_line: Option<usize>,
+    /// The line in the diff the thread was started on, for an outdated one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original_line: Option<usize>,
+    /// On the base's version of the line (GitHub's `LEFT` side).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub left: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resolved: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub outdated: bool,
+    /// The first comment on GitHub.
+    #[serde(default)]
+    pub url: String,
+    pub comments: Vec<ThreadComment>,
+}
+
+/// One comment of a review thread.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct ThreadComment {
+    /// GitHub login; empty for a deleted account.
+    pub author: String,
+    /// Markdown.
+    pub body: String,
+    /// ISO 8601, e.g. `2026-11-23T15:33:01Z`.
+    pub created_at: String,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
