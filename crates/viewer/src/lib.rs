@@ -453,7 +453,12 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
             dom::closest(&a, ".card").and_then(|card| canvas::active_item_of_card(app, &card));
         match from {
             Some(from) => canvas::open(app, &id, Some(&from), false),
-            None => canvas::open(app, &id, None, true),
+            // On a page: jump to the item if the page shows it, else open
+            // it on the canvas.
+            None => match row_on_page(&a, &id) {
+                Some(row) => reveal(&row),
+                None => canvas::open(app, &id, None, true),
+            },
         }
         return;
     }
@@ -836,6 +841,15 @@ fn reveal_unit(section: &str, unit: &str) -> bool {
         }
         None => false,
     }
+}
+
+/// The row of item `id` in the view that `link` is in, if that view shows
+/// the item.
+fn row_on_page(link: &Element, id: &str) -> Option<Element> {
+    let view = dom::closest(link, "[id^='view-']")?;
+    dom::query_all_in(&view.into(), ".irow[data-id], .impl-line[data-id]")
+        .into_iter()
+        .find(|row| dom::data(row, "id").as_deref() == Some(id))
 }
 
 /// Scrolls the row of a review control into view and highlights it.
