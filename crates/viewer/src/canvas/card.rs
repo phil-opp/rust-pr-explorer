@@ -280,7 +280,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
                     m.info.kind.css(),
                     esc(&m.info.id),
                     esc(&m.info.name),
-                    crate::data::test_tag_of(m),
+                    crate::data::test_tag_of(m).to_string() + &crate::unsafety::tag(m),
                     if m.info.vis_scope.is_some() { format!(r#"<span class="vis">{}</span>"#, esc(&m.info.vis_label)) } else { String::new() }
                 ));
             }
@@ -308,7 +308,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
             )
         })
         .unwrap_or_default();
-    let impact = crate::impact::line_html(d, it);
+    let impact = crate::unsafety::lines_html(&it.unsafe_code) + &crate::impact::line_html(d, it);
     let context = match (context, folded) {
         (false, _) => "",
         (true, false) => "context",
@@ -317,7 +317,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     format!(
         r#"<div class="card cs-{} {context}" data-gid="{}" style="left:{}px;top:{}px">
         {tabs}
-        <div class="card-h"><span class="kind">{}</span>{} {}<span class="grow"></span>{}{}<span class="x" data-close="{}" title="Close">×</span></div>
+        <div class="card-h"><span class="kind">{}</span>{} {}{}<span class="grow"></span>{}{}<span class="x" data-close="{}" title="Close">×</span></div>
         <div class="card-loc">{}</div>
         <div class="card-b">{impl_header}{impact}{body}{}</div>{members}{}{}</div>"#,
         it.status.css(),
@@ -328,6 +328,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         d.title_html(it, false),
         d.vis_html(it),
         d.status_html(it),
+        crate::unsafety::tag(it),
         gh_link(d, it),
         esc(id),
         if external.is_some() {

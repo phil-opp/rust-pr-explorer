@@ -302,10 +302,12 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
                 _ => "",
             };
             format!(
-                r#"<div class="irow member part {status_class}"><div class="ihead"><span class="kind">{}</span><span class="title-name">{}</span>{}</div>{}</div>"#,
+                r#"<div class="irow member part {status_class}"><div class="ihead"><span class="kind">{}</span><span class="title-name">{}</span>{}{}</div>{}{}</div>"#,
                 esc(&c.kind),
                 esc(&c.name),
                 badge(c.status),
+                crate::unsafety::part_tag(c),
+                crate::unsafety::lines_html(&c.unsafe_code),
                 marked_html(segs)
             )
         })

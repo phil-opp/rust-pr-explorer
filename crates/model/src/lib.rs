@@ -385,6 +385,56 @@ pub struct Item {
     /// and its API changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api: Option<ApiChange>,
+    /// The `unsafe` code the item adds, changes or removes (see
+    /// [`UnsafeChange`]). Empty if its `unsafe` code, if any, is unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsafe_code: Vec<UnsafeChange>,
+}
+
+/// A piece of `unsafe` code that a PR adds, changes or removes: an
+/// `unsafe` block, function, impl, trait or `extern` block, or an
+/// attribute that is unsafe to use (`#[unsafe(no_mangle)]`, `#[no_mangle]`,
+/// `#[export_name]`, `#[link_section]`). Code inside a macro's arguments or
+/// a `macro_rules!` body counts too, as far as its tokens show it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct UnsafeChange {
+    pub kind: UnsafeKind,
+    /// `Added`, `Changed` or `Removed`.
+    pub status: Status,
+    /// What it is, as code: `unsafe fn read`, `unsafe impl Send for Buf`,
+    /// `#[no_mangle]`; for a block, `unsafe { … }`.
+    pub what: String,
+    /// Its first and last line in the head's file (not for a removed one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<(u32, u32)>,
+    /// Its first and last line in the base's file (not for an added one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_lines: Option<(u32, u32)>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum UnsafeKind {
+    Block,
+    Fn,
+    Impl,
+    Trait,
+    Extern,
+    Attr,
+}
+
+impl UnsafeKind {
+    /// What the kind is called in a sentence: "`unsafe` block".
+    pub fn label(self) -> &'static str {
+        match self {
+            UnsafeKind::Block => "unsafe block",
+            UnsafeKind::Fn => "unsafe fn",
+            UnsafeKind::Impl => "unsafe impl",
+            UnsafeKind::Trait => "unsafe trait",
+            UnsafeKind::Extern => "extern block",
+            UnsafeKind::Attr => "unsafe attribute",
+        }
+    }
 }
 
 /// Whether a public API change is breaking, by Cargo's SemVer rules.
@@ -856,4 +906,7 @@ pub struct PartChange {
     /// entries of their own).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<SourceLine>,
+    /// For Rust code: the `unsafe` code it adds, changes or removes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsafe_code: Vec<UnsafeChange>,
 }
