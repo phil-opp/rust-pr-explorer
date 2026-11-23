@@ -545,7 +545,7 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
         open_modal("Finish your review", &post::finish_html(&app.d));
         return true;
     }
-    if dom::closest(el, "#rv-mode").is_some() {
+    if dom::closest(el, "#rv-mode, #rv-exit").is_some() {
         review::set_on(!review::is_on());
         pages::render_sidebar(app);
         return true;

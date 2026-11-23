@@ -567,13 +567,16 @@ fn refresh(id: &str) {
     update_progress();
 }
 
+/// Leaves review mode; the marks stay.
+const EXIT: &str = r#"<button id="rv-exit" title="Hide the review controls. Your marks stay, and come back with Start review">Exit review</button>"#;
+
 /// The progress and the review actions in the header: "Next" while
 /// something is left, then "Finish review…" as the main action. "Clear"
-/// sits apart, since it removes every mark.
+/// and "Exit review" sit apart.
 pub fn update_progress() {
     let (done, total) = progress();
     let html = match (done * 100).checked_div(total) {
-        None => r#"<span class="dim">Nothing to review</span>"#.to_string(),
+        None => format!(r#"<span class="dim">Nothing to review</span>{EXIT}"#),
         Some(percent) => {
             let all = done == total;
             let count = if all {
@@ -588,7 +591,7 @@ pub fn update_progress() {
                     .to_string()
             };
             format!(
-                r#"<span class="rv-progress{}" title="Reviewed items and files"><span class="rv-count">{count}</span><span class="rv-meter"><span style="width:{percent}%"></span></span></span>{next}<button id="rv-finish" class="{}" title="Sum up your verdicts and comments, to post them as a review on GitHub">Finish review…</button><button id="rv-clear" title="Remove every review mark of this pull request">Clear marks</button>"#,
+                r#"<span class="rv-progress{}" title="Reviewed items and files"><span class="rv-count">{count}</span><span class="rv-meter"><span style="width:{percent}%"></span></span></span>{next}<button id="rv-finish" class="{}" title="Sum up your verdicts and comments, to post them as a review on GitHub">Finish review…</button><button id="rv-clear" title="Remove every review mark of this pull request">Clear marks</button>{EXIT}"#,
                 if all { " all" } else { "" },
                 if all { "primary" } else { "" },
             )

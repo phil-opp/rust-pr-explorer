@@ -584,9 +584,8 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 
 /* Review mode. The controls show in review mode; an existing mark always. */
 #rv-mode { white-space: nowrap; }
-#rv-mode.on { background: var(--reviewed); border-color: var(--reviewed); color: var(--bg); }
-#rv-mode.on::before { content: "☑ "; }
-#rv-mode:not(.on)::before { content: "☐ "; }
+/* In review mode, "Exit review" in the review bar takes its place. */
+.reviewing #rv-mode { display: none; }
 #rv-bar { display: none; align-items: center; gap: 8px; font-size: 13px; white-space: nowrap; }
 .reviewing #rv-bar { display: flex; }
 #rv-bar button { font-size: 12px; padding: 2px 8px; }
@@ -600,6 +599,7 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 /* Removes every mark: kept apart from the other actions, and quiet. */
 #rv-bar #rv-clear { margin-left: 6px; border-color: transparent; background: none; color: var(--muted); }
 #rv-bar #rv-clear:hover { color: var(--removed); border-color: var(--removed); }
+#rv-bar #rv-exit { color: var(--muted); }
 .rv-meter { width: 70px; height: 6px; border-radius: 3px; background: var(--bg-alt); border: 1px solid var(--border); overflow: hidden; }
 .rv-meter span { display: block; height: 100%; background: var(--reviewed); }
 .rvc { display: inline-flex; gap: 4px; align-items: center; }
