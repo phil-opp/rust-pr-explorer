@@ -18,6 +18,9 @@ rustup target add wasm32-unknown-unknown
 rustup component add rust-src
 
 cargo build --release
+# Optional: a smaller page (about 0.35 MB less), at the cost of compiling
+# Binaryen's wasm-opt (C++) from source once, about 5 more minutes.
+cargo build --release --features wasm-opt
 
 # A GitHub pull request (public repositories; needs `git`).
 ./target/release/rust-pr-explorer pr https://github.com/rust-lang/log/pull/613
