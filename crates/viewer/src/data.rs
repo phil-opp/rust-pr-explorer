@@ -947,6 +947,7 @@ impl Data {
         let old_links = |o: usize| Links::Source {
             line: old_start + o,
             refs: old_refs,
+            of: &it.info.id,
         };
         // The block of moved lines (see `moved_lines`) that a removed (`-`)
         // or added (`+`) line is in.
@@ -995,6 +996,7 @@ impl Data {
                     Links::Source {
                         line: new_start + n,
                         refs: &it.info.source_refs,
+                        of: &it.info.id,
                     },
                 );
                 if let Some((a, b)) = crate::code::mark_changed_tokens(&old_html, &new_html) {
@@ -1013,6 +1015,7 @@ impl Data {
                 Links::Source {
                     line: new_start + n,
                     refs: &it.info.source_refs,
+                    of: &it.info.id,
                 },
             )
         };
