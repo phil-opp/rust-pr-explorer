@@ -1,0 +1,69 @@
+[package]
+name = "rust-pr-explorer"
+version.workspace = true
+edition.workspace = true
+build = "build.rs"
+
+[dependencies]
+anyhow = "1.0.104"
+clap = { version = "4.6.9", features = ["derive", "env"] }
+prettyplease = "0.3.0"
+proc-macro2 = { version = "1.0.107", features = ["span-locations"] }
+quote = "1.0.47"
+model.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+similar = "3.2.1"
+syn = { version = "3.0.10", features = ["full", "visit", "visit-mut", "extra-traits", "printing"] }
+tempfile = "3.27.0"
+toml = "1.2.2"
+base64 = "0.23.1"
+
+
+[features]
+default = ["semantic"]
+# Precise call resolution with rust-analyzer (as a library).
+semantic = [
+  "dep:ra_ap_ide",
+  "dep:ra_ap_ide_db",
+  "dep:ra_ap_load-cargo",
+  "dep:ra_ap_paths",
+  "dep:ra_ap_project_model",
+  "dep:ra_ap_vfs",
+  "dep:salsa",
+]
+
+[dependencies.ra_ap_ide]
+version = "=0.0.349"
+optional = true
+
+[dependencies.ra_ap_ide_db]
+version = "=0.0.349"
+optional = true
+
+[dependencies.ra_ap_load-cargo]
+version = "=0.0.349"
+optional = true
+
+[dependencies.ra_ap_paths]
+version = "=0.0.349"
+optional = true
+
+[dependencies.ra_ap_project_model]
+version = "=0.0.349"
+optional = true
+
+[dependencies.ra_ap_vfs]
+version = "=0.0.349"
+optional = true
+
+# Not used directly: newer 0.28 releases break the rust-analyzer crates above.
+[dependencies.salsa]
+version = "=0.28.2"
+optional = true
+
+[build-dependencies]
+wasm-bindgen-cli-support.workspace = true
+
+[lints]
+workspace = true

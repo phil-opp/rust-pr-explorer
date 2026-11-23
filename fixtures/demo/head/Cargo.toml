@@ -1,0 +1,7 @@
+[package]
+name = "tinycalc"
+version = "0.1.0"
+edition = "2021"
+
+# Not part of the surrounding workspace.
+[workspace]
