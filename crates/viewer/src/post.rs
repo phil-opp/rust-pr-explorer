@@ -269,12 +269,11 @@ fn item_lines(it: &Item, tags: &[char]) -> Vec<usize> {
 pub fn item_loc(files: &[ChangedFile], it: &Item) -> Option<Loc> {
     let head = it.info.file.as_str();
     let base = it.old_file.as_deref().unwrap_or(head);
-    if let [one] = &review::changes(it)[..] {
-        if let Some(l) = span_of(&rows_of(files, head), head, '+', &one.new)
+    if let [one] = &review::changes(it)[..]
+        && let Some(l) = span_of(&rows_of(files, head), head, '+', &one.new)
             .or_else(|| span_of(&rows_of(files, base), base, '-', &one.old))
-        {
-            return Some(l);
-        }
+    {
+        return Some(l);
     }
     let added = || first_of(&rows_of(files, head), head, '+', &item_lines(it, &['+']));
     let removed = || first_of(&rows_of(files, base), base, '-', &item_lines(it, &['-']));
