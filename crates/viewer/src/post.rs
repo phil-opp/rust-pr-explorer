@@ -422,15 +422,37 @@ fn shell_safe_json(v: &Value) -> String {
 /// One command that posts the review with the GitHub CLI. The JSON is
 /// piped in, so nothing needs to be saved first; `printf` because zsh's
 /// `echo` would turn `\n` into line breaks.
+///
+/// GitHub refuses an approval of one's own PR. So an approval falls back
+/// (`||`, which bash, zsh and fish all have) to a comment review whose
+/// text starts with "Approved.": any other error would make that fail
+/// too, and the page can't know who runs the command.
 pub fn command(d: &Data, comments: &[Comment], own: &str, event: Verdict) -> Option<String> {
     let pr = d.out.meta.pr.as_ref()?;
+    let post = |v: &Value| {
+        format!(
+            "printf '%s' '{}' | gh api --method POST repos/{}/pulls/{}/reviews --input -",
+            shell_safe_json(v),
+            pr.repo,
+            pr.number,
+        )
+    };
     let v = review_value(comments, own, event, &pr.head_commit);
-    Some(format!(
-        "printf '%s' '{}' | gh api --method POST repos/{}/pulls/{}/reviews --input -",
-        shell_safe_json(&v),
-        pr.repo,
-        pr.number,
-    ))
+    if event != Verdict::Approve {
+        return Some(post(&v));
+    }
+    Some(format!("{} || {}", post(&v), post(&approved_comment(v))))
+}
+
+/// An approval as a comment review, for the author's own PR.
+fn approved_comment(mut v: Value) -> Value {
+    let body = match v["body"].as_str() {
+        Some(b) if !b.is_empty() => format!("Approved.\n\n{b}"),
+        _ => "Approved.".to_string(),
+    };
+    v["event"] = json!("COMMENT");
+    v["body"] = json!(body);
+    v
 }
 
 /// What the posted review consists of, shown above the copy buttons.
@@ -461,7 +483,12 @@ pub fn posts_html(comments: &[Comment], own: &str, event: Verdict) -> String {
     } else {
         format!("{} and {last}", parts.join(", "))
     };
-    format!("The command posts {list}.")
+    let own_pr = if event == Verdict::Approve {
+        " On your own PR, which GitHub doesn't let you approve, it posts a comment review starting with “Approved.” instead, after GitHub's refusal."
+    } else {
+        ""
+    };
+    format!("The command posts {list}.{own_pr}")
 }
 
 /// The dialog that sums up the review and offers ways to post it.
@@ -839,13 +866,24 @@ mod tests {
                 side: "RIGHT",
             }),
         };
-        assert_eq!(
-            posts_html(&[], "", Verdict::Approve),
-            "The command posts an <b>approval</b>."
+        assert!(
+            posts_html(&[], "", Verdict::Approve)
+                .starts_with("The command posts an <b>approval</b>. On your own PR")
         );
         assert_eq!(
             posts_html(&[c(true), c(true), c(false)], "Nice", Verdict::Changes),
             "The command posts a <b>request for changes</b>, your summary, 2 inline comments and 1 comment in the review's text."
         );
+    }
+
+    #[test]
+    fn own_pr_approval() {
+        // Without a text, an approval has no body; the fallback has one.
+        let v = approved_comment(review_value(&[], "", Verdict::Approve, "abc"));
+        assert_eq!(v["event"], "COMMENT");
+        assert_eq!(v["body"], "Approved.");
+        assert_eq!(v["commit_id"], "abc");
+        let v = approved_comment(review_value(&[], "Looks good", Verdict::Approve, ""));
+        assert_eq!(v["body"], "Approved.\n\nLooks good");
     }
 }

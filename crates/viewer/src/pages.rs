@@ -275,10 +275,11 @@ fn item_row(
         _ => d.title_html(it, false),
     };
     // What changed in the body, expandable to the diff; the whole source
-    // of new and removed items.
+    // of new and removed items, and of items with review threads.
     let src = if it.changes.body
         || it.changes.cosmetic
         || matches!(it.status, Status::Added | Status::Removed)
+        || !d.item_threads(&it.info.id).is_empty()
     {
         d.source_seg(it, None, false, &Default::default())
     } else {
@@ -556,6 +557,7 @@ pub fn render_overview(app: &App) {
         {}
         {}
         {}
+        {}
         {}"#,
         esc(meta
             .pr
@@ -564,6 +566,7 @@ pub fn render_overview(app: &App) {
             .unwrap_or(&meta.title)),
         d.compared_html(),
         description_html(d),
+        crate::threads::overview_html(d),
         crate::files::manifests_html(d),
         rust_html,
         crate::files::other_files_html(d),
