@@ -10,11 +10,11 @@
   --type: #ad378a;
   --trait: #6e4fc4;
   --fn: #8f6529;
-  --mod: #3873ad;
-  --macro: #068000;
+  --mod: #366ea6;
+  --macro: #067d00;
   --kw: #8959a8;
-  --str: #718c00;
-  --num: #c18401;
+  --str: #5e7400;
+  --num: #916301;
   --comment: #6a6c68;
   --added: #1a7f37;
   --added-bg: #e6f6ea;
@@ -383,7 +383,7 @@ a.ref:hover { text-decoration: underline; }
 .card-b details.src, .irow details.src { border-top: 1px solid var(--border); padding-top: 8px; }
 .src .ln.skip, .sbs .skip { color: var(--muted); text-align: center; }
 .sbs .skip { grid-column: 1 / -1; }
-.unfold { cursor: pointer; user-select: none; color: var(--link) !important; background: color-mix(in srgb, var(--link) 8%, transparent); font-family: var(--sans); font-size: 12px; text-align: left !important; padding-left: 12px !important; }
+.unfold { cursor: pointer; user-select: none; color: color-mix(in srgb, var(--link) 85%, var(--text)) !important; background: color-mix(in srgb, var(--link) 8%, transparent); font-family: var(--sans); font-size: 12px; text-align: left !important; padding-left: 12px !important; }
 .unfold:hover { background: color-mix(in srgb, var(--link) 16%, transparent); }
 .src .ln.unfold::before { content: none; }
 .fold { display: contents; }
@@ -489,23 +489,21 @@ a.card-badge[data-drill]:hover { border-style: solid; }
 .ln.add .wc { background: color-mix(in srgb, var(--added) 28%, transparent); border-radius: 2px; }
 /* Changed words have a stronger background than their line, on which the
    syntax colors fall below the WCAG AA contrast ratio (4.5:1). Inside them,
-   the syntax colors move toward the text color just enough to keep it. A
-   comment's or string's color is set outside the changed words, so it is set
-   again inside them. */
-.ln .wc, .sig-diff ins.sd {
-  --type: #842d6b; --trait: #584099; --fn: #664b25; --mod: #2b5278; --macro: #095e05;
-  --kw: #634278; --str: #475607; --num: #694a09; --comment: #4e504d; --link: #225380;
+   the syntax colors move toward the text color just enough to keep it: the
+   variables for tokens inside a changed word, and `color` for a changed word
+   inside a token (a comment, a string, a name), whose color it inherits. */
+.ln .wc, .sig-diff ins.sd, .sig-diff .wrap ins.edge {
+  --type: #842d6b; --trait: #584099; --fn: #674a21; --mod: #2b5279; --macro: #095e05;
+  --kw: #634278; --str: #475605; --num: #6b4a06; --comment: #4e504d; --link: #225380;
+  color: color-mix(in srgb, currentColor 50%, var(--text));
 }
 @media (prefers-color-scheme: dark) {
-  .ln .wc, .sig-diff ins.sd {
+  .ln .wc, .sig-diff ins.sd, .sig-diff .wrap ins.edge {
     --type: #e9b7dd; --trait: #cebef9; --fn: #e4c095; --mod: #a9caee; --macro: #88d988;
     --kw: #d6bdea; --str: #b1d17b; --num: #e3c37b; --comment: #c6c6ca; --link: #a1cbf1;
+    color: color-mix(in srgb, currentColor 55%, var(--text));
   }
 }
-.kw .wc { color: var(--kw); }
-.str .wc { color: var(--str); }
-.num .wc { color: var(--num); }
-.cm .wc { color: var(--comment); }
 
 /* Word changes in docs: inserted words underlined, removed ones struck out. */
 ins.wd { text-decoration: underline 2px var(--added); text-underline-offset: 3px; background: var(--added-bg); }
