@@ -128,7 +128,7 @@ pub fn item_loc(files: &[ChangedFile], it: &Item) -> Option<Loc> {
 pub fn hunk_loc(files: &[ChangedFile], it: &Item, h: &review::Hunk) -> Option<Loc> {
     let find = |path: &str, tag: char, lines: &[usize]| {
         let f = files.iter().find(|f| f.path == path)?;
-        numbered(&f.hunks)
+        diff_lines(f)
             .into_iter()
             .find(|&(t, o, n)| t == tag && lines.contains(if tag == '-' { &o } else { &n }))
             .map(|(_, o, n)| Loc {
