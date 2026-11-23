@@ -451,6 +451,11 @@ pub fn open_count<'a>(ids: impl IntoIterator<Item = &'a str>) -> usize {
 /// The first unit after `after` (or from the start) that still needs a
 /// review, wrapping around.
 pub fn next_open(after: Option<&str>) -> Option<String> {
+    next_open_where(after, |_| true)
+}
+
+/// Like [`next_open`], among the units that `keep` accepts.
+pub fn next_open_where(after: Option<&str>, keep: impl Fn(&str) -> bool) -> Option<String> {
     let units = REVIEW.with(|r| r.borrow().units.clone());
     let start = after
         .and_then(|a| units.iter().position(|u| u == a))
@@ -458,7 +463,7 @@ pub fn next_open(after: Option<&str>) -> Option<String> {
     let n = units.len();
     (0..n)
         .map(|k| &units[(start + k) % n])
-        .find(|u| mark(u) != Some(Mark::Done))
+        .find(|u| keep(u) && mark(u) != Some(Mark::Done))
         .cloned()
 }
 
