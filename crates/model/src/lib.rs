@@ -296,6 +296,24 @@ pub struct SigDiff {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SourceLine(pub char, pub String);
 
+/// A block of removed or added lines of an item's source that was moved.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MovedLines {
+    /// `-` for removed lines (moved away), `+` for added ones (moved here).
+    pub side: char,
+    /// The block's first line and its number of lines, counted in that
+    /// side's version of the source: `source` without the lines of the
+    /// other side.
+    pub start: u32,
+    pub len: u32,
+    /// The item the lines were moved to (for removed lines) or from (for
+    /// added ones). It can be this item itself.
+    pub other: String,
+    /// The block's first line there, as a line number in that version's
+    /// file.
+    pub other_line: u32,
+}
+
 /// An item as compared between base and head.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Item {
@@ -330,6 +348,12 @@ pub struct Item {
     /// item, `info` is the base version and has them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub old_source_refs: BTreeMap<String, Ref>,
+    /// Blocks of `source`'s removed or added lines that were moved: they
+    /// appear, the same apart from whitespace, among the added or removed
+    /// lines of another item (e.g. an extracted helper) or elsewhere in
+    /// this one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moved_lines: Vec<MovedLines>,
     /// How the item's public API changed, if it is public on either side
     /// and its API changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -561,6 +585,10 @@ pub struct ChangedFile {
     /// Structured changes of a `Cargo.toml`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub manifest: Vec<ManifestChange>,
+    /// The packages whose locked versions changed, for `Cargo.lock`,
+    /// `uv.lock` and `poetry.lock`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lock: Vec<LockChange>,
     /// The file's changed parts, each shown as a box: functions and
     /// classes of a Python file, keys of a YAML file, and for an analyzed
     /// Rust file the code that belongs to no item (tests, macro calls,
@@ -590,6 +618,30 @@ pub struct ManifestChange {
     pub old: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new: Option<String>,
+}
+
+/// A package of a lock file whose locked versions, source or checksum
+/// changed.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LockChange {
+    pub name: String,
+    /// The locked versions before and after: usually one, several when
+    /// the package is locked in more than one version, none when absent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub old: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new: Vec<String>,
+    /// Where it comes from, when that changed (or for an added package),
+    /// unless that is the default registry (crates.io, PyPI): a git
+    /// repository, another registry, a path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_source: Option<String>,
+    /// A version that is locked on both sides, from the same source, has
+    /// another checksum: the published package itself differs.
+    #[serde(default)]
+    pub checksum_changed: bool,
 }
 
 /// A selector of a stylesheet whose properties changed. Its properties

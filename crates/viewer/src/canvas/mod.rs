@@ -39,6 +39,8 @@ pub struct Group {
     /// Folds of unchanged source lines that were expanded, by item and
     /// first row.
     pub unfolded: BTreeMap<String, BTreeSet<usize>>,
+    /// Unchanged items whose card the reader expanded beyond the signature.
+    pub expanded: BTreeSet<String>,
 }
 
 #[derive(Clone, Copy)]
@@ -121,6 +123,7 @@ impl Canvas {
             y,
             open_src: BTreeMap::new(),
             unfolded: BTreeMap::new(),
+            expanded: BTreeSet::new(),
         });
         self.next_gid += 1;
         self.groups.len() - 1
