@@ -1133,12 +1133,12 @@ fn renamed_modules_keep_their_items() {
 
 #[test]
 fn test_only_code_is_items() {
-    let lib = "pub struct S;\n\nimpl S {\n    pub fn real(&self) {}\n\n    #[cfg(test)]\n    pub fn helper(&self) {}\n}\n\n#[cfg(test)]\npub fn only() {}\n\n#[cfg(test)]\nimpl S {\n    pub fn fixture() -> S {\n        S\n    }\n}\n\n#[cfg(test)]\nmod tests {\n    pub fn util() {}\n\n    #[test]\n    fn works() {\n        super::S.real();\n    }\n}\n";
+    let lib = "pub struct S;\n\nimpl S {\n    pub fn real(&self) {}\n\n    #[cfg(test)]\n    pub fn helper(&self) {}\n}\n\n#[cfg(test)]\npub fn only() {}\n\n#[cfg(test)]\nimpl S {\n    pub fn fixture() -> S {\n        S\n    }\n}\n\n#[cfg(test)]\nmod tests {\n    pub fn util() {}\n\n    #[test]\n    fn works() {\n        super::S.real();\n    }\n}\n\n#[tokio::test]\nasync fn loose() {}\n";
     let dir = write_crate(&[
         ("src/lib.rs", lib),
         (
             "tests/it.rs",
-            "#[test]\nfn outside() {\n    t::S.real();\n}\n",
+            "#[test]\nfn outside() {\n    t::S.real();\n}\n\nfn setup() {}\n\n#[tokio::test]\nasync fn waits() {\n    setup();\n}\n",
         ),
     ]);
     let an = Analyzer::run(dir.path(), &crate::source::find_crates(dir.path()));
@@ -1157,7 +1157,9 @@ fn test_only_code_is_items() {
         .filter(|i| i.info.test_only)
         .map(|i| i.info.id.as_str())
         .collect();
-    for name in ["helper", "only", "fixture", "tests", "util", "works"] {
+    for name in [
+        "helper", "only", "fixture", "tests", "util", "works", "loose",
+    ] {
         assert!(
             test_only
                 .iter()
@@ -1179,6 +1181,24 @@ fn test_only_code_is_items() {
         .find(|i| i.info.name == "outside")
         .unwrap();
     assert!(!outside.info.test_only);
+
+    // Test functions are marked as tests, in libraries and integration
+    // tests alike, also with an attribute macro such as `#[tokio::test]`.
+    // Helpers are not.
+    let is_test = |name: &str| {
+        an.items
+            .values()
+            .find(|i| i.info.name == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .info
+            .test
+    };
+    for name in ["works", "loose", "outside", "waits"] {
+        assert!(is_test(name), "{name}");
+    }
+    for name in ["helper", "only", "fixture", "util", "setup", "real"] {
+        assert!(!is_test(name), "{name}");
+    }
 }
 
 #[test]

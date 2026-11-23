@@ -592,10 +592,14 @@ impl Data {
     }
 
     /// The visibility of a module. Other items show it in their signature.
+    /// Test code gets a tag in front: "test" for a test function,
+    /// "test-only" for other code that is compiled only for tests.
     pub fn vis_html(&self, it: &Item) -> String {
         let i = &it.info;
-        let test = if i.test_only {
-            r#"<span class="st st-test" title="Compiled only for tests: marked #[test] or #[cfg(test)], or inside test-only code">test-only</span>"#
+        let test = if i.test {
+            test_tag()
+        } else if i.test_only {
+            r#"<span class="st st-test" title="Compiled only for tests: marked #[cfg(test)], or inside test-only code">test-only</span>"#
         } else {
             ""
         };
@@ -612,7 +616,7 @@ impl Data {
             None => "public".into(),
         };
         format!(
-            r#"{test}<span class="{class}" title="{}">{}</span>"#,
+            r#"{test} <span class="{class}" title="{}">{}</span>"#,
             esc(&title),
             esc(&i.vis_label)
         )
@@ -626,6 +630,16 @@ impl Data {
             _ => &it.info.sig,
         }
     }
+}
+
+/// The tag of a test function, for item rows, cards and compact lists.
+pub fn test_tag() -> &'static str {
+    r#"<span class="st st-test st-testfn" title="A test function: marked #[test], or with a test attribute such as #[tokio::test]">test</span>"#
+}
+
+/// [`test_tag`] if `it` is a test function, for compact lists of items.
+pub fn test_tag_of(it: &Item) -> &'static str {
+    if it.info.test { test_tag() } else { "" }
 }
 
 impl Data {
