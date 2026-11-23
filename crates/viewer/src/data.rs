@@ -92,14 +92,19 @@ impl Data {
                 }
             }
         }
-        let ids: Vec<String> = d.out.items.keys().cloned().collect();
-        let mut memo = HashMap::new();
-        for id in &ids {
-            d.compute_touched(id, &mut memo);
-        }
-        d.touched = memo;
+        d.touched = d.compute_all_touched();
         d.placement = crate::threads::place(&d);
         d
+    }
+
+    /// Whether each item or anything it contains changed (see
+    /// [`changed`]).
+    pub fn compute_all_touched(&self) -> HashMap<String, bool> {
+        let mut memo = HashMap::new();
+        for id in self.out.items.keys() {
+            self.compute_touched(id, &mut memo);
+        }
+        memo
     }
 
     fn compute_touched(&self, id: &str, memo: &mut HashMap<String, bool>) -> bool {
@@ -110,7 +115,7 @@ impl Data {
         let Some(it) = self.item(id) else {
             return false;
         };
-        let mut r = it.status != Status::Unchanged;
+        let mut r = changed(it);
         if it.info.kind == Kind::Mod {
             if !r {
                 r = self
@@ -309,6 +314,9 @@ impl Data {
     }
 
     pub fn touched(&self, it: &Item) -> bool {
+        if let Some(t) = crate::commit_filter::touched(&it.info.id) {
+            return t;
+        }
         self.touched.get(&it.info.id).copied().unwrap_or(false)
     }
 
@@ -379,7 +387,7 @@ impl Data {
         self.items()
             .filter(|it| {
                 it.info.kind != Kind::Mod
-                    && it.status != Status::Unchanged
+                    && changed(it)
                     && if deep {
                         within(self.mod_of(it), m)
                     } else {
@@ -1463,6 +1471,8 @@ pub fn kind_order(a: &Item, b: &Item) -> std::cmp::Ordering {
         .then_with(|| a.info.name.cmp(&b.info.name))
 }
 
+/// Whether the item changed, and, while one commit is selected, whether
+/// that commit changed it.
 pub fn changed(it: &Item) -> bool {
-    it.status != Status::Unchanged
+    it.status != Status::Unchanged && crate::commit_filter::item_in(&it.info.id)
 }
