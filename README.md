@@ -18,6 +18,9 @@ rustup target add wasm32-unknown-unknown
 rustup component add rust-src
 
 cargo build --release
+# Optional: a smaller page (about 0.35 MB less), at the cost of compiling
+# Binaryen's wasm-opt (C++) from source once, about 5 more minutes.
+cargo build --release --features wasm-opt
 
 # A GitHub pull request (public repositories; needs `git`).
 ./target/release/rust-pr-explorer pr https://github.com/rust-lang/log/pull/613
@@ -115,7 +118,8 @@ Every item shows what rustdoc would show: its definition or signature (private f
 - Every added, changed or removed item (functions, methods, types, trait impls, …) and every file listed under "Other changed files" gets a **✓ Reviewed, next ▸** button, on the overview, the module pages and canvas cards. It marks the item as reviewed and moves to the next one that isn't: further down the page, then on the next module's page (or, on the canvas, as a new card). **Next ▸** in the header, or the `n` key, moves on without marking.
 - A reviewed item is marked **✓ Reviewed** everywhere it appears, also with review mode off, and its row is folded to one dimmed line. Clicking the mark removes it.
 - The header shows how many of the PR's items and files are reviewed; in review mode the sidebar counts what is left per module (✓ when nothing is). **Clear** removes every mark.
-- Marks are saved in the browser's local storage, per pull request (for `git`, per repository or subdirectory; for `dirs`, per pair of directories; the page holds only a hash of their paths), so they carry over to a page generated again after new commits. A mark remembers the item's diff: if the diff is different in the new page, the item shows **⚠ Changed since review** and counts as not reviewed. The page can't show what changed since the review, only the whole diff again.
+- Marks are saved in the browser's local storage, per pull request (for `git`, per repository or subdirectory; for `dirs`, per pair of directories; the page holds only a hash of their paths), so they carry over to a page generated again after new commits. A mark remembers the item's diff: if the diff is different in the new page, the item shows **⚠ Changed since review** and counts as not reviewed.
+- A mark also keeps the version that was reviewed. **Show changes** next to a stale mark compares it with the current one: a line diff of the PR's version since the review, of the base version if that changed too (after a rebase), and a list of anything else that differs (status, public paths, what the signature's names refer to). For a file outside the Rust analysis, only the parts its diff shows are kept, except for Markdown files, which are kept whole. Marks made by pages from before this was added have no saved version; the dialog says so.
 - Nothing leaves the browser: marks are not shared between browsers or people.
 
 ### Canvas
@@ -146,7 +150,7 @@ The workspace has three crates:
    - PRs are cloned with `git` and the two revisions checked out.
    - Local revisions are exported with `git archive`; directories are copied.
    - In every case the analysis works on temporary copies, with tool configuration and symlinks removed (see Safety).
-2. **Syntactic analysis** (`analyze.rs`, [`syn`](https://docs.rs/syn)): finding items and resolving names.
+2. **Syntactic analysis** (`analyze/`, [`syn`](https://docs.rs/syn)): finding items and resolving names.
    - Builds the module tree, following `mod` declarations, `mod.rs`/`name.rs` and `#[path]`.
    - Gives every item, including methods, a stable id independent of file and `impl` block, e.g. `crate::ast::Expr::<impl Display>::fmt`.
    - Resolves every path in signatures and bodies: `crate`/`self`/`super`/`Self`, imports, renames, globs, re-exports and the prelude.
