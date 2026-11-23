@@ -6,7 +6,9 @@ use crate::data::{Data, changed, kind_order};
 use model::{Item, Kind, Status, UseCtx};
 use std::collections::{BTreeMap, BTreeSet};
 
-fn hidden_note(d: &Data, scope: &str, list: &[String], label: &str) -> String {
+/// A badge for related items that are not visible from the canvas's scope:
+/// a click views the canvas from the module that hides them.
+fn hidden_badge(d: &Data, scope: &str, list: &[String], what: &str) -> String {
     let hidden: Vec<&String> = list
         .iter()
         .filter(|t| d.item(t).is_some() && !d.visible_from(t, scope))
@@ -20,14 +22,27 @@ fn hidden_note(d: &Data, scope: &str, list: &[String], label: &str) -> String {
         .collect();
     mods.sort();
     mods.dedup();
-    format!(
-        r#"<div class="hidden-note">{} {label} private to {} — not visible from {}</div>"#,
-        hidden.len(),
+    let n = hidden.len();
+    let title = format!(
+        "{n} {what}{} private to {}, so not visible from {}.{}",
+        if n > 1 { "s are" } else { " is" },
         mods.iter()
-            .map(|m| format!(r#"<a data-drill="{}">{}</a>"#, esc(m), esc(&d.mod_label(m))))
+            .map(|m| d.mod_label(m))
             .collect::<Vec<_>>()
             .join(", "),
-        esc(&d.mod_label(scope))
+        d.mod_label(scope),
+        mods.first()
+            .map(|m| format!(" Click to view from {}.", d.mod_label(m)))
+            .unwrap_or_default()
+    );
+    let drill = mods
+        .first()
+        .map(|m| format!(r#" data-drill="{}""#, esc(m)))
+        .unwrap_or_default();
+    format!(
+        r#"<a class="card-badge private"{drill} title="{}">{n} private {what}{}</a>"#,
+        esc(&title),
+        if n > 1 { "s" } else { "" }
     )
 }
 
@@ -102,8 +117,25 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         acts.push_str(r#"<button data-act="detach" title="Move this tab into its own card">detach tab</button>"#);
     }
 
+    // Unchanged items (context, such as an unchanged callee) show only
+    // their signature until expanded.
+    let context = !changed(it) && !d.touched(it);
+    let folded = context
+        && it.info.kind != Kind::Mod
+        && d.external(id).is_none()
+        && !g.expanded.contains(id);
+    if context && it.info.kind != Kind::Mod && d.external(id).is_none() {
+        acts.push_str(if folded {
+            r#"<button data-act="expand" title="Show the documentation, source and members">docs &amp; source ▾</button>"#
+        } else {
+            r#"<button data-act="fold" title="Show only the signature">signature only ▴</button>"#
+        });
+    }
+
     // Signature, docs and source, with changes marked.
-    let body = if d.external(id).is_some() {
+    let body = if folded {
+        crate::code::marked_html(d.sig_segs(it, scope))
+    } else if d.external(id).is_some() {
         // External docs (e.g. the standard library's) can be long: first
         // paragraph, the rest expandable.
         let first = crate::code::first_paragraph(&it.info.docs);
@@ -149,7 +181,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     } else {
         d.members(it)
     };
-    let members = if ms.is_empty() {
+    let members = if ms.is_empty() || folded {
         String::new()
     } else {
         let vis: Vec<&Item> = ms
@@ -218,10 +250,10 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
             )
         })
         .unwrap_or_default();
-    let context = if !changed(it) && !d.touched(it) {
-        "context"
-    } else {
-        ""
+    let context = match (context, folded) {
+        (false, _) => "",
+        (true, false) => "context",
+        (true, true) => "context folded",
     };
     format!(
         r#"<div class="card cs-{} {context}" data-gid="{}" style="left:{}px;top:{}px">
@@ -256,8 +288,9 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         },
         external.unwrap_or_default(),
         {
-            // Footer: what is not shown, and what can be opened next.
-            let notes = (if it.info.unresolved_calls > 0 {
+            // Footer: what can be opened next, and badges for what is not
+            // shown (details in their tooltips).
+            let badges = (if it.info.unresolved_calls > 0 {
                 let n = it.info.unresolved_calls;
                 let why = if d.out.meta.resolution.starts_with("rust-analyzer") {
                     "rust-analyzer could not determine their targets"
@@ -265,19 +298,24 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
                     "method calls and calls inside macros need rust-analyzer"
                 };
                 format!(
-                    r#"<div class="hidden-note">{n} call site{} not resolved ({why}), so not shown as {}.</div>"#,
+                    r#"<span class="card-badge" title="{n} call site{} not resolved ({why}), so not shown as {}.">{n} unresolved</span>"#,
                     if n > 1 { "s" } else { "" },
                     if n > 1 { "calls" } else { "a call" }
                 )
             } else {
                 String::new()
-            } + &hidden_note(d, scope, &callees, "callees are")
-                + &hidden_note(d, scope, &callers, "callers are"));
-            if notes.is_empty() && acts.is_empty() {
+            } + &hidden_badge(d, scope, &callees, "callee")
+                + &hidden_badge(d, scope, &callers, "caller"));
+            if badges.is_empty() && acts.is_empty() {
                 String::new()
             } else {
+                let badges = if badges.is_empty() {
+                    badges
+                } else {
+                    format!(r#"<span class="grow"></span>{badges}"#)
+                };
                 format!(
-                    r#"<div class="card-foot">{notes}<div class="card-acts">{acts}</div></div>"#
+                    r#"<div class="card-foot"><div class="card-acts">{acts}{badges}</div></div>"#
                 )
             }
         },
