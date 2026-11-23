@@ -6,6 +6,7 @@ use crate::code::{
     marked_html, sig_diff_html,
 };
 use crate::data::Data;
+use crate::yaml;
 use model::{ChangedFile, ManifestChange, PyChange, SourceLine, Status};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -24,21 +25,34 @@ fn stats(added: u32, removed: u32) -> String {
     format!(r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>"#)
 }
 
-/// Hunks of a line diff. Rust and Python get syntax colors; nothing is
-/// linked.
+/// Hunks of a line diff. Rust, Python and YAML get syntax colors; nothing
+/// is linked.
 pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
     let mut new_line = 0usize;
     let mut old_line = 0usize;
+    // YAML block scalars span lines; each side keeps its own state.
+    let (mut old_yaml, mut new_yaml) = (yaml::State::default(), yaml::State::default());
     let mut body = String::new();
     // Removed lines whose changed words are marked.
     let mut paired = vec![false; lines.len()];
-    let mut codes: Vec<String> = lines
-        .iter()
-        .map(|l| match lang {
+    let mut codes: Vec<String> = Vec::with_capacity(lines.len());
+    for l in lines {
+        if l.0 == '@' {
+            (old_yaml, new_yaml) = (yaml::State::default(), yaml::State::default());
+        }
+        codes.push(match lang {
             "rust" | "python" => code_html(d, &l.1, Links::None),
+            "yaml" => match l.0 {
+                '-' => yaml::line_html(&mut old_yaml, &l.1),
+                '+' => yaml::line_html(&mut new_yaml, &l.1),
+                _ => {
+                    yaml::line_html(&mut old_yaml, &l.1);
+                    yaml::line_html(&mut new_yaml, &l.1)
+                }
+            },
             _ => esc(&l.1),
-        })
-        .collect();
+        });
+    }
     // Removed lines directly followed by added ones pair up (the first
     // with the first, and so on) and get their changed words marked.
     let mut i = 0;
@@ -384,14 +398,14 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
         )
     };
     format!(
-        r#"<div class="ientry file {}"><div class="irow"><div class="ihead"><span class="kind">{}</span><span class="title-name">{}</span>{}{}</div><div class="iacts">{}{}</div></div>{outside}{structured}{lines}</div>"#,
+        r#"<div class="ientry file {}"><div class="irow"><div class="ihead"><span class="title-name">{}</span><span class="kind">{}</span>{}{}</div><div class="iacts">{}{}</div></div>{outside}{structured}{lines}</div>"#,
         match f.status {
             Status::Added => "whole whole-added",
             Status::Removed => "whole whole-removed",
             _ => "",
         },
-        esc(&f.lang),
         esc(&f.path),
+        esc(&f.lang),
         badge(f.status),
         f.generated
             .as_deref()
@@ -417,7 +431,7 @@ pub fn manifests_html(d: &Data) -> String {
         .iter()
         .map(|f| {
             format!(
-                r#"<div class="ientry"><div class="ihead"><span class="kind">manifest</span><span class="title-name">{}</span></div>{}</div>"#,
+                r#"<div class="ientry"><div class="ihead"><span class="title-name">{}</span><span class="kind">manifest</span></div>{}</div>"#,
                 esc(&f.path),
                 manifest_html(&f.manifest)
             )
