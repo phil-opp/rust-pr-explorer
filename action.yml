@@ -9,9 +9,10 @@ branding:
 inputs:
   github-token:
     description: >-
-      Token for cloning the repository, reading the PR's title and branches,
-      and writing the comment. Needs `contents: read` and, for the comment,
-      `pull-requests: write`.
+      Token for cloning the repository, reading the PR's title, branches and
+      review threads, and writing the comment. Needs `contents: read`,
+      `pull-requests: read` for the review threads, and `pull-requests: write`
+      for the comment.
     default: ${{ github.token }}
   pr:
     description: >-

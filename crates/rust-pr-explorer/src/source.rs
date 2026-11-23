@@ -207,6 +207,11 @@ impl Checkout {
         let head_rev = rev_parse(&git_dir, "refs/pr/head")?;
         // Title and branch names are only known to GitHub's API.
         let gh = gh_pr_view(&owner, &repo, number);
+        let threads = if gh.is_some() {
+            gh_review_threads(&owner, &repo, number)
+        } else {
+            Vec::new()
+        };
         let (base_rev, base_label, base_ref) = match base {
             Some(b) => {
                 let rev = rev_parse(&git_dir, b)
@@ -297,6 +302,7 @@ impl Checkout {
                 head_rev: short(&head_rev).to_string(),
                 head_commit: head_rev.clone(),
                 custom_base: base.is_some(),
+                threads,
             }),
             // The PR identifies the project.
             project: None,
@@ -348,6 +354,124 @@ fn gh_pr_view(owner: &str, repo: &str, number: u64) -> Option<GhPr> {
         );
     }
     parsed
+}
+
+/// The review threads of a PR, as GitHub's GraphQL API lists them.
+const THREADS_QUERY: &str =
+    "query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 50, after: $endCursor) {
+        pageInfo { hasNextPage endCursor }
+        nodes {
+          path line startLine originalLine diffSide isResolved isOutdated
+          comments(first: 100) { nodes { author { login } body createdAt url } }
+        }
+      }
+    }
+  }
+}";
+
+/// Asks the GitHub CLI for the PR's review threads, open and resolved.
+/// Empty (with a note) if that fails.
+fn gh_review_threads(owner: &str, repo: &str, number: u64) -> Vec<model::ReviewThread> {
+    let out = std::process::Command::new("gh")
+        .args([
+            "api",
+            "graphql",
+            "--paginate",
+            "-f",
+            &format!("query={THREADS_QUERY}"),
+            // `-f` keeps them strings; `-F` makes the number an integer.
+            "-f",
+            &format!("owner={owner}"),
+            "-f",
+            &format!("repo={repo}"),
+            "-F",
+            &format!("number={number}"),
+        ])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => match parse_threads(&o.stdout) {
+            Ok(list) => return list,
+            Err(e) => eprintln!("note: could not read the PR's review threads: {e}"),
+        },
+        Ok(o) => eprintln!(
+            "note: could not fetch the PR's review threads: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
+        Err(e) => eprintln!("note: could not fetch the PR's review threads: {e}"),
+    }
+    Vec::new()
+}
+
+/// The threads in `gh api graphql --paginate` output: one JSON document
+/// per page.
+fn parse_threads(json: &[u8]) -> Result<Vec<model::ReviewThread>> {
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Thread {
+        path: String,
+        line: Option<usize>,
+        start_line: Option<usize>,
+        original_line: Option<usize>,
+        diff_side: String,
+        is_resolved: bool,
+        is_outdated: bool,
+        comments: Nodes<Comment>,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Comment {
+        /// `null` for a deleted account.
+        author: Option<Author>,
+        body: String,
+        created_at: String,
+        url: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct Author {
+        login: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct Nodes<T> {
+        nodes: Vec<T>,
+    }
+    let mut out = Vec::new();
+    for page in serde_json::Deserializer::from_slice(json).into_iter::<serde_json::Value>() {
+        let page = page?;
+        let threads = &page["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"];
+        let threads: Vec<Thread> =
+            serde_json::from_value(threads.clone()).context("unexpected reply")?;
+        for t in threads {
+            out.push(model::ReviewThread {
+                path: t.path,
+                line: t.line,
+                start_line: t.start_line,
+                original_line: t.original_line,
+                left: t.diff_side == "LEFT",
+                resolved: t.is_resolved,
+                outdated: t.is_outdated,
+                url: t
+                    .comments
+                    .nodes
+                    .first()
+                    .map(|c| c.url.clone())
+                    .unwrap_or_default(),
+                comments: t
+                    .comments
+                    .nodes
+                    .into_iter()
+                    .map(|c| model::ThreadComment {
+                        author: c.author.map(|a| a.login).unwrap_or_default(),
+                        body: c.body,
+                        created_at: c.created_at,
+                    })
+                    .collect(),
+            });
+        }
+    }
+    Ok(out)
 }
 
 /// Accepts `https://github.com/owner/repo/pull/123` or `owner/repo#123`.
@@ -716,5 +840,32 @@ mod tests {
         assert_eq!(pr.head_ref_name, "value-bag");
         assert!(pr.is_cross_repository);
         assert_eq!(pr.head_repository_owner["login"], "someone");
+    }
+
+    #[test]
+    fn review_threads_are_read_from_every_page() {
+        let page = |thread: &str| {
+            format!(
+                r#"{{"data":{{"repository":{{"pullRequest":{{"reviewThreads":{{"pageInfo":{{"hasNextPage":false,"endCursor":null}},"nodes":[{thread}]}}}}}}}}}}"#
+            )
+        };
+        let json = page(
+            r#"{"path":"src/lib.rs","line":12,"startLine":null,"originalLine":10,"diffSide":"RIGHT","isResolved":false,"isOutdated":false,"comments":{"nodes":[{"author":{"login":"a"},"body":"Why?","createdAt":"2026-11-23T10:00:00Z","url":"https://github.com/o/r/pull/1#discussion_r1"},{"author":null,"body":"Because.","createdAt":"2026-11-23T11:00:00Z","url":"https://github.com/o/r/pull/1#discussion_r2"}]}}"#,
+        ) + &page(
+            r#"{"path":"README.md","line":null,"startLine":null,"originalLine":3,"diffSide":"LEFT","isResolved":true,"isOutdated":true,"comments":{"nodes":[]}}"#,
+        );
+        let threads = parse_threads(json.as_bytes()).unwrap();
+        assert_eq!(threads.len(), 2);
+        let t = &threads[0];
+        assert_eq!(
+            (t.path.as_str(), t.line, t.left),
+            ("src/lib.rs", Some(12), false)
+        );
+        assert_eq!(t.url, "https://github.com/o/r/pull/1#discussion_r1");
+        assert_eq!(t.comments[1].author, "");
+        assert_eq!(t.comments[1].body, "Because.");
+        let t = &threads[1];
+        assert!(t.left && t.resolved && t.outdated);
+        assert_eq!((t.line, t.original_line), (None, Some(3)));
     }
 }

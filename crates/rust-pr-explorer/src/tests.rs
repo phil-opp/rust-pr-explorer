@@ -1366,3 +1366,24 @@ fn semver_labels_in_demo() {
     // Not public: no label.
     assert_eq!(level("tinycalc::eval::apply"), None);
 }
+
+#[test]
+fn derives_count_and_their_order_does_not() {
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "#[derive(Clone, Debug, Hash)]\npub struct Key(pub u8);\n#[derive(Debug, Clone)]\npub struct Same;\n",
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        "#[derive(Clone, Debug)]\npub struct Key(pub u8);\n#[derive(Clone, Debug)]\npub struct Same;\n",
+    )]);
+    let out = analyze_dirs(base.path(), head.path());
+    let key = &out.items["t::Key"];
+    assert_eq!(key.status, Status::Changed);
+    assert!(key.changes.signature);
+    let api = key.api.as_ref().unwrap();
+    assert_eq!(api.level, model::ApiLevel::Breaking);
+    assert!(api.reasons[0].contains("`Hash`"), "{:?}", api.reasons);
+    // Reordered, not changed.
+    assert_eq!(out.items["t::Same"].status, Status::Unchanged);
+}
