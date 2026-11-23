@@ -768,7 +768,14 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .rv-q { white-space: pre-wrap; color: var(--text); font-size: 13px; border-left: 3px solid var(--border); padding-left: 8px; margin-top: 2px; }
 /* Review controls at the top of each hunk of a source diff with several. */
 .hunk-rv { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 3px 8px; margin: 4px 0 2px; background: var(--bg-alt); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); font: 12px var(--sans); white-space: normal; }
-.sbs .hunk-rv { grid-column: 1 / -1; }
+/* The controls stay in view while the code scrolls sideways: they stick to
+   the left edge and are as wide as the visible part of the code, the width
+   of the scrolling box (a container, so `cqw` measures it). Without this,
+   they scroll away with long lines, and side by side they start past the
+   right edge. */
+.src-code > pre, .src-code > .sbs { container-type: inline-size; }
+.hunk-rv { position: sticky; left: 0; z-index: 1; box-sizing: border-box; width: 100cqw; }
+.sbs .hunk-rv { grid-column: 1 / -1; justify-self: start; }
 .hunk-rv .hunk-at { color: var(--muted); margin-right: auto; }
 .hunk-rv .rvc { gap: 4px; }
 .hunk-rv .hunk-at { font-weight: 600; color: var(--text); }
