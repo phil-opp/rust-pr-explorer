@@ -53,6 +53,8 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
         );
     }
 
+    crate::moved::mark(&mut items);
+
     let mut crates = head.crates;
     for c in base.crates {
         if !crates.contains(&c) {
@@ -167,6 +169,7 @@ fn compare(ctx: &semver::Context, b: ItemData, h: ItemData, moved_from: Option<S
             BTreeMap::new()
         },
         source,
+        moved_lines: Vec::new(),
         info: h.info,
         status,
         changes: Changes {

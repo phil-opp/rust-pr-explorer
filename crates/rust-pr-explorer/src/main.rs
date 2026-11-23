@@ -5,6 +5,7 @@ mod css;
 mod files;
 mod javascript;
 mod merge;
+mod moved;
 mod parts;
 #[cfg(feature = "semantic")]
 mod public_api;
