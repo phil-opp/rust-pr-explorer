@@ -126,6 +126,9 @@ code { font-size: .92em; }
 #pr-title .hd-sub { font-size: 12px; color: var(--muted); }
 #pr-title .hd-sub:empty { display: none; }
 #pr-title .hd-sub code { font-size: 11px; }
+/* Hidden while the overview's own heading shows the title. */
+#pr-title { transition: opacity .15s; }
+#pr-title.on-page { opacity: 0; visibility: hidden; }
 #views { display: flex; gap: 4px; }
 #views button { padding: 4px 12px; }
 .search { position: relative; }
@@ -286,6 +289,13 @@ a.ref:hover { text-decoration: underline; }
 .page h1 { font: 600 26px/1.2 var(--sans); margin: 0 0 4px; }
 .page h1 .title-name { font-size: 24px; }
 .page .sub { color: var(--muted); margin-bottom: 18px; }
+/* What the overview compares: the repository and PR, then a row each for
+   the base and the PR's branch. A long branch name breaks anywhere, but
+   its commit stays in one piece. */
+.pr-meta .pm-revs { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 2px 10px; align-items: baseline; margin-top: 4px; }
+.pr-meta .pm-k { font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+.pr-meta .pm-ref { color: var(--text); overflow-wrap: anywhere; }
+.pr-meta .pm-at { white-space: nowrap; }
 .page h2 { font: 600 18px var(--sans); border-bottom: 1px solid var(--border); padding-bottom: 4px; margin: 28px 0 10px; }
 .modbox { border: 1px solid var(--border); border-radius: 8px; margin: 12px 0; background: var(--bg); }
 .modbox > .modbox-h { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); background: var(--panel); border-radius: 8px 8px 0 0; }

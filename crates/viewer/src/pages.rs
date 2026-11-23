@@ -562,7 +562,7 @@ pub fn render_overview(app: &App) {
     let meta = &d.out.meta;
     let html = format!(
         r#"<h1>{}</h1>
-        <div class="sub">{}</div>
+        {}
         {}
         {}
         {}
@@ -574,7 +574,10 @@ pub fn render_overview(app: &App) {
             .as_ref()
             .and_then(|p| p.title.as_deref())
             .unwrap_or(&meta.title)),
-        d.compared_html(),
+        match d.compared_html() {
+            c if c.is_empty() => c,
+            c => format!(r#"<div class="sub pr-meta">{c}</div>"#),
+        },
         crate::commit_filter::banner_html(d),
         description_html(d),
         crate::threads::overview_html(d),
@@ -583,6 +586,22 @@ pub fn render_overview(app: &App) {
         crate::files::other_files_html(d),
     );
     dom::set_html("view-overview", &html);
+    sync_header_title();
+}
+
+/// The overview's heading is the PR's title, so while it is in view the
+/// header hides its own copy of the title (and the details under it,
+/// which the overview shows in full). It comes back once the heading
+/// scrolls away, and in the other views.
+pub fn sync_header_title() {
+    let (Some(title), Some(view)) = (dom::by_id("pr-title"), dom::by_id("view-overview")) else {
+        return;
+    };
+    let shown_below = view.class_list().contains("active")
+        && view.query_selector("h1").ok().flatten().is_some_and(|h| {
+            h.get_bounding_client_rect().bottom() > view.get_bounding_client_rect().top()
+        });
+    dom::toggle_class(&title, "on-page", shown_below);
 }
 
 /// How many public API changes are breaking, and the version bump that

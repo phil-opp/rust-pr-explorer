@@ -664,49 +664,70 @@ pub fn test_tag_of(it: &Item) -> &'static str {
 }
 
 impl Data {
-    /// What is compared: for a pull request the repository, PR number and
-    /// title, and the base and PR branches with the compared commits.
+    /// What is compared, under the overview's title (which is the PR's
+    /// title, so it isn't repeated here): for a pull request a line with
+    /// the repository and PR number, then one row each for the base and
+    /// the PR's branch, with the compared commits linked on GitHub. Empty
+    /// when there is nothing to add to the title.
     pub fn compared_html(&self) -> String {
         let meta = &self.out.meta;
         let Some(pr) = &meta.pr else {
             if meta.title.contains(&meta.base) {
-                return format!("<b>{}</b>", esc(&meta.title));
+                return String::new();
             }
             return format!(
-                "<b>{}</b> <span class=\"dim\">{} → {}</span>",
-                esc(&meta.title),
+                r#"<div class="pm-revs"><span class="pm-k">base</span><code class="pm-ref">{}</code><span class="pm-k">head</span><code class="pm-ref">{}</code></div>"#,
                 esc(&meta.base),
                 esc(&meta.head)
             );
         };
         let repo_url = format!("https://github.com/{}", pr.repo);
         let pr_url = format!("{repo_url}/pull/{}", pr.number);
-        let title = pr
-            .title
-            .as_deref()
-            .map(|t| format!(" <b>{}</b>", esc(t)))
-            .unwrap_or_default();
-        let head = match (&pr.head_ref, &pr.head_owner) {
-            (Some(r), Some(o)) => format!("<code>{}:{}</code>", esc(o), esc(r)),
-            (Some(r), None) => format!("<code>{}</code>", esc(r)),
-            _ => "PR head".to_string(),
+        let commit = |rev: &str, title: &str| {
+            let short = rev.get(..10).unwrap_or(rev);
+            format!(
+                r#"<a href="{repo_url}/commit/{}" target="_blank" rel="noopener" title="{}"><code>{}</code></a>"#,
+                esc(rev),
+                esc(title),
+                esc(short)
+            )
         };
-        if pr.since.is_some() {
-            return format!(
-                r#"<a href="{repo_url}" target="_blank" rel="noopener">github.com/{}</a> · <a href="{pr_url}" target="_blank" rel="noopener">PR #{}</a>{title} <span class="dim">· <span title="{SINCE_TIP}">changes since <code>{}</code></span> ← {head} @ {}</span>"#,
-                esc(&pr.repo),
-                pr.number,
-                esc(&pr.base_rev),
-                esc(&pr.head_rev),
-            );
-        }
+        let head_ref = match (&pr.head_ref, &pr.head_owner) {
+            (Some(r), Some(o)) => format!("<code class=\"pm-ref\">{}:{}</code> ", esc(o), esc(r)),
+            (Some(r), None) => format!("<code class=\"pm-ref\">{}</code> ", esc(r)),
+            _ => String::new(),
+        };
+        let head_rev = if pr.head_commit.is_empty() {
+            &pr.head_rev
+        } else {
+            &pr.head_commit
+        };
+        let head = format!(
+            r#"<span class="pm-k">head</span><span class="pm-v">{head_ref}<span class="pm-at">{}{}</span></span>"#,
+            if head_ref.is_empty() { "" } else { "@ " },
+            commit(head_rev, "The PR's commit shown, on GitHub")
+        );
+        let base = if pr.since.is_some() {
+            format!(
+                r#"<span class="pm-k" title="{SINCE_TIP}">since</span><span class="pm-v" title="{SINCE_TIP}">{}</span>"#,
+                commit(&pr.base_rev, "The earlier commit, on GitHub")
+            )
+        } else {
+            let what = if pr.custom_base {
+                "The base given with --base, on GitHub"
+            } else {
+                "The merge base, on GitHub"
+            };
+            format!(
+                r#"<span class="pm-k">base</span><span class="pm-v"><code class="pm-ref">{}</code> <span class="pm-at">@ {}</span></span>"#,
+                esc(&pr.base_ref),
+                commit(&pr.base_rev, what)
+            )
+        };
         format!(
-            r#"<a href="{repo_url}" target="_blank" rel="noopener">github.com/{}</a> · <a href="{pr_url}" target="_blank" rel="noopener">PR #{}</a>{title} <span class="dim">· base <code>{}</code> <span title="merge base">@ {}</span> ← {head} @ {}</span>"#,
+            r#"<div class="pm-pr"><a href="{repo_url}" target="_blank" rel="noopener">github.com/{}</a> · <a href="{pr_url}" target="_blank" rel="noopener">PR #{}</a></div><div class="pm-revs">{base}{head}</div>"#,
             esc(&pr.repo),
             pr.number,
-            esc(&pr.base_ref),
-            esc(&pr.base_rev),
-            esc(&pr.head_rev),
         )
     }
 
@@ -1556,4 +1577,58 @@ pub fn kind_order(a: &Item, b: &Item) -> std::cmp::Ordering {
 /// that commit changed it.
 pub fn changed(it: &Item) -> bool {
     it.status != Status::Unchanged && crate::commit_filter::item_in(&it.info.id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use model::PrMeta;
+
+    fn data(pr: PrMeta) -> Data {
+        Data::new(Output {
+            meta: model::Meta {
+                pr: Some(pr),
+                ..Default::default()
+            },
+            crates: Vec::new(),
+            items: Default::default(),
+            files: Vec::new(),
+            externals: Default::default(),
+            warnings: Vec::new(),
+            semver_checks: None,
+        })
+    }
+
+    #[test]
+    fn compared_links_the_commits_and_leaves_out_the_title() {
+        let html = data(PrMeta {
+            repo: "o/r".to_string(),
+            number: 7,
+            title: Some("Fix the parser".to_string()),
+            base_ref: "main".to_string(),
+            base_rev: "6a1039ba07".to_string(),
+            head_ref: Some("fix-parser".to_string()),
+            head_rev: "2704086310".to_string(),
+            head_commit: "2704086310abcdef2704086310abcdef27040863".to_string(),
+            ..Default::default()
+        })
+        .compared_html();
+        assert!(!html.contains("Fix the parser"), "{html}");
+        assert!(
+            html.contains(r#"href="https://github.com/o/r/commit/6a1039ba07""#),
+            "{html}"
+        );
+        // The head links the full commit, but shows it abbreviated.
+        assert!(
+            html.contains(
+                r#"href="https://github.com/o/r/commit/2704086310abcdef2704086310abcdef27040863""#
+            ),
+            "{html}"
+        );
+        assert!(html.contains("<code>2704086310</code>"), "{html}");
+        assert!(
+            html.contains(r#"<code class="pm-ref">fix-parser</code>"#),
+            "{html}"
+        );
+    }
 }

@@ -202,6 +202,7 @@ pub fn set_view(app: &mut App, view: View) {
         View::Space => space::show(app),
     }
     pages::render_sidebar(app);
+    pages::sync_header_title();
     nav::record(app);
 }
 
@@ -265,6 +266,11 @@ pub fn hide_tooltip() {
 
 fn install_listeners() {
     let doc: web_sys::EventTarget = dom::document().into();
+    if let Some(overview) = dom::by_id("view-overview") {
+        dom::listen_with(&overview, "scroll", false, true, |_| {
+            pages::sync_header_title()
+        });
+    }
     // Not passive: clicks on cross links prevent the default navigation.
     dom::listen_with(&doc, "click", false, false, |ev| {
         if let Some(el) = dom::target_element(&ev) {
