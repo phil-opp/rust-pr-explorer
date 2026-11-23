@@ -274,8 +274,12 @@ fn item_row(
         ),
         _ => d.title_html(it, false),
     };
-    // What changed in the body, expandable to the diff.
-    let src = if it.changes.body || it.changes.cosmetic {
+    // What changed in the body, expandable to the diff; the whole source
+    // of new and removed items.
+    let src = if it.changes.body
+        || it.changes.cosmetic
+        || matches!(it.status, Status::Added | Status::Removed)
+    {
         d.source_seg(it, None, false, &Default::default())
     } else {
         None

@@ -997,10 +997,13 @@ impl Data {
             }
         );
         // A small change to the body or definition starts open, the rest
-        // behind the summary.
-        let small = it.status == Status::Changed
-            && it.changes.body
-            && (1..=SMALL_BODY).contains(&(added + removed));
+        // behind the summary. So does a small new item, except an impl,
+        // whose members follow it with their own source.
+        let small = match it.status {
+            Status::Changed => it.changes.body && (1..=SMALL_BODY).contains(&(added + removed)),
+            Status::Added => it.info.kind != Kind::Impl && it.source.len() <= SMALL_BODY,
+            _ => false,
+        };
         let open = open.unwrap_or(small);
         let stats = format!(
             r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>{}"#,
