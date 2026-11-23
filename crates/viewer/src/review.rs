@@ -692,7 +692,7 @@ fn control_class(id: &str, m: Mark) -> String {
 
 /// The verdict buttons, as on GitHub. Approving moves on right away; the
 /// other two ask for a comment first.
-const ACTIONS: &str = r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve this item and go to the next unreviewed one (n: next without a verdict)">✓ Approve</button><button class="rv-btn changes" data-rv-act="changes" title="Write what needs to change, then go to the next unreviewed item">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Write a comment, then go to the next unreviewed item">✎ Comment</button>"#;
+const ACTIONS: &str = r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve and go to the next item">✓ Approve</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Add a comment">✎ Comment</button>"#;
 
 /// One line of a comment, shortened, for the button that edits it.
 fn snippet(text: &str) -> String {
@@ -736,7 +736,7 @@ fn control_inner(id: &str, m: Mark) -> String {
             )
         }
         Mark::Stale => format!(
-            r#"<button class="rv-chip stale" data-rv-undo title="You reviewed an earlier version; the diff is different now. Click to remove the mark">⚠ Changed since review</button><button class="rv-since" data-rv-since title="Show what is different from the version you reviewed">Show changes</button>{text}{ACTIONS}"#
+            r#"<button class="rv-chip stale" data-rv-undo title="Changed since you reviewed it. Click to unmark.">⚠ Changed since review</button><button class="rv-since" data-rv-since title="Diff to the reviewed version">Show changes</button>{text}{ACTIONS}"#
         ),
     }
 }
@@ -810,7 +810,7 @@ pub fn update_progress() {
     let html = match (done * 100).checked_div(total) {
         None => r#"<span class="dim">Nothing to review</span>"#.to_string(),
         Some(percent) => format!(
-            r#"<span class="rv-count" title="Reviewed items and files">{done} / {total} reviewed</span><span class="rv-meter"><span style="width:{}%"></span></span><button id="rv-next" title="Go to the next unreviewed item (n)">Next ▸</button><button id="rv-finish" title="Sum up your verdicts and comments, to post them as a review on GitHub">Finish review…</button><button id="rv-clear" title="Remove every review mark of this pull request">Clear</button>"#,
+            r#"<span class="rv-count" title="Reviewed items and files">{done} / {total} reviewed</span><span class="rv-meter"><span style="width:{}%"></span></span><button id="rv-next" title="Go to the next unreviewed item (n)">Next ▸</button><button id="rv-finish" title="Collect your verdicts and comments for GitHub">Finish review…</button><button id="rv-clear" title="Remove all review marks">Clear</button>"#,
             percent
         ),
     };
