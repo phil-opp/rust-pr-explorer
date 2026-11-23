@@ -298,6 +298,17 @@ pub(super) fn is_ident(s: &str) -> bool {
         && !s.starts_with(|c: char| c.is_ascii_digit())
 }
 
+/// Whether the attributes include `#[doc(hidden)]`.
+pub(super) fn is_doc_hidden(attrs: &[Attribute]) -> bool {
+    attrs.iter().any(|a| {
+        a.path().is_ident("doc")
+            && a.parse_args_with(
+                syn::punctuated::Punctuated::<syn::Meta, syn::Token![,]>::parse_terminated,
+            )
+            .is_ok_and(|list| list.iter().any(|m| m.path().is_ident("hidden")))
+    })
+}
+
 /// Attributes rustdoc shows in a definition.
 pub(super) fn shown_attrs(attrs: &[Attribute]) -> Vec<Attribute> {
     attrs

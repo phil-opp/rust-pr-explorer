@@ -4,8 +4,8 @@ use super::{
     Analyzer, ImplCtx, ModData, Node, Ns, Pending, RawImpl, Res, SrcFile, UseEntry,
     collector::Collector,
     syntax::{
-        flatten_use, generic_names, item_attrs, path_attr, path_segments, skipped, strip_body,
-        unparse, unparse_type,
+        flatten_use, generic_names, is_doc_hidden, item_attrs, path_attr, path_segments, skipped,
+        strip_body, unparse, unparse_type,
     },
 };
 use model::{Kind, Ref};
@@ -299,6 +299,7 @@ impl Analyzer {
                 }),
                 Item::Use(u) => {
                     let public = matches!(u.vis, Visibility::Public(_));
+                    let doc_hidden = is_doc_hidden(&u.attrs);
                     let mut entries = Vec::new();
                     flatten_use(&u.tree, Vec::new(), &mut entries);
                     let m = self.modules.get_mut(module).unwrap();
@@ -307,6 +308,7 @@ impl Analyzer {
                             alias,
                             path,
                             public,
+                            doc_hidden,
                         });
                     }
                 }
@@ -320,6 +322,7 @@ impl Analyzer {
                         alias: Some(alias),
                         path: vec![e.ident.to_string()],
                         public: false,
+                        doc_hidden: false,
                     });
                 }
                 Item::Mod(m) => {

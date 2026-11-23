@@ -3,9 +3,9 @@
   --bg-alt: #f5f5f5;
   --bg-code: #f6f6f6;
   --panel: #fafafa;
-  --border: #dddddd;
-  --text: #1f1f1f;
-  --muted: #6b6b6b;
+  --border: #a8a8a8;
+  --text: #111111;
+  --muted: #444444;
   --link: #2a6fb0;
   --type: #ad378a;
   --trait: #6e4fc4;
@@ -15,14 +15,14 @@
   --kw: #8959a8;
   --str: #718c00;
   --num: #c18401;
-  --comment: #8e908c;
+  --comment: #6a6c68;
   --added: #1a7f37;
   --added-bg: #e6f6ea;
   --removed: #c4302b;
   --removed-bg: #fdecea;
   --changed: #9a6700;
   --changed-bg: #fff5d6;
-  --private: #7a7a7a;
+  --private: #595959;
   --highlight: #ffe48a;
   --reviewed: #0b7285;
   --reviewed-bg: #e3f4f7;
@@ -39,9 +39,9 @@
     --bg-alt: #232328;
     --bg-code: #26262c;
     --panel: #202025;
-    --border: #3a3a42;
-    --text: #dddddd;
-    --muted: #9a9aa3;
+    --border: #686874;
+    --text: #f0f0f0;
+    --muted: #c6c6ce;
     --link: #6fb3f2;
     --type: #e48fd0;
     --trait: #b79cff;
@@ -51,14 +51,14 @@
     --kw: #c49be6;
     --str: #a8cc6a;
     --num: #e0b860;
-    --comment: #8a8a92;
+    --comment: #a8a8b0;
     --added: #4cc46a;
     --added-bg: #19331f;
     --removed: #f06b62;
     --removed-bg: #3a1c1b;
     --changed: #e3b341;
     --changed-bg: #3a3116;
-    --private: #9a9aa3;
+    --private: #b4b4bc;
     --highlight: #6b5a12;
     --reviewed: #4fc3d6;
     --reviewed-bg: #12343a;
@@ -142,6 +142,10 @@ code { font-size: .92em; }
 .tree-row .cnt { margin-left: auto; font-size: 11px; color: var(--muted); }
 .side-legend { padding: 14px; font-size: 12px; color: var(--muted); }
 .side-legend div { margin: 3px 0; }
+.legend-dots { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+.legend-dots > span { display: inline-flex; align-items: center; gap: 5px; }
+.side-opt { display: flex; align-items: center; gap: 6px; padding: 8px 14px 0; font-size: 12px; color: var(--muted); cursor: pointer; }
+.side-note { padding: 2px 14px 8px; font-size: 12px; color: var(--muted); }
 .side-warn { padding: 6px 14px; font-size: 12px; color: var(--removed); }
 
 /* Status markers */
@@ -187,6 +191,8 @@ details.src.src-chg > summary b { color: var(--changed); }
 .num { color: var(--num); }
 .cm { color: var(--comment); font-style: italic; }
 .attr { color: var(--muted); }
+.yk { color: var(--mod); }
+.expr { color: var(--type); }
 .ref { color: var(--link); border-radius: 2px; }
 .ref[data-kind="struct"], .ref[data-kind="enum"], .ref[data-kind="union"], .ref[data-kind="type_alias"] { color: var(--type); }
 .ref[data-kind="trait"] { color: var(--trait); }
@@ -300,13 +306,28 @@ a.ref:hover { text-decoration: underline; }
 .card-tab.active { background: var(--bg); border-color: var(--border); margin-bottom: -1px; }
 .card-tab .x { color: var(--muted); }
 .card-tab .x:hover { color: var(--removed); }
-/* Status dots differ in shape too: added = disc, changed = diamond,
-   removed = hollow square, unchanged = small grey disc. */
-.dot { width: 7px; height: 7px; border-radius: 50%; display: inline-block; flex: none; box-sizing: border-box; }
-.dot.added { background: var(--added); }
-.dot.changed { background: var(--changed); border-radius: 1px; transform: rotate(45deg) scale(.95); }
-.dot.removed { background: transparent; border: 2px solid var(--removed); border-radius: 1px; }
-.dot.unchanged { background: var(--border); width: 5px; height: 5px; }
+/* Status symbols: a small square with a sign inside, so that they differ
+   in shape, not only in color: added = plus, changed = dot,
+   removed = minus. Unchanged has no symbol; its space is kept for alignment. */
+.dot {
+  width: 14px; height: 14px; display: inline-block; flex: none; box-sizing: border-box; vertical-align: -2px;
+  border: 1px solid currentColor; border-radius: 3px; background: no-repeat center;
+}
+.dot.added {
+  color: var(--added); background-color: var(--added-bg);
+  background-image: linear-gradient(currentColor, currentColor), linear-gradient(currentColor, currentColor);
+  background-size: 8px 2px, 2px 8px;
+}
+.dot.changed {
+  color: var(--changed); background-color: var(--changed-bg);
+  background-image: radial-gradient(circle, currentColor 2.6px, transparent 3.2px);
+}
+.dot.removed {
+  color: var(--removed); background-color: var(--removed-bg);
+  background-image: linear-gradient(currentColor, currentColor);
+  background-size: 8px 2px;
+}
+.dot.unchanged { visibility: hidden; }
 .card-h { display: flex; align-items: center; gap: 6px; padding: 7px 10px 5px; cursor: move; flex-wrap: wrap; user-select: none; }
 .card-h .title-name { font-size: 14px; }
 .card-h .grow { flex: 1; }
@@ -400,6 +421,11 @@ a.ref:hover { text-decoration: underline; }
 .sbs .ln.gap { background: repeating-linear-gradient(135deg, transparent 0 4px, var(--border) 4px 5px); opacity: .5; }
 .card:has(details.src[open] .sbs) { width: 1080px; }
 .src .ln.del { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--removed) 60%, transparent); }
+/* A changed line paired with its new version: only the changed words are
+   marked, the rest of the line reads normally. */
+.src .ln.del.wl, .sbs .ln.del.wl, .hunks .ln.del.wl { text-decoration: none; }
+.ln.del .wc { background: color-mix(in srgb, var(--removed) 28%, transparent); text-decoration: line-through 1.5px var(--removed); border-radius: 2px; }
+.ln.add .wc { background: color-mix(in srgb, var(--added) 28%, transparent); border-radius: 2px; }
 
 /* Word changes in docs: inserted words underlined, removed ones struck out. */
 ins.wd { text-decoration: underline 2px var(--added); text-underline-offset: 3px; background: var(--added-bg); }
@@ -430,16 +456,16 @@ details.private-def .sigbox { margin-top: 4px; }
 .st.badge { font-weight: 700; text-transform: uppercase; letter-spacing: .05em; font-size: 10.5px; padding: 1px 7px; }
 .st-added.badge { background: var(--added); color: var(--bg); }
 .st-removed.badge { background: var(--removed); color: var(--bg); }
-.card.cs-added { background: color-mix(in srgb, var(--added-bg) 55%, var(--bg)); border: 1px solid color-mix(in srgb, var(--added) 45%, transparent); border-top: 4px solid var(--added); }
+.card.cs-added { background: color-mix(in srgb, var(--added-bg) 55%, var(--bg)); border: 1px solid color-mix(in srgb, var(--added) 70%, transparent); border-top: 4px solid var(--added); }
 .card.cs-removed { background: color-mix(in srgb, var(--removed-bg) 55%, var(--bg)); border: 1px dashed var(--removed); border-top: 4px dashed var(--removed); }
 .whole, .irow.added, .irow.removed { border-radius: 6px; padding: 8px 10px; margin: 0 -10px; }
 .modbox.whole-added > .modbox-b, .modbox.whole-removed > .modbox-b { background: inherit; }
-.modbox.whole-added { background: color-mix(in srgb, var(--added-bg) 55%, var(--bg)); border: 1px solid color-mix(in srgb, var(--added) 45%, transparent); }
+.modbox.whole-added { background: color-mix(in srgb, var(--added-bg) 55%, var(--bg)); border: 1px solid color-mix(in srgb, var(--added) 70%, transparent); }
 .modbox.whole-removed { background: color-mix(in srgb, var(--removed-bg) 55%, var(--bg)); border: 1px dashed var(--removed); }
 /* Inside a marked group, rows don't repeat the group's tint. */
 .whole .irow:not(.member), .irow.grouped:not(.member) { background: none !important; border: none !important; border-radius: 0; margin-left: 0; margin-right: 0; padding: 4px 0; }
-.whole .irow.member, .irow.grouped.member { background: color-mix(in srgb, var(--bg) 70%, transparent) !important; border: 1px solid color-mix(in srgb, var(--border) 80%, transparent) !important; margin-left: 18px; margin-right: 0; padding: 10px 12px; }
-.whole-added, .irow.added { background: color-mix(in srgb, var(--added-bg) 55%, var(--bg)); border: 1px solid color-mix(in srgb, var(--added) 45%, transparent); }
+.whole .irow.member, .irow.grouped.member { background: color-mix(in srgb, var(--bg) 70%, transparent) !important; border: 1px solid var(--border) !important; margin-left: 18px; margin-right: 0; padding: 10px 12px; }
+.whole-added, .irow.added { background: color-mix(in srgb, var(--added-bg) 55%, var(--bg)); border: 1px solid color-mix(in srgb, var(--added) 70%, transparent); }
 .whole-removed, .irow.removed { background: color-mix(in srgb, var(--removed-bg) 55%, var(--bg)); border: 1px dashed var(--removed); }
 /* A new (or removed) member of a changed type stays indented like its siblings. */
 .irow.member.added:not(.grouped), .irow.member.removed:not(.grouped) { margin-left: 18px; margin-right: 0; padding: 10px 12px; }
@@ -569,6 +595,9 @@ body:not(.reviewing) .rv-edit, .card-rv .rv-fold { display: none; }
 body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .rv-flash { animation: rv-flash 1.4s ease-out; }
 @keyframes rv-flash { from { box-shadow: 0 0 0 4px var(--highlight); } to { box-shadow: 0 0 0 0 transparent; } }
+.pr-desc { margin: 12px 0 4px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
+.pr-desc > summary { cursor: pointer; padding: 6px 12px; font-weight: 600; }
+.pr-desc > .docs { padding: 0 16px 8px; border-top: 1px solid var(--border); max-height: 480px; overflow: auto; }
 .rv-since { border: 1px solid var(--changed); color: var(--changed); background: var(--bg); }
 .rv-since:hover { background: var(--changed-bg); }
 .since-intro { margin: 0 0 8px; }
