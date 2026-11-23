@@ -21,6 +21,8 @@ pub struct Data {
     ext: HashMap<String, Item>,
     /// Modules by each of their public paths.
     mod_by_path: HashMap<String, String>,
+    /// Where the PR's review threads are shown.
+    pub placement: crate::threads::Placement,
 }
 
 /// `m` is `s` or nested inside it.
@@ -80,6 +82,7 @@ impl Data {
             touched: HashMap::new(),
             ext,
             mod_by_path: HashMap::new(),
+            placement: Default::default(),
         };
         for it in d.out.items.values() {
             if it.info.kind == Kind::Mod {
@@ -94,6 +97,7 @@ impl Data {
             d.compute_touched(id, &mut memo);
         }
         d.touched = memo;
+        d.placement = crate::threads::place(&d);
         d
     }
 
@@ -897,8 +901,24 @@ impl Data {
             (Some(a), Some(b)) => ok[a] != nk[b],
             _ => true,
         };
-        // One row of the diff.
-        let row_html = |r: usize| -> String {
+        // The PR's review threads under the rows of their lines.
+        let threads = self.item_threads(&it.info.id);
+        let threads_at = |r: usize| -> Vec<&model::ReviewThread> {
+            let (o, n) = rows[r];
+            threads
+                .iter()
+                .copied()
+                .filter(|t| {
+                    let at = if t.left {
+                        o.map(|a| old_start + a)
+                    } else {
+                        n.map(|b| new_start + b)
+                    };
+                    at.is_some() && t.line == at
+                })
+                .collect()
+        };
+        let row_line_html = |r: usize| -> String {
             let (o, n) = rows[r];
             if split {
                 let same = matches!((o, n), (Some(a), Some(b)) if ok[a] == nk[b]);
@@ -944,6 +964,11 @@ impl Data {
                 )
             }
         };
+        // One row of the diff, with the threads on its line.
+        let row_html = |r: usize| -> String {
+            let list = threads_at(r);
+            row_line_html(r) + &crate::threads::row_html(self, &list, split)
+        };
         // Unchanged lines more than `CONTEXT` rows away from a change are
         // folded: a button in their place shows them. Runs of fewer than
         // `MIN_FOLD` lines are shown, since the button takes a line too.
@@ -951,10 +976,10 @@ impl Data {
         const MIN_FOLD: usize = 2;
         let mut gaps: Vec<std::ops::Range<usize>> = Vec::new();
         if rows.iter().any(changed_row) {
+            // Lines with a review thread stay shown, like changed ones.
             let near = |i: usize| {
-                rows[i.saturating_sub(CONTEXT)..(i + CONTEXT + 1).min(rows.len())]
-                    .iter()
-                    .any(changed_row)
+                (i.saturating_sub(CONTEXT)..(i + CONTEXT + 1).min(rows.len()))
+                    .any(|r| changed_row(&rows[r]) || !threads_at(r).is_empty())
             };
             let mut i = 0;
             while i < rows.len() {
@@ -1029,13 +1054,14 @@ impl Data {
         );
         // A small change to the body or definition starts open, the rest
         // behind the summary. So does a small new item, except an impl,
-        // whose members follow it with their own source.
+        // whose members follow it with their own source, and one with an
+        // open review thread.
         let small = match it.status {
             Status::Changed => it.changes.body && (1..=SMALL_BODY).contains(&(added + removed)),
             Status::Added => it.info.kind != Kind::Impl && it.source.len() <= SMALL_BODY,
             _ => false,
         };
-        let open = open.unwrap_or(small);
+        let open = open.unwrap_or(small || threads.iter().any(|t| !t.resolved));
         let stats = format!(
             r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>{}"#,
             if opts.ignore_ws {
@@ -1044,7 +1070,12 @@ impl Data {
                 ""
             }
         );
-        let where_ = format!("{}:{}", esc(&it.info.file), it.info.line);
+        let where_ = format!(
+            "{}:{}{}",
+            esc(&it.info.file),
+            it.info.line,
+            crate::threads::summary_note(&threads)
+        );
         let (class, summary) = match it.status {
             Status::Changed if it.changes.body => {
                 let what = if it.info.kind.is_callable() {
