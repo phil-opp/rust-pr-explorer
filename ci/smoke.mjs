@@ -120,8 +120,21 @@ try {
         await page.locator("#cards .card").first().waitFor({ state: "visible", timeout: 5_000 });
         await page.screenshot({ path: `${out_dir}/${scheme}-canvas-card.png` });
         await check_contrast(page, scheme, "canvas card");
-      } catch {
-        fail("opening an item shows no card on the canvas");
+        // Each listed item alone on the canvas, with its body diff
+        // expanded, so that changed words in source diffs are checked too.
+        // One at a time: axe skips text that another card covers.
+        const ids = await page.$$eval("#view-overview [data-open]", (els) => els.map((e) => e.dataset.open));
+        for (const id of ids) {
+          await page.click('#views [data-view="canvas"]');
+          await page.click("#cv-clear");
+          await page.click('#views [data-view="overview"]');
+          await page.click(`#view-overview [data-open="${id}"]`);
+          await page.locator("#cards .card").first().waitFor({ state: "visible", timeout: 5_000 });
+          await page.$$eval("#cards details.src:not([open])", (ds) => ds.forEach((d) => (d.open = true)));
+          await check_contrast(page, scheme, `canvas card of ${id} with its body diff`);
+        }
+      } catch (e) {
+        fail(`opening an item shows no card on the canvas: ${e.message.split("\n")[0]}`);
       }
     }
 
