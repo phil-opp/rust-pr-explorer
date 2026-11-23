@@ -120,7 +120,7 @@ The workspace has three crates:
    - PRs are cloned with `git` and the two revisions checked out.
    - Local revisions are exported with `git archive`; directories are copied.
    - In every case the analysis works on temporary copies, with tool configuration and symlinks removed (see Safety).
-2. **Syntactic analysis** (`analyze.rs`, [`syn`](https://docs.rs/syn)): finding items and resolving names.
+2. **Syntactic analysis** (`analyze/`, [`syn`](https://docs.rs/syn)): finding items and resolving names.
    - Builds the module tree, following `mod` declarations, `mod.rs`/`name.rs` and `#[path]`.
    - Gives every item, including methods, a stable id independent of file and `impl` block, e.g. `crate::ast::Expr::<impl Display>::fmt`.
    - Resolves every path in signatures and bodies: `crate`/`self`/`super`/`Self`, imports, renames, globs, re-exports and the prelude.
