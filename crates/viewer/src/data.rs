@@ -875,10 +875,24 @@ impl Data {
                 i += 1;
             }
         }
+        // In review mode, each part between folds starts with the review
+        // controls of the hunks that start in it (see `review::hunks`).
+        let hunk_head = |part: std::ops::Range<usize>| -> String {
+            let (mut olds, mut news) = (Vec::new(), Vec::new());
+            for &(o, n) in rows[part].iter().filter(|r| changed_row(r)) {
+                olds.extend(o.map(|a| old_start + a));
+                news.extend(n.map(|b| new_start + b));
+            }
+            match crate::review::hunk_controls(&it.info.id, &olds, &news) {
+                c if c.is_empty() => c,
+                c => format!(r#"<span class="hunk-rv">{c}</span>"#),
+            }
+        };
         let mut folded = 0;
         let mut body = String::new();
         let mut r = 0;
         for g in &gaps {
+            body += &hunk_head(r..g.start);
             body.extend((r..g.start).map(&row_html));
             let inner: String = g.clone().map(&row_html).collect();
             if unfolded.contains(&g.start) {
@@ -901,6 +915,7 @@ impl Data {
             }
             r = g.end;
         }
+        body += &hunk_head(r..rows.len());
         body.extend((r..rows.len()).map(&row_html));
         let code = format!(
             r#"<div class="src-code" data-item="{}">{}{}</div>"#,

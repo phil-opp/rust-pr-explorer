@@ -630,3 +630,10 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .rv-k { font-size: 12px; font-weight: 600; color: var(--link); }
 .rv-k.changes { color: var(--removed); }
 .rv-q { white-space: pre-wrap; color: var(--text); font-size: 13px; border-left: 3px solid var(--border); padding-left: 8px; margin-top: 2px; }
+/* Review controls at the top of each hunk of a source diff with several. */
+.hunk-rv { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; padding: 3px 8px; margin: 4px 0 2px; background: var(--bg-alt); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); font: 12px var(--sans); white-space: normal; }
+.sbs .hunk-rv { grid-column: 1 / -1; }
+.hunk-rv .hunk-at { color: var(--muted); margin-right: auto; }
+.hunk-rv .rvc { gap: 4px; }
+.hunk-rv .rv-fold { display: none; }
+body:not(.reviewing) .hunk-rv:not(:has(.rvc.done, .rvc.stale)) { display: none; }

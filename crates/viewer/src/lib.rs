@@ -563,8 +563,31 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
 }
 
 /// Gives a unit a verdict and moves on to the next unreviewed one.
+/// For a hunk: moves on to the item's next hunk without a verdict, and
+/// when there is none, gives the item the verdict its hunks add up to.
 fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String) {
     review::set_mark(&app.d, id, Some(review::Note { verdict, text }));
+    if let Some(item) = review::hunk_item(id) {
+        app.s.rv_current = Some(item.clone());
+        if let Some(next) = review::next_open_hunk(id) {
+            // The canvas doesn't scroll like a page; the hunk is in its card.
+            if app.s.view != View::Canvas {
+                reveal_unit(&format!("view-{}", app.s.view.name()), &next);
+            }
+            return;
+        }
+        if review::mark(&item) != Some(review::Mark::Done) {
+            let note = review::Note {
+                verdict: review::hunks_verdict(&item),
+                // Keeps a comment the item has from an earlier review.
+                text: review::note(&item).text,
+            };
+            review::set_mark(&app.d, &item, Some(note));
+        }
+        pages::render_sidebar(app);
+        go_next(app, Some(item));
+        return;
+    }
     pages::render_sidebar(app);
     go_next(app, Some(id.to_string()));
 }
@@ -576,7 +599,11 @@ fn open_editor(app: &App, id: &str, verdict: review::Verdict) {
         _ => "Comment on",
     };
     open_modal(
-        &format!("{title} <code>{}</code>", esc(&post::unit_name(&app.d, id))),
+        &format!(
+            "{title} <code>{}</code>{}",
+            esc(&post::unit_name(&app.d, id)),
+            esc(&post::part_label(id))
+        ),
         &post::editor_html(&app.d, id, verdict),
     );
     if let Some(t) = dom::by_id("rv-text").and_then(|t| t.dyn_into::<web_sys::HtmlElement>().ok()) {
@@ -731,7 +758,11 @@ fn go_next(app: &mut App, from: Option<String>) {
     if matches!(app.s.view, View::Overview | View::Module)
         && let Some(sec) = dom::by_id(&format!("view-{}", app.s.view.name()))
     {
-        let controls = dom::query_all_in(&sec, ".rvc");
+        // Items and files; their hunks are reached from the item.
+        let controls: Vec<Element> = dom::query_all_in(&sec, ".rvc")
+            .into_iter()
+            .filter(|c| !dom::data(c, "rv").is_some_and(|id| id.contains('#')))
+            .collect();
         let start = from
             .as_deref()
             .and_then(|f| {
@@ -808,7 +839,7 @@ fn reveal(control: &Element) {
         }
         up = el.parent_element();
     }
-    let row = dom::closest(control, ".irow, .impl-line, .ientry, .card")
+    let row = dom::closest(control, ".hunk-rv, .irow, .impl-line, .ientry, .card")
         .unwrap_or_else(|| control.clone());
     let opts = web_sys::ScrollIntoViewOptions::new();
     opts.set_block(web_sys::ScrollLogicalPosition::Start);
