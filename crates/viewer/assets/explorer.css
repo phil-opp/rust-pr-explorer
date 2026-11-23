@@ -24,6 +24,8 @@
   --changed-bg: #fff5d6;
   --private: #7a7a7a;
   --highlight: #ffe48a;
+  --reviewed: #0b7285;
+  --reviewed-bg: #e3f4f7;
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 4px 14px rgba(0, 0, 0, 0.06);
   --code-font: "Iosevka", var(--mono);
   --code-size: 13px;
@@ -58,6 +60,8 @@
     --changed-bg: #3a3116;
     --private: #9a9aa3;
     --highlight: #6b5a12;
+    --reviewed: #4fc3d6;
+    --reviewed-bg: #12343a;
     --shadow: 0 1px 3px rgba(0, 0, 0, 0.5), 0 4px 14px rgba(0, 0, 0, 0.35);
     color-scheme: dark;
   }
@@ -525,3 +529,34 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 .irow.member.py { margin-top: 8px; }
 .ientry > .ihead { display: flex; align-items: center; gap: 8px; }
 #panic { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; background: var(--removed); color: #fff; padding: 10px 16px; font-size: 14px; }
+
+/* Review mode. The controls show in review mode; an existing mark always. */
+#rv-mode { white-space: nowrap; }
+#rv-mode.on { background: var(--reviewed); border-color: var(--reviewed); color: var(--bg); }
+#rv-mode.on::before { content: "☑ "; }
+#rv-mode:not(.on)::before { content: "☐ "; }
+#rv-bar { display: none; align-items: center; gap: 8px; font-size: 13px; white-space: nowrap; }
+.reviewing #rv-bar { display: flex; }
+#rv-bar button { font-size: 12px; padding: 2px 8px; }
+.rv-meter { width: 70px; height: 6px; border-radius: 3px; background: var(--bg-alt); border: 1px solid var(--border); overflow: hidden; }
+.rv-meter span { display: block; height: 100%; background: var(--reviewed); }
+.rvc { display: inline-flex; gap: 4px; align-items: center; }
+.rvc button { font-size: 12px; padding: 1px 8px; white-space: nowrap; }
+.rv-btn { display: none; }
+.reviewing .rv-btn { display: inline-block; border-color: var(--reviewed); color: var(--reviewed); }
+.reviewing .rv-btn:hover { background: var(--reviewed); color: var(--bg); }
+.rv-chip { border: 1px solid var(--reviewed); color: var(--reviewed); background: var(--reviewed-bg); font-weight: 600; }
+.rv-chip.stale { border: 1px dashed var(--changed); color: var(--changed); background: var(--changed-bg); }
+.rv-all { color: var(--reviewed); font-weight: 700; }
+/* A reviewed row: one line, dimmed, with a check bar. Removing the mark
+   shows its details again. */
+.irow:has(> .iacts .rvc.done), .impl-line:has(.rvc.done) { box-shadow: inset 3px 0 0 var(--reviewed); padding-left: 10px !important; }
+.irow:has(> .iacts .rvc.done) > :not(.ihead, .iacts) { display: none; }
+.irow:has(> .iacts .rvc.done) > .ihead, .impl-line:has(.rvc.done) > code { opacity: .6; }
+.ientry.file:has(> .irow .rvc.done) > :not(.irow) { display: none; }
+.card:has(.card-rv .rvc.done) { outline: 2px solid var(--reviewed); }
+.card-rv { padding: 6px 10px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; }
+.card-rv:has(.rvc.done:only-child) { justify-content: flex-start; }
+body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
+.rv-flash { animation: rv-flash 1.4s ease-out; }
+@keyframes rv-flash { from { box-shadow: 0 0 0 4px var(--highlight); } to { box-shadow: 0 0 0 0 transparent; } }

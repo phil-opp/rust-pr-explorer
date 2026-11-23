@@ -82,6 +82,16 @@ Every item shows what rustdoc would show: its definition or signature (private f
 - **Source on demand**: each card has a collapsible source view, shown as a diff against the base version when the item changed.
 - **Standard library and dependencies**: names from outside the analyzed crates link to a read-only card with their declaration and docs, as rust-analyzer describes them, plus a link to their documentation online. Only the items the analyzed code names are looked up, not whole crates, so this adds little time.
 
+### Review mode
+
+**Review** in the header turns on review mode, for going through a PR one item at a time:
+
+- Every added, changed or removed item (functions, methods, types, trait impls, …) and every file listed under "Other changed files" gets a **✓ Reviewed, next ▸** button, on the overview, the module pages and canvas cards. It marks the item as reviewed and moves to the next one that isn't: further down the page, then on the next module's page (or, on the canvas, as a new card). **Next ▸** in the header, or the `n` key, moves on without marking.
+- A reviewed item is marked **✓ Reviewed** everywhere it appears, also with review mode off, and its row is folded to one dimmed line. Clicking the mark removes it.
+- The header shows how many of the PR's items and files are reviewed; in review mode the sidebar counts what is left per module (✓ when nothing is). **Clear** removes every mark.
+- Marks are saved in the browser's local storage, per pull request (for `git` and `dirs`, per pair of compared trees, by the page title), so they carry over to a page generated again after new commits. A mark remembers the item's diff: if the diff is different in the new page, the item shows **⚠ Changed since review** and counts as not reviewed. The page can't show what changed since the review, only the whole diff again.
+- Nothing leaves the browser: marks are not shared between browsers or people.
+
 ### Canvas
 
 - Click any name to place its item next to the current card, with a connector between the two.

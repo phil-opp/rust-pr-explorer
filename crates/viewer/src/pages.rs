@@ -20,7 +20,19 @@ pub fn render_sidebar(app: &App) {
             .filter(|c| c.info.kind == Kind::Mod)
             .collect();
         subs.sort_by(|a, b| a.info.name.cmp(&b.info.name));
-        let n = d.changes_in(m, false).len();
+        let changes = d.changes_in(m, false);
+        let n = changes.len();
+        // In review mode: how many still need a review.
+        let count = if n == 0 {
+            String::new()
+        } else if crate::review::is_on() {
+            match crate::review::open_count(changes.iter().map(|c| c.info.id.as_str())) {
+                0 => r#"<span class="rv-all" title="All reviewed">✓</span>"#.to_string(),
+                left => format!(r#"<span title="{left} of {n} not reviewed yet">{left}</span>"#),
+            }
+        } else {
+            n.to_string()
+        };
         let private = !d.is_root(it) && it.info.vis_scope.is_some();
         let sel = app.s.view == crate::View::Module && app.s.module == m;
         let dot = if it.status == Status::Unchanged {
@@ -49,7 +61,7 @@ pub fn render_sidebar(app: &App) {
             } else {
                 ""
             },
-            if n > 0 { n.to_string() } else { String::new() },
+            count,
             if subs.is_empty() {
                 String::new()
             } else {
@@ -76,9 +88,14 @@ pub fn render_sidebar(app: &App) {
             <div class="side-legend">
               <div><span class="dot added"></span> added &nbsp; <span class="dot changed"></span> changed &nbsp; <span class="dot removed"></span> removed</div>
               <div class="legend-bars"><span class="lb m-add">added</span><span class="lb m-chg">changed</span><span class="lb m-del">removed</span></div>
-              <div>Numbers: changed items defined directly in the module.</div>
+              <div>{}</div>
               <div>Calls resolved with: {}</div>
             </div>{warnings}"#,
+            if crate::review::is_on() {
+                "Numbers: changed items defined directly in the module that are not reviewed yet; ✓ when all are."
+            } else {
+                "Numbers: changed items defined directly in the module."
+            },
             esc(&d.out.meta.resolution)
         ),
     );
@@ -116,7 +133,7 @@ fn item_row(
     format!(
         r#"<div class="irow {} {} {} {}" data-id="{}">
         <div class="ihead"><span class="kind">{}</span>{} {} {}</div>
-        <div class="iacts"><button data-open="{}" title="Open on the canvas">Open ▸</button></div>
+        <div class="iacts">{}<button data-open="{}" title="Open on the canvas">Open ▸</button></div>
         {body}</div>"#,
         it.status.css(),
         if context { "context" } else { "" },
@@ -131,6 +148,7 @@ fn item_row(
         } else {
             String::new()
         },
+        crate::review::control_html(&it.info.id),
         esc(&it.info.id),
     )
 }
@@ -230,7 +248,7 @@ fn impl_line(d: &Data, m: &Item, badge: bool) -> String {
         },
     );
     format!(
-        r#"<div class="impl-line {}" data-id="{}"><code>{header}</code> {}<span class="grow"></span><button data-open="{}" title="Open on the canvas">Open ▸</button></div>"#,
+        r#"<div class="impl-line {}" data-id="{}"><code>{header}</code> {}<span class="grow"></span>{}<button data-open="{}" title="Open on the canvas">Open ▸</button></div>"#,
         m.status.css(),
         esc(&m.info.id),
         if badge || !matches!(m.status, Status::Added | Status::Removed) {
@@ -238,6 +256,7 @@ fn impl_line(d: &Data, m: &Item, badge: bool) -> String {
         } else {
             String::new()
         },
+        crate::review::control_html(&m.info.id),
         esc(&m.info.id),
     )
 }

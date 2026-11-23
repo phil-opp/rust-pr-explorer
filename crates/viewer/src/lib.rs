@@ -11,6 +11,7 @@ mod dom;
 mod files;
 mod map;
 mod pages;
+mod review;
 mod route;
 mod settings;
 mod space;
@@ -57,6 +58,9 @@ pub struct State {
     pub space: space::Space,
     search: Vec<String>,
     search_sel: usize,
+    /// The unit last shown by "next unreviewed", where the next search
+    /// continues.
+    rv_current: Option<String>,
 }
 
 pub struct App {
@@ -114,10 +118,12 @@ pub fn start() {
             space: space::Space::new(),
             search: Vec::new(),
             search_sel: 0,
+            rv_current: None,
         },
         d,
     };
     settings::load();
+    review::load(&app.d);
     let title = app.d.compared_html();
     dom::set_html("pr-title", &title);
     APP.with(|a| *a.borrow_mut() = Some(app));
@@ -295,6 +301,20 @@ fn install_listeners() {
         });
     });
     dom::listen(&doc, "keydown", |ev| {
+        // `n`: the next unreviewed item, in review mode, unless typing.
+        if let Some(k) = ev.dyn_ref::<KeyboardEvent>()
+            && k.key() == "n"
+            && !(k.ctrl_key() || k.meta_key() || k.alt_key())
+            && review::is_on()
+            && !dom::target_element(&ev)
+                .is_some_and(|t| matches!(t.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT"))
+        {
+            with_app(|app| {
+                let from = app.s.rv_current.clone();
+                go_next(app, from);
+            });
+            return;
+        }
         if ev
             .dyn_ref::<KeyboardEvent>()
             .is_some_and(|k| k.key() == "Escape")
@@ -358,6 +378,9 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         }
         dom::toggle_class(&panel, "hidden", true);
     }
+    if on_review_click(app, el) {
+        return;
+    }
     if dom::closest(el, "[data-modal-close]").is_some() || el.id() == "modal" {
         close_modal();
         return;
@@ -411,6 +434,146 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         let m = app.s.module.clone();
         canvas::show_module_graph(app, &m);
     }
+}
+
+/// Clicks on review controls. Returns whether the click was handled.
+fn on_review_click(app: &mut App, el: &Element) -> bool {
+    if let Some(c) = dom::closest(el, ".rvc") {
+        let id = dom::data(&c, "rv").unwrap_or_default();
+        if dom::closest(el, "[data-rv-done]").is_some() {
+            review::set_mark(&id, true);
+            pages::render_sidebar(app);
+            go_next(app, Some(id));
+        } else if dom::closest(el, "[data-rv-undo]").is_some() {
+            review::set_mark(&id, false);
+            app.s.rv_current = Some(id);
+            pages::render_sidebar(app);
+        }
+        return true;
+    }
+    if dom::closest(el, "#rv-mode").is_some() {
+        review::set_on(!review::is_on());
+        pages::render_sidebar(app);
+        return true;
+    }
+    if dom::closest(el, "#rv-next").is_some() {
+        let from = app.s.rv_current.clone();
+        go_next(app, from);
+        return true;
+    }
+    if dom::closest(el, "#rv-clear").is_some() {
+        let (done, _) = review::progress();
+        let sure = done == 0
+            || dom::window()
+                .confirm_with_message(&format!(
+                    "Remove all {done} review marks of this pull request?"
+                ))
+                .unwrap_or(false);
+        if sure {
+            review::clear();
+            app.s.rv_current = None;
+            set_view(app, app.s.view);
+        }
+        return true;
+    }
+    false
+}
+
+/// Shows the next unit that still needs a review, after unit `from`: on
+/// the overview and module pages the next one further down the page, then
+/// the next one in reading order (on its module page, or on the canvas
+/// when the canvas is open).
+fn go_next(app: &mut App, from: Option<String>) {
+    if matches!(app.s.view, View::Overview | View::Module)
+        && let Some(sec) = dom::by_id(&format!("view-{}", app.s.view.name()))
+    {
+        let controls = dom::query_all_in(&sec, ".rvc");
+        let start = from
+            .as_deref()
+            .and_then(|f| {
+                controls
+                    .iter()
+                    .position(|c| dom::data(c, "rv").as_deref() == Some(f))
+            })
+            .map_or(0, |i| i + 1);
+        if let Some(c) = controls[start.min(controls.len())..]
+            .iter()
+            .find(|c| !c.class_list().contains("done"))
+        {
+            app.s.rv_current = dom::data(c, "rv");
+            reveal(c);
+            return;
+        }
+    }
+    let Some(next) = review::next_open(from.as_deref()) else {
+        let (_, total) = review::progress();
+        toast(&if total == 0 {
+            "Nothing to review.".to_string()
+        } else {
+            format!("All {total} items and files are reviewed.")
+        });
+        return;
+    };
+    app.s.rv_current = Some(next.clone());
+    if next.starts_with("file:") {
+        set_view(app, View::Overview);
+        reveal_unit("view-overview", &next);
+        return;
+    }
+    if app.s.view == View::Canvas {
+        canvas::open(app, &next, None, true);
+        return;
+    }
+    let Some(module) = app.d.item(&next).map(|it| app.d.mod_of(it).to_string()) else {
+        return;
+    };
+    app.s.module = module;
+    set_view(app, View::Module);
+    if !reveal_unit("view-module", &next) {
+        // Not listed on a page (shouldn't happen): the canvas shows anything.
+        canvas::open(app, &next, None, true);
+    }
+}
+
+/// Scrolls to the control of `unit` in a view. Returns whether it is there.
+fn reveal_unit(section: &str, unit: &str) -> bool {
+    let Some(sec) = dom::by_id(section) else {
+        return false;
+    };
+    match dom::query_all_in(&sec, ".rvc")
+        .into_iter()
+        .find(|c| dom::data(c, "rv").as_deref() == Some(unit))
+    {
+        Some(c) => {
+            reveal(&c);
+            true
+        }
+        None => false,
+    }
+}
+
+/// Scrolls the row of a review control into view and highlights it.
+fn reveal(control: &Element) {
+    // Inside a closed group (generated files, for example): open it.
+    let mut up = control.parent_element();
+    while let Some(el) = up {
+        if let Some(det) = el.dyn_ref::<web_sys::HtmlDetailsElement>()
+            && !det.open()
+        {
+            det.set_open(true);
+        }
+        up = el.parent_element();
+    }
+    let row = dom::closest(control, ".irow, .impl-line, .ientry, .card")
+        .unwrap_or_else(|| control.clone());
+    let opts = web_sys::ScrollIntoViewOptions::new();
+    opts.set_block(web_sys::ScrollLogicalPosition::Start);
+    opts.set_behavior(web_sys::ScrollBehavior::Smooth);
+    row.scroll_into_view_with_scroll_into_view_options(&opts);
+    dom::toggle_class(&row, "rv-flash", false);
+    dom::raf(move || {
+        dom::toggle_class(&row, "rv-flash", true);
+    });
 }
 
 /// Tooltip with the fully qualified path of a hovered name.
