@@ -538,7 +538,7 @@ pub fn render_overview(app: &App) {
             warnings_html(d)
         }
     } else {
-        let unsafe_html = crate::unsafety::overview_html(d);
+        let unsafe_html = crate::unsafety::overview_html(d) + &crate::risk::overview_html(d);
         let semver = semver_summary(d);
         let public = if public_html.is_empty() && semver.is_empty() {
             String::new()
