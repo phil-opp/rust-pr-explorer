@@ -770,3 +770,38 @@ fn small_new_items_start_open() {
     let html = d.source_html(&item(Status::Added, Kind::Fn, 5), Some(false), false);
     assert!(!html.contains("open>"), "{html}");
 }
+
+#[test]
+fn moved_lines_are_marked_with_where_they_went() {
+    use model::{Item, MovedLines, SourceLine, Status};
+    let d = empty();
+    let mut it = Item {
+        status: Status::Changed,
+        ..Default::default()
+    };
+    it.changes.body = true;
+    it.info.id = "c::f".into();
+    it.info.kind = model::Kind::Fn;
+    it.info.line = 1;
+    it.source = vec![
+        SourceLine(' ', "fn f() {".into()),
+        SourceLine('-', "    let total = compute_everything();".into()),
+        SourceLine('-', "    b();".into()),
+        SourceLine('+', "    c();".into()),
+        SourceLine(' ', "}".into()),
+    ];
+    it.moved_lines = vec![MovedLines {
+        side: '-',
+        start: 1,
+        len: 1,
+        other: "c::g".into(),
+        other_line: 7,
+    }];
+    let html = d.source_html(&it, Some(true), false);
+    assert!(html.contains(r#"class="ln del mv""#), "{html}");
+    // `c::g` is not in the data, so the note gives the line only.
+    assert!(html.contains("moved to line 7"), "{html}");
+    assert!(html.contains("(1 moved)"), "{html}");
+    // The other removed line is an ordinary one, with its words marked.
+    assert_eq!(html.matches(" mv\"").count(), 1, "{html}");
+}
