@@ -184,6 +184,15 @@ fn compare(ctx: &semver::Context, b: ItemData, h: ItemData, moved_from: Option<S
         } else {
             BTreeMap::new()
         },
+        reformatted: if b.source != h.source {
+            let lines = |s: &str| s.lines().map(str::to_string).collect::<Vec<_>>();
+            let (old, new) = (lines(&b.source), lines(&h.source));
+            let old: Vec<&str> = old.iter().map(String::as_str).collect();
+            let new: Vec<&str> = new.iter().map(String::as_str).collect();
+            crate::reformat::find(&old, &new)
+        } else {
+            Vec::new()
+        },
         source,
         moved_lines: Vec::new(),
         info: h.info,

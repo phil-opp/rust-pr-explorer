@@ -303,6 +303,17 @@ pub struct SigDiff {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SourceLine(pub char, pub String);
 
+/// Lines of an item's base version (`old`, `old_len`) that its head
+/// version has, only reformatted, at `new`, `new_len`. Lines are counted in
+/// each version's lines: `source` without the lines of the other side.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Reformatted {
+    pub old: u32,
+    pub old_len: u32,
+    pub new: u32,
+    pub new_len: u32,
+}
+
 /// A block of removed or added lines of an item's source that was moved.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct MovedLines {
@@ -355,6 +366,10 @@ pub struct Item {
     /// item, `info` is the base version and has them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub old_source_refs: BTreeMap<String, Ref>,
+    /// Lines of `source` that were only reformatted (rewrapped, as rustfmt
+    /// does): the same tokens apart from trailing commas.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reformatted: Vec<Reformatted>,
     /// Blocks of `source`'s removed or added lines that were moved: they
     /// appear, the same apart from whitespace, among the added or removed
     /// lines of another item (e.g. an extracted helper) or elsewhere in
