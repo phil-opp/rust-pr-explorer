@@ -11,6 +11,7 @@ mod parts;
 #[cfg(feature = "semantic")]
 mod public_api;
 mod python;
+mod reformat;
 #[cfg(feature = "semantic")]
 mod semantic;
 mod semver;
