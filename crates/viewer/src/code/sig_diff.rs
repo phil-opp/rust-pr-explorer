@@ -219,8 +219,54 @@ pub fn structured_diff_html(
                 .map(u32::to_string)
                 .collect::<Vec<_>>()
                 .join(" ");
-            format!(r#"<li data-gs="{groups}">{}</li>"#, note_html(&n.text))
+            format!(
+                r#"<li data-gs="{groups}">{}{}</li>"#,
+                note_html(&n.text),
+                n.docs
+                    .as_deref()
+                    .map(|docs| member_docs_html(d, docs))
+                    .unwrap_or_default()
+            )
         })
         .collect();
     format!(r#"<div class="sig-block">{sig}<ul class="sig-notes">{notes}</ul></div>"#)
+}
+
+/// A field's or variant's doc comment under its note: the first paragraph,
+/// and the rest behind an expander.
+fn member_docs_html(d: &Data, docs: &str) -> String {
+    let (first, rest) = split_first_paragraph(docs);
+    let more = if rest.is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#"<details class="note-more"><summary>More</summary>{}</details>"#,
+            crate::code::docs_html(d, rest, &BTreeMap::new())
+        )
+    };
+    format!(
+        r#"<div class="docs note-docs">{}{more}</div>"#,
+        crate::code::docs_html(d, first, &BTreeMap::new())
+    )
+}
+
+/// Markdown split after its first paragraph (at the first blank line
+/// outside a code block): the paragraph, and the rest (possibly empty).
+pub fn split_first_paragraph(md: &str) -> (&str, &str) {
+    let mut fence = false;
+    let mut seen_text = false;
+    let mut at = 0;
+    for line in md.split_inclusive('\n') {
+        let t = line.trim();
+        if t.starts_with("```") || t.starts_with("~~~") {
+            fence = !fence;
+        }
+        if t.is_empty() && !fence && seen_text {
+            let rest = md[at..].trim();
+            return (md[..at].trim_end(), rest);
+        }
+        seen_text |= !t.is_empty();
+        at += line.len();
+    }
+    (md.trim_end(), "")
 }

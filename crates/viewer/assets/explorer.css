@@ -450,6 +450,9 @@ a.card-badge[data-drill]:hover { border-style: solid; }
 .sig-notes:empty { display: none; }
 .sig-notes li { margin: 1px 0; border-radius: 3px; cursor: default; }
 .sig-notes code { font-size: 12px; color: var(--text); background: var(--bg-code); padding: 0 3px; border-radius: 3px; }
+.sig-notes .note-docs { color: var(--text); font-size: 13px; margin: 2px 0 6px; }
+.sig-notes .note-docs p { margin: 2px 0; }
+.sig-notes .note-more summary { cursor: pointer; color: var(--muted); font-size: 12px; }
 .sig-note { font-size: 12px; color: var(--muted); }
 .legend-bars { display: flex; gap: 10px; margin-top: 6px !important; }
 .legend-bars .lb { padding-left: 5px; }
