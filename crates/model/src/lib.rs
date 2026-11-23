@@ -303,6 +303,24 @@ pub struct SigDiff {
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct SourceLine(pub char, pub String);
 
+/// A block of removed or added lines of an item's source that was moved.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct MovedLines {
+    /// `-` for removed lines (moved away), `+` for added ones (moved here).
+    pub side: char,
+    /// The block's first line and its number of lines, counted in that
+    /// side's version of the source: `source` without the lines of the
+    /// other side.
+    pub start: u32,
+    pub len: u32,
+    /// The item the lines were moved to (for removed lines) or from (for
+    /// added ones). It can be this item itself.
+    pub other: String,
+    /// The block's first line there, as a line number in that version's
+    /// file.
+    pub other_line: u32,
+}
+
 /// An item as compared between base and head.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Item {
@@ -337,6 +355,12 @@ pub struct Item {
     /// item, `info` is the base version and has them.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub old_source_refs: BTreeMap<String, Ref>,
+    /// Blocks of `source`'s removed or added lines that were moved: they
+    /// appear, the same apart from whitespace, among the added or removed
+    /// lines of another item (e.g. an extracted helper) or elsewhere in
+    /// this one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub moved_lines: Vec<MovedLines>,
     /// How the item's public API changed, if it is public on either side
     /// and its API changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
