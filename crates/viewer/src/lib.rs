@@ -6,9 +6,11 @@
 
 mod canvas;
 mod code;
+mod css;
 mod data;
 mod dom;
 mod files;
+mod js;
 mod keys;
 mod map;
 mod nav;
@@ -465,7 +467,12 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
             dom::closest(&a, ".card").and_then(|card| canvas::active_item_of_card(app, &card));
         match from {
             Some(from) => canvas::open(app, &id, Some(&from), false),
-            None => canvas::open(app, &id, None, true),
+            // On a page: jump to the item if the page shows it, else open
+            // it on the canvas.
+            None => match row_on_page(&a, &id) {
+                Some(row) => reveal(&row),
+                None => canvas::open(app, &id, None, true),
+            },
         }
         return;
     }
@@ -761,47 +768,47 @@ fn show_since_review(app: &App, id: &str) {
     );
 }
 
-/// Shows the next unit that still needs a review, after unit `from`: on
-/// the overview and module pages the next one further down the page, then
-/// the next one in reading order (on its module page, or on the canvas
-/// when the canvas is open). With `stay` (after a verdict), it doesn't
-/// switch tabs: on the overview it goes on with an open unit further up
-/// the page, on a module page it skips the files, and it says so when the
-/// tab has nothing left.
+/// Shows the next unit that still needs a review, after unit `from`, in
+/// review order: down the calls, from the changed items that nothing
+/// changed calls (see `review::call_order`). It stays on the overview or
+/// module page when the unit is listed there, and otherwise opens its
+/// module page (or, when the canvas is open, a card for it). With `stay`
+/// (after a verdict), it doesn't switch tabs: on the overview it goes on
+/// with the next unit the overview lists, on a module page it skips the
+/// files, and it says so when the tab has nothing left.
 fn go_next(app: &mut App, from: Option<String>, stay: bool) {
-    if matches!(app.s.view, View::Overview | View::Module)
-        && let Some(sec) = dom::by_id(&format!("view-{}", app.s.view.name()))
-    {
-        // Items and files; their hunks are reached from the item.
-        let controls: Vec<Element> = dom::query_all_in(&sec, ".rvc")
+    // The units this page lists, by their controls (items and files;
+    // their hunks are reached from the item).
+    let here: Vec<Element> = if matches!(app.s.view, View::Overview | View::Module) {
+        dom::by_id(&format!("view-{}", app.s.view.name()))
+            .map(|sec| dom::query_all_in(&sec, ".rvc"))
+            .unwrap_or_default()
             .into_iter()
             .filter(|c| !dom::data(c, "rv").is_some_and(|id| id.contains('#')))
-            .collect();
-        let start = from
-            .as_deref()
-            .and_then(|f| {
-                controls
-                    .iter()
-                    .position(|c| dom::data(c, "rv").as_deref() == Some(f))
-            })
-            .map_or(0, |i| i + 1);
-        let start = start.min(controls.len());
-        let stay = stay && app.s.view == View::Overview;
-        let (after, before) = (&controls[start..], &controls[..start]);
-        let wrap = if stay { before } else { &[] };
-        if let Some(c) = after
-            .iter()
-            .chain(wrap)
-            .find(|c| !c.class_list().contains("done"))
-        {
-            app.s.rv_current = dom::data(c, "rv");
-            reveal(c);
-            return;
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let control = |unit: &str| {
+        here.iter()
+            .find(|c| dom::data(c, "rv").as_deref() == Some(unit))
+            .cloned()
+    };
+    if stay && app.s.view == View::Overview {
+        match review::next_open_where(from.as_deref(), |u| control(u).is_some()) {
+            Some(next) => {
+                if let Some(c) = control(&next) {
+                    app.s.rv_current = Some(next);
+                    app.s.rv_hunk = None;
+                    reveal(&c);
+                }
+            }
+            None if review::next_open(from.as_deref()).is_some() => {
+                toast("Everything on the overview is reviewed. Next ▸ goes on with the rest.");
+            }
+            None => toast(&all_reviewed()),
         }
-        if stay && review::next_open(from.as_deref()).is_some() {
-            toast("Everything on the overview is reviewed. Next ▸ goes on with the rest.");
-            return;
-        }
+        return;
     }
     // After a verdict on a module page, files (shown on the overview)
     // come last, so that the tab doesn't change while items are left.
@@ -813,12 +820,7 @@ fn go_next(app: &mut App, from: Option<String>, stay: bool) {
         return;
     }
     let Some(next) = next else {
-        let (_, total) = review::progress();
-        toast(&if total == 0 {
-            "Nothing to review.".to_string()
-        } else {
-            format!("All {total} items and files are reviewed.")
-        });
+        toast(&all_reviewed());
         return;
     };
     show_unit(app, &next, from.as_deref());
@@ -856,6 +858,14 @@ fn show_unit(app: &mut App, unit: &str, from: Option<&str>) {
     }
 }
 
+/// What the toast says when nothing is left to review.
+fn all_reviewed() -> String {
+    match review::progress() {
+        (_, 0) => "Nothing to review.".to_string(),
+        (_, total) => format!("All {total} items and files are reviewed."),
+    }
+}
+
 /// Scrolls to the control of `unit` in a view. Returns whether it is there.
 fn reveal_unit(section: &str, unit: &str) -> bool {
     let Some(sec) = dom::by_id(section) else {
@@ -871,6 +881,15 @@ fn reveal_unit(section: &str, unit: &str) -> bool {
         }
         None => false,
     }
+}
+
+/// The row of item `id` in the view that `link` is in, if that view shows
+/// the item.
+fn row_on_page(link: &Element, id: &str) -> Option<Element> {
+    let view = dom::closest(link, "[id^='view-']")?;
+    dom::query_all_in(&view.into(), ".irow[data-id], .impl-line[data-id]")
+        .into_iter()
+        .find(|row| dom::data(row, "id").as_deref() == Some(id))
 }
 
 /// Scrolls the row of a review control into view and highlights it.

@@ -185,7 +185,7 @@ fn follow_call(app: &mut App) {
 /// The list that `?` shows.
 pub fn cheat_sheet_html() -> String {
     let rows = [
-        ("n", "Next unreviewed item"),
+        ("n", "Next unreviewed item, in call order"),
         ("a", "Approve the current item or change, and go on"),
         ("r", "Request changes (asks for a comment)"),
         ("c", "Comment"),

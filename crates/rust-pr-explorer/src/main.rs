@@ -1,7 +1,10 @@
 //! Rust PR Explorer: shows a pull request as changed Rust items.
 
 mod analyze;
+mod css;
 mod files;
+mod javascript;
+mod lockfile;
 mod merge;
 mod parts;
 #[cfg(feature = "semantic")]

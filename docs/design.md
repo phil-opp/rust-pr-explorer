@@ -28,9 +28,12 @@ crates/rust-pr-explorer  CLI: get sources, analyze, compare, write the page
   src/semver.rs          breaking / non-breaking labels for API changes
   src/sigdiff.rs         structured signature diffs
   src/files.rs           every changed file: line diffs, Cargo.toml entries
+  src/lockfile.rs        lock files (Cargo.lock, uv.lock, poetry.lock) by package
   src/parts.rs           files split into parts compared one by one: YAML keys,
                          Rust code outside items (tests, macro calls, extern)
   src/python.rs          Python files compared by function and class
+  src/javascript.rs      JavaScript files compared by function, class, method, test
+  src/css.rs             CSS files compared by selector, rules merged by the cascade
   build.rs               compiles crates/viewer to wasm, runs wasm-bindgen
 crates/viewer            the page's front end (wasm, web-sys, pulldown-cmark)
   src/pages.rs           overview and module pages
@@ -39,6 +42,7 @@ crates/viewer            the page's front end (wasm, web-sys, pulldown-cmark)
   src/map.rs, route.rs   structure view (module map, matrix) and arrow routing
   src/files.rs           other changed files (Markdown sections, Python, YAML,
                          manifests, Rust code outside items)
+  src/css.rs             CSS highlighting and selector boxes
 ```
 
 The CLI's build script runs a nested `cargo build` of the viewer for `wasm32-unknown-unknown`, in its own target directory. It then generates the JavaScript bindings with `wasm-bindgen-cli-support`, used as a library. `main.rs` embeds both outputs with `include_bytes!`. A plain `cargo build` therefore produces a complete tool; the only extra requirement is the wasm target (`rustup target add wasm32-unknown-unknown`).

@@ -312,6 +312,37 @@ impl Data {
     }
 
     /// The module an item lives in (a module's own id for modules).
+    /// The type an impl or associated item belongs to, if that type is in
+    /// the same module; otherwise the item itself.
+    pub fn type_anchor<'a>(&'a self, it: &'a Item) -> &'a Item {
+        it.info
+            .self_ty
+            .as_deref()
+            .filter(|t| *t != it.info.id)
+            .and_then(|t| self.item(t))
+            .filter(|t| t.info.module == it.info.module)
+            .unwrap_or(it)
+    }
+
+    /// Reading order within a module: by position in the source, except
+    /// that a type's impls and associated items come right after the type,
+    /// wherever they are.
+    pub fn reading_order(&self, a: &Item, b: &Item) -> std::cmp::Ordering {
+        let key = |it: &Item| {
+            let t = self.type_anchor(it);
+            (
+                t.info.file.clone(),
+                t.info.line,
+                t.info.id.clone(),
+                t.info.id != it.info.id,
+                it.info.file.clone(),
+                it.info.line,
+                it.info.id.clone(),
+            )
+        };
+        key(a).cmp(&key(b))
+    }
+
     pub fn mod_of<'a>(&self, it: &'a Item) -> &'a str {
         if it.info.kind == Kind::Mod {
             &it.info.id
@@ -550,8 +581,13 @@ impl Data {
     /// The visibility of a module. Other items show it in their signature.
     pub fn vis_html(&self, it: &Item) -> String {
         let i = &it.info;
+        let test = if i.test_only {
+            r#"<span class="st st-test" title="Compiled only for tests: marked #[test] or #[cfg(test)], or inside test-only code">test-only</span>"#
+        } else {
+            ""
+        };
         if i.kind != Kind::Mod {
-            return String::new();
+            return test.to_string();
         }
         let class = if i.vis_label == "pub" {
             "vis pub"
@@ -563,7 +599,7 @@ impl Data {
             None => "public".into(),
         };
         format!(
-            r#"<span class="{class}" title="{}">{}</span>"#,
+            r#"{test}<span class="{class}" title="{}">{}</span>"#,
             esc(&title),
             esc(&i.vis_label)
         )
@@ -995,10 +1031,13 @@ impl Data {
             }
         );
         // A small change to the body or definition starts open, the rest
-        // behind the summary.
-        let small = it.status == Status::Changed
-            && it.changes.body
-            && (1..=SMALL_BODY).contains(&(added + removed));
+        // behind the summary. So does a small new item, except an impl,
+        // whose members follow it with their own source.
+        let small = match it.status {
+            Status::Changed => it.changes.body && (1..=SMALL_BODY).contains(&(added + removed)),
+            Status::Added => it.info.kind != Kind::Impl && it.source.len() <= SMALL_BODY,
+            _ => false,
+        };
         let open = open.unwrap_or(small);
         let stats = format!(
             r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>{}"#,

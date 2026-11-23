@@ -1,5 +1,6 @@
 //! Files the Rust analysis doesn't cover: `Cargo.toml` changes, Python
-//! definitions, YAML keys, Markdown sections, and plain line diffs for the
+//! definitions, YAML keys, CSS selectors, Markdown sections, and plain line
+//! diffs for the
 //! rest. For analyzed Rust files, the code that belongs to no item: tests,
 //! macro calls and `extern` blocks as parts, and the remaining lines.
 
@@ -7,9 +8,11 @@ use crate::code::{
     Links, Seg, code_html, esc, mark_changed_tokens, markdown_diff_segs, markdown_file_html,
     marked_html, sig_diff_html,
 };
+use crate::css;
 use crate::data::Data;
+use crate::js;
 use crate::yaml;
-use model::{ChangedFile, Kind, ManifestChange, PartChange, SourceLine, Status};
+use model::{ChangedFile, Kind, LockChange, ManifestChange, PartChange, SourceLine, Status};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Changes up to this many lines are shown directly, larger ones folded.
@@ -27,18 +30,25 @@ fn stats(added: u32, removed: u32) -> String {
     format!(r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>"#)
 }
 
-/// Hunks of a line diff. Rust, Python and YAML get syntax colors; nothing
+/// Hunks of a line diff. Rust, Python, JavaScript, YAML and CSS get
+/// syntax colors; nothing
 /// is linked.
 pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
     let mut new_line = 0usize;
     let mut old_line = 0usize;
     // YAML block scalars span lines; each side keeps its own state.
     let (mut old_yaml, mut new_yaml) = (yaml::State::default(), yaml::State::default());
+    // So do JavaScript comments and template literals.
+    let (mut old_js, mut new_js) = (js::State::default(), js::State::default());
+    // So do CSS comments.
+    let (mut old_css, mut new_css) = (css::State::default(), css::State::default());
     let mut body = String::new();
     let mut codes: Vec<String> = Vec::with_capacity(lines.len());
     for l in lines {
         if l.0 == '@' {
             (old_yaml, new_yaml) = (yaml::State::default(), yaml::State::default());
+            (old_js, new_js) = (js::State::default(), js::State::default());
+            (old_css, new_css) = (css::State::default(), css::State::default());
         }
         codes.push(match lang {
             "rust" | "python" => code_html(d, &l.1, Links::None),
@@ -48,6 +58,22 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
                 _ => {
                     yaml::line_html(&mut old_yaml, &l.1);
                     yaml::line_html(&mut new_yaml, &l.1)
+                }
+            },
+            "javascript" => match l.0 {
+                '-' => js::line_html(&mut old_js, &l.1),
+                '+' => js::line_html(&mut new_js, &l.1),
+                _ => {
+                    js::line_html(&mut old_js, &l.1);
+                    js::line_html(&mut new_js, &l.1)
+                }
+            },
+            "css" => match l.0 {
+                '-' => css::line_html(&mut old_css, &l.1),
+                '+' => css::line_html(&mut new_css, &l.1),
+                _ => {
+                    css::line_html(&mut old_css, &l.1);
+                    css::line_html(&mut new_css, &l.1)
                 }
             },
             _ => esc(&l.1),
@@ -181,7 +207,16 @@ fn parts_summary(parts: &[PartChange]) -> String {
 /// A file's changed parts (see [`PartChange`]), one box each.
 fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
     let no_refs = BTreeMap::new();
-    let code = lang != "yaml";
+    // Rust and Python headers are highlighted (and diffed) as code; YAML
+    // and JavaScript ones with their own highlighters.
+    let code = lang == "rust" || lang == "python";
+    let plain = |text: &str| -> String {
+        if lang == "javascript" {
+            js::text_html(text)
+        } else {
+            yaml::line_html(&mut yaml::State::default(), text)
+        }
+    };
     list.iter()
         .map(|c| {
             if c.kind == "module" {
@@ -195,13 +230,13 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
                 Some(old) => format!(
                     r#"<pre class="sig"><del>{}</del>
 {}</pre>"#,
-                    yaml::line_html(&mut yaml::State::default(), old),
-                    yaml::line_html(&mut yaml::State::default(), &c.sig)
+                    plain(old),
+                    plain(&c.sig)
                 ),
                 None if code => {
                     format!(r#"<pre class="sig">{}</pre>"#, code_html(d, &c.sig, Links::None))
                 }
-                None => format!(r#"<pre class="sig">{}</pre>"#, yaml::line_html(&mut yaml::State::default(), &c.sig)),
+                None => format!(r#"<pre class="sig">{}</pre>"#, plain(&c.sig)),
             };
             let (sig_bar, sig_class) = match c.status {
                 Status::Added | Status::Removed => ("", ""),
@@ -210,7 +245,7 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
             };
             let mut segs = Vec::new();
             // A YAML key's line repeats its name, unless it changed.
-            if code || c.old_sig.is_some() {
+            if lang != "yaml" || c.old_sig.is_some() {
                 segs.push(Seg::new(
                     sig_bar,
                     format!(r#"<div class="sigbox {sig_class}">{sig}</div>"#),
@@ -221,7 +256,11 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
                     "m-chg",
                     format!(
                         r#"<div class="note">{} changed.</div>"#,
-                        if lang == "python" { "Docstring" } else { "Doc comment" }
+                        match lang {
+                            "python" => "Docstring",
+                            "javascript" => "JSDoc comment",
+                            _ => "Doc comment",
+                        }
                     ),
                 ));
             }
@@ -448,12 +487,24 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
         String::new()
     };
     let structured = match f.lang.as_str() {
-        "python" | "yaml" | "rust" if !f.parts.is_empty() => parts_html(d, &f.parts, &f.lang),
+        "python" | "javascript" | "yaml" | "rust" if !f.parts.is_empty() => {
+            parts_html(d, &f.parts, &f.lang)
+        }
+        "css" if !f.styles.is_empty() => css::styles_html(&f.styles),
+        // Compared, and no property changed.
+        "css" if !f.hunks.is_empty() && f.status == Status::Changed => {
+            r#"<div class="note">No property changed: only comments, formatting or the order of rules (which can matter where selectors of equal specificity overlap).</div>"#
+                .to_string()
+        }
         "markdown" => match (&f.old_text, &f.new_text) {
             (Some(o), Some(n)) => markdown_html(d, o, n),
             _ => String::new(),
         },
         // Listed under "Dependencies and package settings" already.
+        _ if !f.lock.is_empty() => {
+            r#"<div class="note">The packages whose locked versions changed are listed at the top.</div>"#
+                .to_string()
+        }
         _ if !f.manifest.is_empty() => {
             r#"<div class="note">Dependency and package changes are listed at the top.</div>"#
                 .to_string()
@@ -513,13 +564,202 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
     )
 }
 
-/// `Cargo.toml` changes, shown first in the overview.
+/// The numeric parts of a version (`1.2.3-rc.1` gives `[1, 2, 3]`) and
+/// whether it is a pre-release.
+fn version_parts(v: &str) -> (Vec<u64>, bool) {
+    let core = v.split('+').next().unwrap_or(v);
+    let (core, pre) = match core.split_once('-') {
+        Some((c, _)) => (c, true),
+        None => (core, false),
+    };
+    let parts = core
+        .split('.')
+        .map(|p| {
+            let digits: String = p.chars().take_while(|c| c.is_ascii_digit()).collect();
+            digits.parse().unwrap_or(0)
+        })
+        .collect();
+    (parts, pre)
+}
+
+/// What an update from `old` to `new` is: a downgrade, or which part of
+/// the version changed. For Cargo, by its semver rules: a change of the
+/// leftmost non-zero part is breaking (`0.3` to `0.4` is), others are
+/// compatible.
+fn bump(old: &str, new: &str, cargo: bool) -> (&'static str, &'static str) {
+    let ((a, a_pre), (b, b_pre)) = (version_parts(old), version_parts(new));
+    let n = a.len().max(b.len()).max(3);
+    let at = |v: &[u64], i: usize| v.get(i).copied().unwrap_or(0);
+    let Some(first) = (0..n).find(|&i| at(&a, i) != at(&b, i)) else {
+        return match (a_pre, b_pre) {
+            (true, false) => ("", "release of the pre-release"),
+            (false, true) => ("lk-major", "to a pre-release"),
+            _ => ("", "pre-release changed"),
+        };
+    };
+    if at(&b, first) < at(&a, first) {
+        return ("lk-down", "downgrade");
+    }
+    if cargo {
+        let leftmost = (0..n).find(|&i| at(&a, i) != 0).unwrap_or(n - 1).min(2);
+        if first <= leftmost {
+            ("lk-major", "breaking")
+        } else {
+            ("", "compatible")
+        }
+    } else {
+        match first {
+            0 => ("lk-major", "major"),
+            1 => ("", "minor"),
+            _ => ("", "patch"),
+        }
+    }
+}
+
+/// A lock file's changed packages, grouped: updated, added, removed, and
+/// those whose version stayed but whose source or checksum changed.
+fn lock_html(path: &str, list: &[LockChange]) -> String {
+    let cargo = path.rsplit('/').next() == Some("Cargo.lock");
+    let code = |v: &[String]| {
+        v.iter()
+            .map(|x| format!("<code>{}</code>", esc(x)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let source_note = |c: &LockChange| match (&c.old_source, &c.new_source) {
+        (Some(o), Some(n)) => format!(
+            r#"<div class="note lk-warn">source: <del>{}</del> → {}</div>"#,
+            esc(o),
+            esc(n)
+        ),
+        (None, Some(n)) if !c.old.is_empty() => {
+            format!(r#"<div class="note lk-warn">now from {}</div>"#, esc(n))
+        }
+        (None, Some(n)) => format!(r#"<div class="note lk-warn">from {}</div>"#, esc(n)),
+        (Some(o), None) => format!(
+            r#"<div class="note">back to the default registry (was {})</div>"#,
+            esc(o)
+        ),
+        (None, None) => String::new(),
+    };
+    let checksum = |c: &LockChange| {
+        if c.checksum_changed {
+            r#"<div class="note lk-warn">checksum changed for the same version: the published package differs</div>"#
+        } else {
+            ""
+        }
+    };
+    let mut groups: [(&str, Vec<String>); 4] = [
+        ("Updated", Vec::new()),
+        ("Added", Vec::new()),
+        ("Removed", Vec::new()),
+        ("Same version, other source or checksum", Vec::new()),
+    ];
+    for c in list {
+        // Versions on only one side; one of each is an update.
+        let gone: Vec<String> = c
+            .old
+            .iter()
+            .filter(|v| !c.new.contains(v))
+            .cloned()
+            .collect();
+        let came: Vec<String> = c
+            .new
+            .iter()
+            .filter(|v| !c.old.contains(v))
+            .cloned()
+            .collect();
+        let name = format!(r#"<td class="mf-name"><code>{}</code></td>"#, esc(&c.name));
+        let notes = format!("{}{}", source_note(c), checksum(c));
+        let (group, row) = if c.old.is_empty() {
+            (
+                1,
+                format!(
+                    r#"<tr class="m-add">{name}<td class="mf-old"></td><td class="mf-new">{}</td><td>{notes}</td></tr>"#,
+                    code(&c.new)
+                ),
+            )
+        } else if c.new.is_empty() {
+            (
+                2,
+                format!(
+                    r#"<tr class="m-del">{name}<td class="mf-old"><del>{}</del></td><td class="mf-new"></td><td>{notes}</td></tr>"#,
+                    code(&c.old)
+                ),
+            )
+        } else if gone.is_empty() && came.is_empty() {
+            (
+                3,
+                format!(
+                    r#"<tr class="m-chg">{name}<td class="mf-old"></td><td class="mf-new">{}</td><td>{notes}</td></tr>"#,
+                    code(&c.new)
+                ),
+            )
+        } else {
+            let what = match (gone.as_slice(), came.as_slice()) {
+                ([o], [n]) => {
+                    let (class, label) = bump(o, n, cargo);
+                    format!(r#"<span class="lk-bump {class}">{label}</span>"#)
+                }
+                // From several versions to one: compared with the newest.
+                ([.., o], [n]) => {
+                    let (class, label) = bump(o, n, cargo);
+                    format!(
+                        r#"<span class="lk-bump {class}">{label}</span><div class="note">from {} versions to one</div>"#,
+                        gone.len()
+                    )
+                }
+                ([], _) => "another version added".to_string(),
+                (_, []) => "a version dropped".to_string(),
+                _ => String::new(),
+            };
+            (
+                0,
+                format!(
+                    r#"<tr class="m-chg">{name}<td class="mf-old"><del>{}</del></td><td class="mf-new">{}</td><td>{what}{notes}</td></tr>"#,
+                    code(&c.old),
+                    code(&c.new)
+                ),
+            )
+        };
+        groups[group].1.push(row);
+    }
+    let counts: Vec<String> = groups
+        .iter()
+        .take(3)
+        .filter(|g| !g.1.is_empty())
+        .map(|g| format!("{} {}", g.1.len(), g.0.to_lowercase()))
+        .collect();
+    let mut table = String::from(r#"<table class="manifest lock">"#);
+    for (title, rows) in &groups {
+        if rows.is_empty() {
+            continue;
+        }
+        table.push_str(&format!(
+            r#"<tr><th colspan="4" class="mf-sec">{title}</th></tr>{}"#,
+            rows.concat()
+        ));
+    }
+    table.push_str("</table>");
+    // Long lists (a `cargo update`) are folded.
+    if list.len() > 25 {
+        format!(
+            r#"<details class="lock-all"><summary>{} packages changed: {}</summary>{table}</details>"#,
+            list.len(),
+            counts.join(", ")
+        )
+    } else {
+        table
+    }
+}
+
+/// `Cargo.toml` and lock file changes, shown first in the overview.
 pub fn manifests_html(d: &Data) -> String {
     let list: Vec<&ChangedFile> = d
         .out
         .files
         .iter()
-        .filter(|f| !f.manifest.is_empty())
+        .filter(|f| !f.manifest.is_empty() || !f.lock.is_empty())
         .collect();
     if list.is_empty() {
         return String::new();
@@ -529,17 +769,21 @@ pub fn manifests_html(d: &Data) -> String {
         .map(|f| {
             // The same review mark as the file's entry under "Other
             // changed files".
+            let (kind, body) = if f.lock.is_empty() {
+                ("manifest", manifest_html(&f.manifest))
+            } else {
+                ("lock file", lock_html(&f.path, &f.lock))
+            };
             format!(
-                r#"<div class="ientry file"><div class="irow"><div class="ihead"><span class="title-name">{}</span><span class="kind">manifest</span></div><div class="iacts">{}</div></div>{}</div>"#,
+                r#"<div class="ientry file"><div class="irow"><div class="ihead"><span class="title-name">{}</span><span class="kind">{kind}</span></div><div class="iacts">{}</div></div>{body}</div>"#,
                 esc(&f.path),
                 crate::review::control_html(&crate::review::file_unit(&f.path)),
-                manifest_html(&f.manifest)
             )
         })
         .collect();
     format!(
         r#"<h2>Dependencies and package settings {}</h2>{cards}"#,
-        crate::pages::help_html("Changes in Cargo.toml files.")
+        crate::pages::help_html("Changes in Cargo.toml and lock files.")
     )
 }
 
@@ -584,6 +828,21 @@ pub fn other_files_html(d: &Data) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn version_bumps() {
+        assert_eq!(bump("1.0.200", "1.0.210", true).1, "compatible");
+        assert_eq!(bump("1.4.0", "2.0.0", true).1, "breaking");
+        assert_eq!(bump("0.3.9", "0.4.0", true).1, "breaking");
+        assert_eq!(bump("0.3.9", "0.3.10", true).1, "compatible");
+        assert_eq!(bump("0.0.3", "0.0.4", true).1, "breaking");
+        assert_eq!(bump("2.31.0", "2.32.0", false).1, "minor");
+        assert_eq!(bump("1.2.0", "1.1.9", true).1, "downgrade");
+        assert_eq!(
+            bump("1.0.0-rc.1", "1.0.0", true).1,
+            "release of the pre-release"
+        );
+    }
 
     #[test]
     fn markdown_sections_follow_headings_outside_fences() {
