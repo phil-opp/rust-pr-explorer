@@ -266,6 +266,47 @@ pub fn on_details_toggle(app: &mut App, el: &Element) {
     draw_edges(app);
 }
 
+/// Shows folded unchanged source lines: those behind `button`, or with
+/// `data-unfold-all`, all of its source view. Inside a card, remembers
+/// them across re-renders.
+pub fn on_unfold(app: &mut App, button: &Element) {
+    let Some(code) = dom::closest(button, ".src-code") else {
+        return;
+    };
+    let folds = if button.has_attribute("data-unfold-all") {
+        dom::query_all_in(&code, "[data-unfold]")
+    } else {
+        vec![button.clone()]
+    };
+    let mut starts = Vec::new();
+    for b in folds {
+        if let Some(fold) = b.next_element_sibling() {
+            let _ = fold.remove_attribute("hidden");
+        }
+        starts.extend(dom::data(&b, "unfold").and_then(|s| s.parse::<usize>().ok()));
+        b.remove();
+    }
+    if dom::query_all_in(&code, "[data-unfold]").is_empty() {
+        for b in dom::query_all_in(&code, "[data-unfold-all]") {
+            b.remove();
+        }
+    }
+    let gid = dom::closest(&code, ".card")
+        .and_then(|c| dom::data(&c, "gid"))
+        .and_then(|g| g.parse::<u32>().ok());
+    if let (Some(gi), Some(id)) = (
+        gid.and_then(|g| app.s.canvas.by_gid(g)),
+        dom::data(&code, "item"),
+    ) {
+        app.s.canvas.groups[gi]
+            .unfolded
+            .entry(id)
+            .or_default()
+            .extend(starts);
+        draw_edges(app);
+    }
+}
+
 /// Outlines the card of the item a hovered name refers to.
 pub fn highlight_card_of(app: &App, id: &str) {
     let c = &app.s.canvas;

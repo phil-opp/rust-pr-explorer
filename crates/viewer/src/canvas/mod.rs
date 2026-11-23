@@ -4,7 +4,7 @@
 use crate::code::esc;
 use crate::data::Data;
 use crate::{App, dom};
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use web_sys::Element;
 
 mod card;
@@ -16,7 +16,7 @@ mod open;
 pub use edges::draw_edges;
 pub use events::{
     active_item_of_card, highlight_card_of, on_click, on_details_toggle, on_pointer_down,
-    on_pointer_move, on_pointer_up, on_wheel,
+    on_pointer_move, on_pointer_up, on_unfold, on_wheel,
 };
 pub use layout::show_module_graph;
 pub use open::open;
@@ -35,6 +35,9 @@ pub struct Group {
     pub y: f64,
     /// Items whose source view is expanded.
     pub open_src: BTreeSet<String>,
+    /// Folds of unchanged source lines that were expanded, by item and
+    /// first row.
+    pub unfolded: BTreeMap<String, BTreeSet<usize>>,
 }
 
 #[derive(Clone, Copy)]
@@ -107,6 +110,7 @@ impl Canvas {
             x,
             y,
             open_src: BTreeSet::new(),
+            unfolded: BTreeMap::new(),
         });
         self.next_gid += 1;
         self.groups.len() - 1

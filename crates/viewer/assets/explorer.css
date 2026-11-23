@@ -344,6 +344,12 @@ a.ref:hover { text-decoration: underline; }
 .src-small pre, .src-small .sbs { margin-top: 0; }
 .src .ln.skip, .src-small .ln.skip, .sbs .skip { color: var(--muted); text-align: center; }
 .sbs .skip { grid-column: 1 / -1; }
+.unfold { cursor: pointer; user-select: none; color: var(--link) !important; background: color-mix(in srgb, var(--link) 8%, transparent); font-family: var(--sans); font-size: 12px; text-align: left !important; padding-left: 12px !important; }
+.unfold:hover { background: color-mix(in srgb, var(--link) 16%, transparent); }
+.src .ln.unfold::before { content: none; }
+.fold { display: contents; }
+.fold[hidden] { display: none; }
+.unfold-all { margin-top: 4px; }
 .card-impl { font: 12px var(--mono); color: var(--muted); }
 .card-acts { display: flex; gap: 4px; flex-wrap: wrap; }
 .card-acts button { font-size: 12px; padding: 1px 7px; }
@@ -413,13 +419,13 @@ a.ref:hover { text-decoration: underline; }
 .sbs { display: grid; grid-template-columns: auto minmax(max-content, 1fr) auto minmax(max-content, 1fr); margin: 4px 0 0;
   background: var(--bg-code); border-radius: 4px; max-height: 420px; overflow: auto; padding: 4px 0; }
 .sbs .no { color: var(--muted); text-align: right; padding: 0 6px 0 8px; user-select: none; border-left: 1px solid var(--border); }
-.sbs .no:first-child, .sbs .no:nth-child(4n+1) { border-left: none; }
+.sbs .no.o { border-left: none; }
 .sbs .ln { white-space: pre; padding-right: 12px; }
 .sbs .ln::before { content: attr(data-t); display: inline-block; width: 14px; color: var(--muted); }
 .sbs .ln.add { background: var(--added-bg); }
 .sbs .ln.del { background: var(--removed-bg); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--removed) 60%, transparent); }
 .sbs .ln.gap { background: repeating-linear-gradient(135deg, transparent 0 4px, var(--border) 4px 5px); opacity: .5; }
-.card:has(details.src[open] .sbs) { width: 1080px; }
+.card:has(details.src[open] .sbs), .card:has(.src-small .sbs) { width: 1080px; }
 .src .ln.del { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--removed) 60%, transparent); }
 /* A changed line paired with its new version: only the changed words are
    marked, the rest of the line reads normally. */

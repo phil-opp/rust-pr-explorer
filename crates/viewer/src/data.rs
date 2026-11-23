@@ -661,10 +661,18 @@ impl Data {
     /// whether it is open.
     #[cfg(test)]
     pub fn source_html(&self, it: &Item, open: bool, card: bool) -> String {
-        marked_html(self.source_seg(it, open, card))
+        marked_html(self.source_seg(it, open, card, &Default::default()))
     }
 
-    pub fn source_seg(&self, it: &Item, open: bool, card: bool) -> Option<Seg> {
+    /// `unfolded`: the folds of unchanged lines that were expanded, by
+    /// their first row.
+    pub fn source_seg(
+        &self,
+        it: &Item,
+        open: bool,
+        card: bool,
+        unfolded: &std::collections::BTreeSet<usize>,
+    ) -> Option<Seg> {
         use crate::code::{Links, code_html};
         use similar::{Algorithm, DiffOp, capture_diff_slices};
         if it.source.is_empty() {
@@ -789,87 +797,133 @@ impl Data {
             (Some(a), Some(b)) => ok[a] != nk[b],
             _ => true,
         };
-        // Renders the rows given by index; `None` stands for skipped
-        // unchanged lines.
-        let render = |sel: &[Option<usize>]| -> String {
+        // One row of the diff.
+        let row_html = |r: usize| -> String {
+            let (o, n) = rows[r];
             if split {
-                let cells: String = sel
-                    .iter()
-                    .map(|r| {
-                        let Some(&(o, n)) = r.map(|r| &rows[r]) else {
-                            return r#"<span class="skip">⋯</span>"#.to_string();
-                        };
-                        let same = matches!((o, n), (Some(a), Some(b)) if ok[a] == nk[b]);
-                        let cell = |idx: Option<usize>, start: usize, class: &str, code: &dyn Fn(usize) -> String| match idx {
-                            Some(i) => format!(
-                                r#"<span class="no">{}</span><span class="ln {}" data-t="{}">{}</span>"#,
-                                start + i,
-                                if same { "" } else { class },
-                                if same { "" } else if class.starts_with("del") { "-" } else { "+" },
-                                nonempty(code(i))
-                            ),
-                            None => r#"<span class="no"></span><span class="ln gap"> </span>"#.to_string(),
-                        };
-                        let del = if o.is_some_and(|a| marked_old.contains_key(&a)) { "del wl" } else { "del" };
-                        cell(o, old_start, del, &old_code) + &cell(n, new_start, "add", &new_code)
-                    })
-                    .collect();
-                format!(r#"<div class="sbs">{cells}</div>"#)
+                let same = matches!((o, n), (Some(a), Some(b)) if ok[a] == nk[b]);
+                let cell = |idx: Option<usize>,
+                            start: usize,
+                            class: &str,
+                            side: &str,
+                            code: &dyn Fn(usize) -> String| match idx {
+                    Some(i) => format!(
+                        r#"<span class="no {side}">{}</span><span class="ln {}" data-t="{}">{}</span>"#,
+                        start + i,
+                        if same { "" } else { class },
+                        if same {
+                            ""
+                        } else if class.starts_with("del") {
+                            "-"
+                        } else {
+                            "+"
+                        },
+                        nonempty(code(i))
+                    ),
+                    None => {
+                        format!(r#"<span class="no {side}"></span><span class="ln gap"> </span>"#)
+                    }
+                };
+                let del = if o.is_some_and(|a| marked_old.contains_key(&a)) {
+                    "del wl"
+                } else {
+                    "del"
+                };
+                cell(o, old_start, del, "o", &old_code) + &cell(n, new_start, "add", "n", &new_code)
             } else {
-                let body: String = sel
-                    .iter()
-                    .map(|r| {
-                        let Some(&(o, n)) = r.map(|r| &rows[r]) else {
-                            return r#"<span class="ln skip">⋯</span>"#.to_string();
-                        };
-                        let (class, tag, no, code) = match (o, n) {
-                            (_, Some(b)) if o.is_some() => ("", ' ', new_start + b, new_code(b)),
-                            (None, Some(b)) => ("add", '+', new_start + b, new_code(b)),
-                            (Some(a), _) if marked_old.contains_key(&a) => {
-                                ("del wl", '-', old_start + a, old_code(a))
-                            }
-                            (Some(a), _) => ("del", '-', old_start + a, old_code(a)),
-                            (None, None) => unreachable!(),
-                        };
-                        format!(
-                            r#"<span class="ln {class}" data-t="{}" data-no="{no}">{}</span>"#,
-                            if tag == ' ' {
-                                String::new()
-                            } else {
-                                tag.to_string()
-                            },
-                            nonempty(code)
-                        )
-                    })
-                    .collect();
-                format!("<pre>{body}</pre>")
+                let (class, tag, no, code) = match (o, n) {
+                    (_, Some(b)) if o.is_some() => ("", ' ', new_start + b, new_code(b)),
+                    (None, Some(b)) => ("add", '+', new_start + b, new_code(b)),
+                    (Some(a), _) if marked_old.contains_key(&a) => {
+                        ("del wl", '-', old_start + a, old_code(a))
+                    }
+                    (Some(a), _) => ("del", '-', old_start + a, old_code(a)),
+                    (None, None) => unreachable!(),
+                };
+                format!(
+                    r#"<span class="ln {class}" data-t="{}" data-no="{no}">{}</span>"#,
+                    if tag == ' ' {
+                        String::new()
+                    } else {
+                        tag.to_string()
+                    },
+                    nonempty(code)
+                )
             }
         };
-        let all: Vec<Option<usize>> = (0..rows.len()).map(Some).collect();
-        let lines = render(&all);
-        // A small change is shown right away: the changed lines with two
-        // lines of context, the rest behind "whole source".
-        const SMALL: usize = 4;
-        const CONTEXT: usize = 2;
-        let small = it.status == Status::Changed
-            && it.changes.body
-            && (1..=SMALL).contains(&(added + removed));
-        let hunks = small.then(|| {
+        // Unchanged lines more than `CONTEXT` rows away from a change are
+        // folded: a button in their place shows them. Runs of fewer than
+        // `MIN_FOLD` lines are shown, since the button takes a line too.
+        const CONTEXT: usize = 3;
+        const MIN_FOLD: usize = 2;
+        let mut gaps: Vec<std::ops::Range<usize>> = Vec::new();
+        if rows.iter().any(changed_row) {
             let near = |i: usize| {
                 rows[i.saturating_sub(CONTEXT)..(i + CONTEXT + 1).min(rows.len())]
                     .iter()
                     .any(changed_row)
             };
-            let mut sel: Vec<Option<usize>> = Vec::new();
-            for i in 0..rows.len() {
-                if near(i) {
-                    sel.push(Some(i));
-                } else if sel.last() != Some(&None) {
-                    sel.push(None);
+            let mut i = 0;
+            while i < rows.len() {
+                let start = i;
+                while i < rows.len() && !near(i) {
+                    i += 1;
                 }
+                if i - start >= MIN_FOLD {
+                    gaps.push(start..i);
+                }
+                i += 1;
             }
-            render(&sel)
-        });
+        }
+        let mut folded = 0;
+        let mut body = String::new();
+        let mut r = 0;
+        for g in &gaps {
+            body.extend((r..g.start).map(&row_html));
+            let inner: String = g.clone().map(&row_html).collect();
+            if unfolded.contains(&g.start) {
+                body += &inner;
+            } else {
+                folded += 1;
+                let arrow = if g.start == 0 {
+                    "↑"
+                } else if g.end == rows.len() {
+                    "↓"
+                } else {
+                    "↕"
+                };
+                body += &format!(
+                    r#"<span class="{}unfold" data-unfold="{}" title="Show these lines">{arrow} {} unchanged lines</span><span class="fold" hidden>{inner}</span>"#,
+                    if split { "skip " } else { "ln skip " },
+                    g.start,
+                    g.len()
+                );
+            }
+            r = g.end;
+        }
+        body.extend((r..rows.len()).map(&row_html));
+        let code = format!(
+            r#"<div class="src-code" data-item="{}">{}{}</div>"#,
+            esc(&it.info.id),
+            if split {
+                format!(r#"<div class="sbs">{body}</div>"#)
+            } else {
+                format!("<pre>{body}</pre>")
+            },
+            if folded > 1 {
+                format!(
+                    r#"<button class="mini unfold-all" data-unfold-all>Show all {} lines</button>"#,
+                    rows.len()
+                )
+            } else {
+                String::new()
+            }
+        );
+        // A small change is shown right away, the rest behind the summary.
+        const SMALL: usize = 4;
+        let small = it.status == Status::Changed
+            && it.changes.body
+            && (1..=SMALL).contains(&(added + removed));
         let stats = format!(
             r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>{}"#,
             if opts.ignore_ws {
@@ -900,21 +954,14 @@ impl Data {
             _ if added + removed > 0 => ("", format!("Source {stats} · {where_}")),
             _ => ("", format!("Source · {where_} · {} lines", it.source.len())),
         };
-        let data_src = if card {
-            format!(r#"data-src="{}""#, esc(&it.info.id))
-        } else {
-            String::new()
-        };
-        if let Some(hunks) = hunks {
+        if small {
             let html = format!(
-                r#"<div class="src src-small src-chg"><div class="src-sum">{summary}</div>{hunks}<details class="src" {data_src} {}><summary>whole source ({} lines)</summary>{lines}</details></div>"#,
-                if open { "open" } else { "" },
-                it.source.len()
+                r#"<div class="src src-small src-chg"><div class="src-sum">{summary}</div>{code}</div>"#
             );
             return Some(Seg::new(class, html));
         }
         let html = format!(
-            r#"<details class="src {}" {} {}><summary>{summary}</summary>{lines}</details>"#,
+            r#"<details class="src {}" {} {}><summary>{summary}</summary>{code}</details>"#,
             // The marker is drawn around it; this only colors the summary.
             class.replace("m-", "src-"),
             if card {

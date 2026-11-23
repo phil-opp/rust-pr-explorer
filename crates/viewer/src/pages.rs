@@ -191,7 +191,7 @@ fn item_row(
     };
     // What changed in the body, expandable to the diff.
     let src = if it.changes.body || it.changes.cosmetic {
-        d.source_seg(it, false, false)
+        d.source_seg(it, false, false, &Default::default())
     } else {
         None
     };
