@@ -581,15 +581,24 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 .rv-btn { display: none; }
 .reviewing .rv-btn { display: inline-block; border-color: var(--reviewed); color: var(--reviewed); }
 .reviewing .rv-btn:hover { background: var(--reviewed); color: var(--bg); }
+.reviewing .rv-btn.changes { border-color: var(--removed); color: var(--removed); }
+.reviewing .rv-btn.changes:hover { background: var(--removed); color: var(--bg); }
+.reviewing .rv-btn.comment { border-color: var(--link); color: var(--link); }
+.reviewing .rv-btn.comment:hover { background: var(--link); color: var(--bg); }
 .rv-chip { border: 1px solid var(--reviewed); color: var(--reviewed); background: var(--reviewed-bg); font-weight: 600; }
+.rv-chip.changes { border-color: var(--removed); color: var(--removed); background: var(--removed-bg); }
+.rv-chip.commented { border-color: var(--link); color: var(--link); background: var(--bg); }
+.rvc .rv-note { border-style: dashed; color: var(--muted); font-style: italic; max-width: 30ch; overflow: hidden; text-overflow: ellipsis; }
+.rvc .rv-edit, .rvc .rv-fold { color: var(--muted); }
+body:not(.reviewing) .rv-edit, .card-rv .rv-fold { display: none; }
 .rv-chip.stale { border: 1px dashed var(--changed); color: var(--changed); background: var(--changed-bg); }
 .rv-all { color: var(--reviewed); font-weight: 700; }
 /* A reviewed row: one line, dimmed, with a check bar. Removing the mark
    shows its details again. */
 .irow:has(> .iacts .rvc.done), .impl-line:has(.rvc.done) { box-shadow: inset 3px 0 0 var(--reviewed); padding-left: 10px !important; }
-.irow:has(> .iacts .rvc.done) > :not(.ihead, .iacts) { display: none; }
-.irow:has(> .iacts .rvc.done) > .ihead, .impl-line:has(.rvc.done) > code { opacity: .6; }
-.ientry.file:has(> .irow .rvc.done) > :not(.irow) { display: none; }
+.irow:has(> .iacts .rvc.done:not(.unfold)) > :not(.ihead, .iacts) { display: none; }
+.irow:has(> .iacts .rvc.done:not(.unfold)) > .ihead, .impl-line:has(.rvc.done:not(.unfold)) > code { opacity: .6; }
+.ientry.file:has(> .irow .rvc.done:not(.unfold)) > :not(.irow) { display: none; }
 .card:has(.card-rv .rvc.done) { outline: 2px solid var(--reviewed); }
 .card-rv { padding: 6px 10px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; }
 .card-rv:has(.rvc.done:only-child) { justify-content: flex-start; }
@@ -609,3 +618,19 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .since-facts li.add { color: var(--added); }
 .since-facts li.del { color: var(--removed); }
 .since-facts li .dim { margin-right: 4px; }
+/* The comment editor and the "Finish review" dialog. */
+#modal-box:has(.rv-editor, .rv-finish) { width: min(760px, 94vw); }
+.rv-editor textarea, .rv-finish textarea { width: 100%; box-sizing: border-box; font: 14px var(--sans); padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); resize: vertical; }
+.rv-finish #rv-out { font: 12px var(--mono); margin-top: 8px; }
+.rv-editor .sub, .rv-finish .sub { color: var(--muted); font-size: 13px; margin: 6px 0; }
+.rv-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+.rv-row .grow { flex: 1; }
+.rv-editor button, .rv-finish button { padding: 4px 12px; }
+#modal-b button.primary { background: var(--reviewed); border-color: var(--reviewed); color: var(--bg); font-weight: 600; }
+.rv-ev { display: block; margin: 4px 0; cursor: pointer; }
+.rv-cmd { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 4px 8px; background: var(--bg-code); border-radius: 4px; font-size: 12px; }
+.rv-list { padding-left: 18px; margin: 4px 0; }
+.rv-list li { margin: 6px 0; }
+.rv-k { font-size: 12px; font-weight: 600; color: var(--link); }
+.rv-k.changes { color: var(--removed); }
+.rv-q { white-space: pre-wrap; color: var(--text); font-size: 13px; border-left: 3px solid var(--border); padding-left: 8px; margin-top: 2px; }
