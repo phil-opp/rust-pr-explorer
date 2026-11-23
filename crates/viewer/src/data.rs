@@ -490,11 +490,23 @@ impl Data {
                 Status::Added => r#"<span class="st st-added badge">New module</span>"#.into(),
                 Status::Removed => r#"<span class="st st-removed badge">Removed</span>"#.into(),
                 _ => {
+                    // Changed items in the module and its submodules; say
+                    // when they are in submodules, so that a module with
+                    // nothing of its own doesn't look like it has work left.
                     let n = self.changes_in(&it.info.id, true).len();
-                    if n > 0 {
-                        format!(r#"<span class="st st-inner">{n} changed</span>"#)
-                    } else {
-                        String::new()
+                    let own = self.changes_in(&it.info.id, false).len();
+                    match (n, own) {
+                        (0, _) => String::new(),
+                        (n, 0) => {
+                            format!(r#"<span class="st st-inner">{n} changed in submodules</span>"#)
+                        }
+                        (n, own) if own == n => {
+                            format!(r#"<span class="st st-inner">{n} changed</span>"#)
+                        }
+                        (n, own) => format!(
+                            r#"<span class="st st-inner">{n} changed, {} in submodules</span>"#,
+                            n - own
+                        ),
                     }
                 }
             };
