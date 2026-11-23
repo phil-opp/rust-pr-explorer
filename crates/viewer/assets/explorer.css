@@ -163,6 +163,7 @@ code { font-size: .92em; }
 .st-changed { color: var(--changed); background: var(--changed-bg); }
 .st-unchanged { color: var(--muted); background: var(--bg-alt); }
 .st-cosmetic { color: var(--muted); background: transparent; border: 1px dashed var(--border); }
+.st-test { color: var(--muted); background: transparent; border: 1px solid var(--border); }
 .st-inner { color: var(--changed); background: transparent; border: 1px solid var(--changed-bg); }
 .vis { font: 11px var(--mono); color: var(--muted); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; white-space: nowrap; }
 .vis.pub { color: var(--added); border-color: var(--added-bg); }
