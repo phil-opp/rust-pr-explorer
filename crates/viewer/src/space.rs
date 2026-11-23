@@ -18,6 +18,9 @@ pub struct Space {
     pub mode: Mode,
     pub show_unchanged: bool,
     pub show_uses: bool,
+    /// While the background is dragged: where the pointer went down, and
+    /// the scroll position then.
+    drag: Option<(f64, f64, i32, i32)>,
 }
 
 impl Space {
@@ -26,6 +29,7 @@ impl Space {
             mode: Mode::Map,
             show_unchanged: false,
             show_uses: false,
+            drag: None,
         }
     }
 }
@@ -88,4 +92,42 @@ pub fn on_change(app: &mut App, el: &Element) -> bool {
     }
     show(app);
     true
+}
+
+/// Starts panning the view by dragging its background, as on the canvas.
+/// Links, buttons and matrix cells keep their clicks.
+pub fn on_pointer_down(app: &mut App, el: &Element, ev: &web_sys::PointerEvent) -> bool {
+    let Some(alt) = dom::closest(el, "#space-alt") else {
+        return false;
+    };
+    if ev.button() != 0
+        || dom::closest(el, "a, button, input, select, label, [data-mx-a], .mm-more").is_some()
+    {
+        return false;
+    }
+    ev.prevent_default();
+    app.s.space.drag = Some((
+        ev.client_x() as f64,
+        ev.client_y() as f64,
+        alt.scroll_left(),
+        alt.scroll_top(),
+    ));
+    dom::toggle_class(&alt, "panning", true);
+    true
+}
+
+pub fn on_pointer_move(app: &mut App, ev: &web_sys::PointerEvent) {
+    let (Some((sx, sy, left, top)), Some(alt)) = (app.s.space.drag, dom::by_id("space-alt")) else {
+        return;
+    };
+    alt.set_scroll_left(left - (ev.client_x() as f64 - sx).round() as i32);
+    alt.set_scroll_top(top - (ev.client_y() as f64 - sy).round() as i32);
+}
+
+pub fn on_pointer_up(app: &mut App) {
+    if app.s.space.drag.take().is_some()
+        && let Some(alt) = dom::by_id("space-alt")
+    {
+        dom::toggle_class(&alt, "panning", false);
+    }
 }

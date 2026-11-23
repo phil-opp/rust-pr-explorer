@@ -269,7 +269,8 @@ fn install_listeners() {
                 pick_search(app, i);
                 return;
             }
-            let _ = canvas::on_pointer_down(app, &el, &pev);
+            let _ =
+                canvas::on_pointer_down(app, &el, &pev) || space::on_pointer_down(app, &el, &pev);
         });
     });
     dom::listen(&doc, "pointermove", |ev| {
@@ -278,6 +279,7 @@ fn install_listeners() {
         };
         with_app(|app| {
             canvas::on_pointer_move(app, &pev);
+            space::on_pointer_move(app, &pev);
         });
     });
     // A touch the browser takes over (to scroll or zoom the page) ends
@@ -289,6 +291,7 @@ fn install_listeners() {
             };
             with_app(|app| {
                 canvas::on_pointer_up(app, &pev);
+                space::on_pointer_up(app);
             });
         });
     }
