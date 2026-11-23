@@ -1162,13 +1162,35 @@ impl Data {
         // controls of the hunks that start in it (see `review::hunks`).
         let hunk_head = |part: std::ops::Range<usize>| -> String {
             let (mut olds, mut news) = (Vec::new(), Vec::new());
-            for &(o, n) in rows[part].iter().filter(|r| changed_row(r)) {
+            for &(o, n) in rows[part.clone()].iter().filter(|r| changed_row(r)) {
                 olds.extend(o.map(|a| old_start + a));
                 news.extend(n.map(|b| new_start + b));
             }
+            // A link to the part's first changed line on GitHub.
+            let first_added = rows[part.clone()]
+                .iter()
+                .find(|r| changed_row(r))
+                .is_some_and(|r| r.0.is_none());
+            let hunk = crate::review::Hunk {
+                id: String::new(),
+                new: news.clone(),
+                old: olds.clone(),
+                starts_added: first_added,
+            };
+            let gh = crate::post::github_link(
+                self,
+                crate::post::hunk_loc(&self.out.files, it, &hunk),
+                "gh-link",
+                "GitHub ↗",
+                "this change",
+            );
             match crate::review::hunk_controls(&it.info.id, &olds, &news) {
-                c if c.is_empty() => c,
-                c => format!(r#"<span class="hunk-rv">{c}</span>"#),
+                c if c.is_empty() && gh.is_empty() => c,
+                c if c.is_empty() => format!(r#"<span class="hunk-gh">{gh}</span>"#),
+                // In review mode the link goes into the hunk's bar.
+                c => format!(
+                    r#"<span class="hunk-rv">{c}{gh}</span><span class="hunk-gh">{gh}</span>"#
+                ),
             }
         };
         let mut folded = 0;

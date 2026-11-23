@@ -21,6 +21,7 @@ mod post;
 mod review;
 mod route;
 mod settings;
+mod sha256;
 mod since;
 mod space;
 mod threads;

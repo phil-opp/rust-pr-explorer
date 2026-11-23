@@ -299,7 +299,7 @@ fn item_row(
     format!(
         r#"<div class="irow {} {} {} {}" data-id="{}">
         <div class="ihead"><span class="kind">{}</span>{} {} {} {}</div>
-        <div class="iacts">{}<button data-open="{}" title="Open on the canvas">Open ▸</button></div>
+        <div class="iacts">{}{}<button data-open="{}" title="Open on the canvas">Open ▸</button></div>
         {body}</div>"#,
         it.status.css(),
         if context { "context" } else { "" },
@@ -316,6 +316,13 @@ fn item_row(
         },
         d.api_badge(it),
         crate::review::control_html(&it.info.id),
+        crate::post::github_link(
+            d,
+            crate::post::item_loc(&d.out.files, it),
+            "gh-link",
+            "GitHub ↗",
+            "this item",
+        ),
         esc(&it.info.id),
     )
 }

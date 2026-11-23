@@ -46,6 +46,17 @@ fn hidden_badge(d: &Data, scope: &str, list: &[String], what: &str) -> String {
     )
 }
 
+/// "GitHub ↗": the item's first changed line in the pull request's diff.
+fn gh_link(d: &Data, it: &Item) -> String {
+    crate::post::github_link(
+        d,
+        crate::post::item_loc(&d.out.files, it),
+        "gh-link",
+        "GitHub ↗",
+        "this item",
+    )
+}
+
 pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     let Some(it) = d.item(&g.active) else {
         return String::new();
@@ -262,7 +273,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     format!(
         r#"<div class="card cs-{} {context}" data-gid="{}" style="left:{}px;top:{}px">
         {tabs}
-        <div class="card-h"><span class="kind">{}</span>{} {}<span class="grow"></span>{}<span class="x" data-close="{}" title="Close">×</span></div>
+        <div class="card-h"><span class="kind">{}</span>{} {}<span class="grow"></span>{}{}<span class="x" data-close="{}" title="Close">×</span></div>
         <div class="card-loc">{}</div>
         <div class="card-b">{impl_header}{impact}{body}{}</div>{members}{}{}</div>"#,
         it.status.css(),
@@ -273,6 +284,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         d.title_html(it, false),
         d.vis_html(it),
         d.status_html(it),
+        gh_link(d, it),
         esc(id),
         if external.is_some() {
             String::new()
