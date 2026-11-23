@@ -85,11 +85,13 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     if it.info.kind == Kind::Mod {
         acts.push_str(r#"<button data-act="drill">Drill in</button><button data-act="page">Module page</button>"#);
     } else {
-        if !callees.is_empty() {
-            acts.push_str(&format!(r#"<button data-act="callees" title="Show what this calls">calls ▸ <span class="n">{}</span></button>"#, callees.len()));
-        }
+        // Callers first: they open to the left of the card, callees to the
+        // right.
         if !callers.is_empty() {
             acts.push_str(&format!(r#"<button data-act="callers" title="Show what calls this">◂ callers <span class="n">{}</span></button>"#, callers.len()));
+        }
+        if !callees.is_empty() {
+            acts.push_str(&format!(r#"<button data-act="callees" title="Show what this calls">calls ▸ <span class="n">{}</span></button>"#, callees.len()));
         }
         if !users.is_empty() {
             let mut ctxs: BTreeMap<UseCtx, usize> = BTreeMap::new();
