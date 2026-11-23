@@ -738,3 +738,35 @@ fn source_links_both_versions_and_marks_new_items() {
         "{html}"
     );
 }
+
+#[test]
+fn small_new_items_start_open() {
+    use model::{Item, Kind, SourceLine, Status};
+    let d = empty();
+    let item = |status: Status, kind: Kind, lines: usize| {
+        let mut it = Item {
+            status,
+            ..Default::default()
+        };
+        it.info.kind = kind;
+        let tag = if status == Status::Removed { '-' } else { '+' };
+        it.source = (0..lines)
+            .map(|i| SourceLine(tag, format!("l{i};")))
+            .collect();
+        it
+    };
+    let open = |it: &Item| {
+        let html = d.source_html(it, None, false);
+        assert!(html.contains("l0;"), "{html}");
+        html.contains("<details class=\"src \"  open>")
+    };
+    assert!(open(&item(Status::Added, Kind::Fn, 20)));
+    assert!(!open(&item(Status::Added, Kind::Fn, 21)));
+    // An impl's members are listed with their own source.
+    assert!(!open(&item(Status::Added, Kind::Impl, 5)));
+    // Removed code is there to look at, not open.
+    assert!(!open(&item(Status::Removed, Kind::Fn, 5)));
+    // The reader's choice wins.
+    let html = d.source_html(&item(Status::Added, Kind::Fn, 5), Some(false), false);
+    assert!(!html.contains("open>"), "{html}");
+}
