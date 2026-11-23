@@ -556,10 +556,7 @@ pub fn manifests_html(d: &Data) -> String {
         .collect();
     format!(
         r#"<h2>Dependencies and package settings {}</h2>{cards}"#,
-        crate::pages::help_html(
-            "Changes in Cargo.toml: dependencies, features, workspace members, and the \
-             package's version, edition and minimum Rust version."
-        )
+        crate::pages::help_html("Changes in Cargo.toml files.")
     )
 }
 
@@ -573,12 +570,6 @@ pub fn other_files_html(d: &Data) -> String {
         .iter()
         .filter(|f| !f.analyzed || f.outside_items > 0 || !f.parts.is_empty())
         .collect();
-    let covered = d
-        .out
-        .files
-        .iter()
-        .filter(|f| f.analyzed && f.outside_items == 0 && f.parts.is_empty())
-        .count();
     let (generated, own): (Vec<&ChangedFile>, Vec<&ChangedFile>) =
         others.into_iter().partition(|f| f.generated.is_some());
     if own.is_empty() && generated.is_empty() {
@@ -586,21 +577,7 @@ pub fn other_files_html(d: &Data) -> String {
     }
     let mut html = format!(
         r#"<h2>Other changed files {}</h2>"#,
-        crate::pages::help_html(&format!(
-            "Files the Rust analysis doesn't cover{}. Python files are compared by function \
-             and class, YAML files by key, CSS files by selector (with the properties of all \
-             its rules merged), Markdown files by section, and Rust code outside \
-             items (tests, macro calls, extern blocks) one item at a time; other files line \
-             by line.",
-            if covered > 0 {
-                format!(
-                    " ({covered} changed Rust file{} are shown as items above)",
-                    if covered == 1 { "" } else { "s" }
-                )
-            } else {
-                String::new()
-            }
-        ))
+        crate::pages::help_html("Changes the Rust item view doesn't cover.")
     );
     html.extend(own.iter().map(|f| file_card(d, f)));
     if !generated.is_empty() {
