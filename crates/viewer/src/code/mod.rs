@@ -10,7 +10,7 @@ mod tests;
 pub use docs_diff::{
     Seg, docs_compare_html, docs_diff_segs, mark_changed_tokens, markdown_diff_segs, marked_html,
 };
-pub use highlight::{Links, code_html};
+pub use highlight::{Links, code_html, ref_tag};
 pub use markdown::{docs_html, first_paragraph, markdown_file_html};
 pub use sig_diff::{note_html, sig_diff_html, structured_diff_html};
 
