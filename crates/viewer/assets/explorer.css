@@ -271,6 +271,9 @@ a.ref:hover { text-decoration: underline; }
 .irow.removed .sigbox .sig { text-decoration: line-through; text-decoration-color: var(--removed); }
 .collapsed-note { color: var(--muted); font-size: 13px; padding: 6px 0; }
 .empty-state { color: var(--muted); padding: 20px 0; }
+/* Section explanations live in a hover tooltip instead of an intro paragraph. */
+.help { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border: 1px solid var(--border); border-radius: 50%; font: 600 10px var(--sans); color: var(--muted); cursor: help; vertical-align: middle; }
+.h-note { font: 400 13px var(--sans); color: var(--muted); margin-left: 6px; }
 .crumbs { font-family: var(--mono); font-size: 14px; margin-bottom: 8px; }
 .crumbs a { color: var(--mod); }
 
@@ -542,7 +545,6 @@ details.private-def .sigbox { margin-top: 4px; }
 
 /* Matrix. */
 .mx-wrap { padding: 20px 32px 60px; }
-.mx-wrap .sub { max-width: 820px; }
 .mx { border-collapse: collapse; font-size: 13px; }
 .mx th, .mx td { border: 1px solid var(--border); }
 .mx-col { width: 36px; height: 30px; font: 600 12px var(--mono); color: var(--muted); background: var(--panel); }

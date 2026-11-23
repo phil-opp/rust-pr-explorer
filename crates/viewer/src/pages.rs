@@ -14,6 +14,15 @@ fn modules_shown(app: &App) -> bool {
     app.d.rust_changed() || (app.s.view == crate::View::Module && !app.d.roots().is_empty())
 }
 
+/// A small "?" that explains a section on hover, so the explanation isn't
+/// read again on every page.
+pub fn help_html(text: &str) -> String {
+    format!(
+        r#"<span class="help" title="{0}" aria-label="{0}">?</span>"#,
+        esc(text)
+    )
+}
+
 /// Whether the sidebar shows: it lists the changed modules and files.
 pub fn sidebar_shown(app: &App) -> bool {
     modules_shown(app) || !app.d.out.files.is_empty()
@@ -489,43 +498,45 @@ pub fn render_overview(app: &App) {
             )
         })
         .collect();
-    // Without any Rust change, say so instead of showing empty sections.
+    // Sections without changes are left out. Without any Rust change, only
+    // the analysis warnings remain, and only if no sidebar shows them.
     let rust_html = if !d.rust_changed() {
-        let analyzed = d.out.crates.len();
-        // The sidebar is hidden then, so its warnings go here.
-        format!(
-            r#"<h2>Rust code</h2><div class="empty-state">No Rust item was added, changed or removed{}. The changed files are listed below.</div>{}"#,
-            if analyzed == 0 {
-                " (no Rust crate was found)".to_string()
-            } else {
-                format!(
-                    " in the {analyzed} analyzed crate{}",
-                    if analyzed == 1 { "" } else { "s and targets" }
-                )
-            },
+        if sidebar_shown(app) {
+            String::new()
+        } else {
             warnings_html(d)
-        )
+        }
     } else {
-        format!(
-            r#"<h2>Public API changes</h2>
-        <p class="sub">Items reachable from outside the crate that were added, changed or removed, in rustdoc form. Types appear as context when only their members changed.</p>
-        {}{}
-        <h2>Internal changes</h2>
-        <p class="sub">Items not reachable from outside the crate (private, pub(crate), pub(super), …), and the code of binaries, tests, examples and build scripts. Open a module to see them and its internal call graph.</p>
-        {}"#,
-            semver_summary(d),
-            if public_html.is_empty() {
-                r#"<div class="empty-state">This pull request does not change the public API.</div>"#
-                    .to_string()
-            } else {
-                public_html
-            },
-            if internal_html.is_empty() {
-                r#"<div class="empty-state">No internal changes.</div>"#.to_string()
-            } else {
-                internal_html
-            },
-        )
+        let semver = semver_summary(d);
+        let public = if public_html.is_empty() && semver.is_empty() {
+            String::new()
+        } else {
+            format!(
+                r#"<h2>Public API changes {}</h2>{semver}{public_html}"#,
+                help_html(
+                    "Items reachable from outside the crate that were added, changed or removed, \
+                     in rustdoc form. Types appear as context when only their members changed."
+                )
+            )
+        };
+        let internal = if internal_html.is_empty() {
+            String::new()
+        } else {
+            format!(
+                r#"<h2>Internal changes {}{}</h2>{internal_html}"#,
+                help_html(
+                    "Items not reachable from outside the crate (private, pub(crate), \
+                     pub(super), …), and the code of binaries, tests, examples and build \
+                     scripts. Open a module to see them and its internal call graph."
+                ),
+                if public.is_empty() {
+                    r#" <span class="h-note">public API unchanged</span>"#
+                } else {
+                    ""
+                }
+            )
+        };
+        public + &internal
     };
     let meta = &d.out.meta;
     let html = format!(
@@ -788,34 +799,43 @@ pub fn render_module_page(app: &App) {
         })
         .collect::<Vec<_>>()
         .join("::");
-    let none = |what: &str| {
-        format!(
-            r#"<div class="empty-state">No {what} items{}.</div>"#,
-            if show_unchanged { "" } else { " changed" }
-        )
-    };
+    // Empty sections are left out; a page with none says so in one line.
     let exposed_html = section(exposed);
     let private_html = section(private);
-    let subs_html = if subs.is_empty() {
-        String::new()
-    } else {
-        format!(
-            r#"<h2>Submodules</h2><p class="sub">Each submodule shows only what it makes visible to <code>{}</code>.</p>{}"#,
-            esc(d.short_path(m)),
+    let mut sections = String::new();
+    if !exposed_html.is_empty() {
+        sections += &format!(r#"<h2>Exposed by this module</h2><div>{exposed_html}</div>"#);
+    }
+    if !private_html.is_empty() {
+        sections += &format!(
+            r#"<h2>Private to this module</h2><div class="private-zone">{private_html}</div>"#
+        );
+    }
+    if !subs.is_empty() {
+        sections += &format!(
+            r#"<h2>Submodules {}</h2>{}"#,
+            help_html(&format!(
+                "Each submodule shows only what it makes visible to {}.",
+                d.short_path(m)
+            )),
             subs.iter()
                 .map(|s| sub_box(d, s, m, &section))
                 .collect::<String>()
-        )
-    };
+        );
+    }
+    if sections.is_empty() {
+        sections = format!(
+            r#"<div class="empty-state">No {}items.</div>"#,
+            if show_unchanged { "" } else { "changed " }
+        );
+    }
     let html = format!(
         r#"<div class="crumbs">{crumbs}</div>
         <h1><span class="kind">{}</span> {} {} {}</h1>
         <div class="sub">{} · <label><input type="checkbox" id="show-unchanged" {}> show unchanged items</label> ·
           <button id="mod-graph">Internal call graph on canvas ▸</button></div>
         {}
-        <h2>Exposed by this module</h2><div>{}</div>
-        <h2>Private to this module</h2><div class="private-zone">{}</div>
-        {subs_html}"#,
+        {sections}"#,
         match (d.is_root(module), module.info.id.contains(':')) {
             // `binary repl`, `test calc`: the title says what it is.
             (true, true) => "",
@@ -835,16 +855,6 @@ pub fn render_module_page(app: &App) {
             String::new()
         } else {
             d.docs_block_html(module, true)
-        },
-        if exposed_html.is_empty() {
-            none("exposed")
-        } else {
-            exposed_html
-        },
-        if private_html.is_empty() {
-            none("private")
-        } else {
-            private_html
         },
     );
     dom::set_html("view-module", &html);
