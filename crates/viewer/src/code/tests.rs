@@ -16,6 +16,7 @@ fn empty() -> Data {
             resolution: String::new(),
             pr: None,
             project: None,
+            commits: Vec::new(),
         },
         crates: vec!["c".into()],
         items: BTreeMap::new(),
@@ -139,6 +140,8 @@ fn structured_signature_diff() {
         notes: vec![model::DiffNote {
             text: "variant `B` removed".into(),
             groups: vec![1],
+            member: Some("B".into()),
+            docs: None,
         }],
     };
     let html = structured_diff_html(&d, &diff, &BTreeMap::new(), &[]);
@@ -796,6 +799,21 @@ fn small_new_items_start_open() {
     // The reader's choice wins.
     let html = d.source_html(&item(Status::Added, Kind::Fn, 5), Some(false), false);
     assert!(!html.contains("open>"), "{html}");
+}
+
+#[test]
+fn member_docs_split_after_the_first_paragraph() {
+    use super::sig_diff::split_first_paragraph;
+    assert_eq!(split_first_paragraph("One line."), ("One line.", ""));
+    assert_eq!(
+        split_first_paragraph("First\nstill first.\n\nSecond.\n\nThird."),
+        ("First\nstill first.", "Second.\n\nThird.")
+    );
+    // A blank line inside a code block doesn't end the paragraph.
+    assert_eq!(
+        split_first_paragraph("```\na\n\nb\n```\n\nAfter."),
+        ("```\na\n\nb\n```", "After.")
+    );
 }
 
 #[test]

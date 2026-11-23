@@ -281,6 +281,13 @@ pub struct DiffNote {
     pub text: String,
     /// Groups of the spans this note describes.
     pub groups: Vec<u32>,
+    /// The field or variant the note is about, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub member: Option<String>,
+    /// Its doc comment (Markdown): the new one, or for a removed member
+    /// the old one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docs: Option<String>,
 }
 
 /// A signature diff aligned on syntax: parameters, generic parameters,
@@ -434,6 +441,33 @@ pub struct Meta {
     /// hash, so that the page doesn't contain the paths.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project: Option<String>,
+    /// The commits between base and head, oldest first, with what each
+    /// one touched. Empty without a git history (`dirs`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub commits: Vec<Commit>,
+}
+
+/// A commit of the compared range, and the changes of the page it made.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct Commit {
+    pub sha: String,
+    /// The first line of its message.
+    pub title: String,
+    pub author: String,
+    /// ISO 8601.
+    pub date: String,
+    /// More than one parent.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub merge: bool,
+    /// Changed items with a line that this commit added and that is still
+    /// in the PR's version, or a line of the base that this commit
+    /// removed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<String>,
+    /// Changed files the commit modified (relative to the analyzed
+    /// directory), whether or not their change survives.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub files: Vec<String>,
 }
 
 /// FNV-1a: the same value on every platform and with every Rust version

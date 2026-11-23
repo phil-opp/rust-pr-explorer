@@ -28,6 +28,7 @@ pub fn diff(
         old_refs,
         new_refs,
         retargets: Vec::new(),
+        member: None,
     };
     let (po, pn) = (Parsed::new(kind, old)?, Parsed::new(kind, new)?);
     let (old_sections, new_sections) = (po.sections()?, pn.sections()?);
@@ -413,6 +414,8 @@ struct Cx<'r> {
     /// Descriptions of names found to refer to other items, for the note of
     /// the piece being diffed.
     retargets: Vec<String>,
+    /// The field or variant the notes being made are about.
+    member: Option<String>,
 }
 
 /// How a type changed, for notes.
@@ -454,10 +457,33 @@ impl Cx<'_> {
     }
 
     fn note(&mut self, text: String, groups: Vec<u32>) {
-        self.notes.push(DiffNote { text, groups });
+        self.notes.push(DiffNote {
+            text,
+            groups,
+            member: self.member.clone(),
+            docs: None,
+        });
     }
 
     fn section(&mut self, old: &str, new: &str, o: &Section, n: &Section, edits: &mut Vec<Edit>) {
+        self.section_pieces(old, new, o, n, edits);
+        self.member = None;
+    }
+
+    /// Notes about a field or variant name it, so that its docs can be
+    /// shown with them.
+    fn about(&mut self, label: &str, key: &str) {
+        self.member = matches!(label, "field" | "variant").then(|| key.to_string());
+    }
+
+    fn section_pieces(
+        &mut self,
+        old: &str,
+        new: &str,
+        o: &Section,
+        n: &Section,
+        edits: &mut Vec<Edit>,
+    ) {
         let label = n.label;
         // Present on one side only: added or removed whole.
         if o.pieces.is_empty() && !n.pieces.is_empty() {
@@ -470,6 +496,7 @@ impl Cx<'_> {
                 }],
             });
             for p in &n.pieces {
+                self.about(label, &p.key);
                 self.note(
                     format!("{label} {} added", code(&new[p.range.clone()], n.strip)),
                     vec![g],
@@ -487,6 +514,7 @@ impl Cx<'_> {
                 }],
             });
             for p in &o.pieces {
+                self.about(label, &p.key);
                 self.note(
                     format!("{label} {} removed", code(&old[p.range.clone()], o.strip)),
                     vec![g],
@@ -497,6 +525,7 @@ impl Cx<'_> {
         // Matched by key, in the new order.
         let mut matched_old_order = Vec::new();
         for np in &n.pieces {
+            self.about(label, &np.key);
             let ntext = &new[np.range.clone()];
             // Each old piece pairs at most once (keys like `_` repeat).
             let taken = matched_old_order.clone();
@@ -593,6 +622,7 @@ impl Cx<'_> {
                 }
             }
         }
+        self.member = None;
         if matched_old_order.windows(2).any(|w| w[0] > w[1]) {
             self.note(format!("{label}s reordered"), Vec::new());
         }
@@ -602,6 +632,7 @@ impl Cx<'_> {
             if n.pieces.iter().any(|np| np.key == op.key) {
                 continue;
             }
+            self.about(label, &op.key);
             let otext = &old[op.range.clone()];
             let pred = o.pieces[..oi]
                 .iter()
