@@ -1123,6 +1123,7 @@ mod tests {
                 url: None,
                 resolution: String::new(),
                 pr: None,
+                project: None,
             },
             crates: vec!["c".into()],
             items: BTreeMap::new(),

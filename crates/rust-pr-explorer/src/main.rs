@@ -127,6 +127,7 @@ fn analyze_checkout(
             url: checkout.url.clone(),
             resolution,
             pr: checkout.pr.clone(),
+            project: checkout.project.clone(),
         },
     );
     // Files the Rust analysis covers: one per module.

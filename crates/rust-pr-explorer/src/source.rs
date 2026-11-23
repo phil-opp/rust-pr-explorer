@@ -43,6 +43,9 @@ pub struct Checkout {
     pub head_label: String,
     pub url: Option<String>,
     pub pr: Option<model::PrMeta>,
+    /// Identifies the compared project without a PR (see
+    /// [`model::Meta::project`]).
+    pub project: Option<String>,
     /// Every file that differs, taken before anything was removed from
     /// the copies (see [`sanitize`]).
     pub files: Vec<model::ChangedFile>,
@@ -77,6 +80,11 @@ impl Checkout {
             head_label: head.display().to_string(),
             url: None,
             pr: None,
+            project: Some(project_key(&[
+                "dirs",
+                &std::fs::canonicalize(base)?.to_string_lossy(),
+                &std::fs::canonicalize(head)?.to_string_lossy(),
+            ])),
             files,
             _temp: Some(temp),
         })
@@ -157,6 +165,11 @@ impl Checkout {
             head_label: format!("{head} ({})", short(&head_rev)),
             url: None,
             pr: None,
+            project: Some(project_key(&[
+                "git",
+                &std::fs::canonicalize(&top)?.to_string_lossy(),
+                &prefix,
+            ])),
             files,
             _temp: Some(temp),
         })
@@ -278,6 +291,8 @@ impl Checkout {
                     .map(str::to_string),
                 head_rev: short(&head_rev).to_string(),
             }),
+            // The PR identifies the project.
+            project: None,
             files,
             _temp: Some(temp),
         })
@@ -378,6 +393,11 @@ fn git_output(dir: &Path, args: &[&str]) -> Result<String> {
         );
     }
     Ok(String::from_utf8(out.stdout)?.trim().to_string())
+}
+
+/// A project key from its parts (see [`model::Meta::project`]).
+fn project_key(parts: &[&str]) -> String {
+    format!("{:016x}", model::stable_hash(&parts.join("\n")))
 }
 
 fn rev_parse(repo: &Path, rev: &str) -> Result<String> {

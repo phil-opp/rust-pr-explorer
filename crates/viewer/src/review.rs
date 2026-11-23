@@ -12,6 +12,7 @@
 use crate::code::esc;
 use crate::data::{Data, changed};
 use crate::dom;
+use model::stable_hash as hash;
 use model::{ChangedFile, Item, Kind};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
@@ -66,16 +67,6 @@ pub fn is_unit_file(f: &ChangedFile) -> bool {
     !f.analyzed || f.outside_items > 0
 }
 
-/// FNV-1a, so that hashes are the same in every browser and every run.
-fn hash(s: &str) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in s.bytes() {
-        h ^= u64::from(b);
-        h = h.wrapping_mul(0x0100_0000_01b3);
-    }
-    h
-}
-
 /// Hash of what a reviewer looks at for an item: its signature, docs and
 /// source with their old versions and marks, and what the names in its
 /// signature refer to. Not its position, so a moved line count doesn't
@@ -107,13 +98,15 @@ fn file_print(f: &ChangedFile) -> u64 {
     hash(&serde_json::to_string(&parts).unwrap_or_default())
 }
 
-/// Which pull request the page is about: marks of one PR apply to every
-/// page generated for it, also after new commits.
+/// Which pull request (or local project) the page is about: marks of one
+/// PR apply to every page generated for it, also after new commits.
 fn identity(d: &Data) -> String {
     let meta = &d.out.meta;
-    match &meta.pr {
-        Some(pr) => format!("{}#{}", pr.repo, pr.number),
-        None => meta.url.clone().unwrap_or_else(|| meta.title.clone()),
+    match (&meta.pr, &meta.project) {
+        (Some(pr), _) => format!("{}#{}", pr.repo, pr.number),
+        (None, Some(project)) => format!("local:{project}"),
+        // Pages from before projects were identified.
+        (None, None) => meta.url.clone().unwrap_or_else(|| meta.title.clone()),
     }
 }
 
@@ -398,6 +391,201 @@ pub fn update_progress() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use model::{Meta, Output, Status};
+
+    fn item(id: &str, kind: Kind, module: &str, file: &str, line: usize, status: Status) -> Item {
+        let mut it = Item {
+            status,
+            ..Default::default()
+        };
+        it.info.id = id.into();
+        it.info.name = id.rsplit("::").next().unwrap().into();
+        it.info.kind = kind;
+        it.info.module = module.into();
+        it.info.file = file.into();
+        it.info.line = line;
+        it.info.sig = format!("fn {id}()");
+        it
+    }
+
+    /// Crate `c` with modules `b` and `a` (listed in that order in the
+    /// data), changed items out of position order, an unchanged item and
+    /// a changed file outside the analysis.
+    fn data() -> Data {
+        let items = [
+            item("c", Kind::Mod, "c", "src/lib.rs", 1, Status::Changed),
+            item("c::b", Kind::Mod, "c", "src/b.rs", 1, Status::Changed),
+            item("c::a", Kind::Mod, "c", "src/a.rs", 1, Status::Added),
+            item(
+                "c::root_fn",
+                Kind::Fn,
+                "c",
+                "src/lib.rs",
+                9,
+                Status::Changed,
+            ),
+            item(
+                "c::b::late",
+                Kind::Fn,
+                "c::b",
+                "src/b.rs",
+                20,
+                Status::Changed,
+            ),
+            item(
+                "c::b::early",
+                Kind::Fn,
+                "c::b",
+                "src/b.rs",
+                3,
+                Status::Removed,
+            ),
+            item(
+                "c::a::new_fn",
+                Kind::Fn,
+                "c::a",
+                "src/a.rs",
+                2,
+                Status::Added,
+            ),
+            item(
+                "c::a::same",
+                Kind::Fn,
+                "c::a",
+                "src/a.rs",
+                5,
+                Status::Unchanged,
+            ),
+            // In a module the tree doesn't reach.
+            item(
+                "c::gone::f",
+                Kind::Fn,
+                "c::gone",
+                "src/gone.rs",
+                1,
+                Status::Removed,
+            ),
+        ];
+        let file = ChangedFile {
+            path: "README.md".into(),
+            status: Status::Changed,
+            lang: "markdown".into(),
+            ..Default::default()
+        };
+        let covered = ChangedFile {
+            path: "src/b.rs".into(),
+            status: Status::Changed,
+            lang: "rust".into(),
+            analyzed: true,
+            ..Default::default()
+        };
+        Data::new(Output {
+            meta: Meta::default(),
+            crates: vec!["c".into()],
+            items: items
+                .into_iter()
+                .map(|it| (it.info.id.clone(), it))
+                .collect(),
+            externals: BTreeMap::new(),
+            files: vec![file, covered],
+            warnings: Vec::new(),
+        })
+    }
+
+    fn set(d: &Data, marks: &[(&str, u64)]) {
+        let units = units_in_order(d);
+        REVIEW.with(|r| {
+            *r.borrow_mut() = Review {
+                on: true,
+                key: String::new(),
+                prints: units.iter().cloned().collect(),
+                units: units.into_iter().map(|(id, _)| id).collect(),
+                marks: marks.iter().map(|(id, h)| (id.to_string(), *h)).collect(),
+            }
+        });
+    }
+
+    fn print_of(id: &str) -> u64 {
+        REVIEW.with(|r| r.borrow().prints[id])
+    }
+
+    #[test]
+    fn units_follow_the_sidebar_then_positions_then_files() {
+        let d = data();
+        let order: Vec<String> = units_in_order(&d).into_iter().map(|(id, _)| id).collect();
+        assert_eq!(
+            order,
+            [
+                // The crate root, then its modules by name, items by position.
+                "c::root_fn",
+                "c::a::new_fn",
+                "c::b::early",
+                "c::b::late",
+                // Modules the tree doesn't reach.
+                "c::gone::f",
+                // Files outside the analysis; analyzed ones are covered by
+                // their items.
+                "file:README.md",
+            ]
+        );
+    }
+
+    #[test]
+    fn next_skips_only_reviewed_units_and_wraps() {
+        let d = data();
+        set(&d, &[]);
+        let done = print_of("c::a::new_fn");
+        set(&d, &[("c::a::new_fn", done), ("c::b::early", 1)]);
+        assert_eq!(mark("c::a::new_fn"), Some(Mark::Done));
+        // Marked with another diff: changed since the review.
+        assert_eq!(mark("c::b::early"), Some(Mark::Stale));
+        assert_eq!(mark("c::b::late"), Some(Mark::Open));
+        // Not a unit: modules and unchanged items.
+        assert_eq!(mark("c::a"), None);
+        assert_eq!(mark("c::a::same"), None);
+
+        assert_eq!(next_open(None).as_deref(), Some("c::root_fn"));
+        // Skips the reviewed one, stops at the stale one.
+        assert_eq!(
+            next_open(Some("c::root_fn")).as_deref(),
+            Some("c::b::early")
+        );
+        // Wraps around at the end.
+        assert_eq!(
+            next_open(Some("file:README.md")).as_deref(),
+            Some("c::root_fn")
+        );
+        assert_eq!(progress(), (1, 6));
+        assert_eq!(open_count(["c::a::new_fn", "c::b::early", "c::b::late"]), 2);
+
+        // Everything reviewed: nothing next.
+        let all: Vec<(String, u64)> = units_in_order(&d);
+        let marks: Vec<(&str, u64)> = all.iter().map(|(id, h)| (id.as_str(), *h)).collect();
+        set(&d, &marks);
+        assert_eq!(next_open(None), None);
+        assert_eq!(progress(), (6, 6));
+    }
+
+    #[test]
+    fn prints_ignore_positions_but_not_diffs() {
+        let a = item("c::f", Kind::Fn, "c", "src/lib.rs", 3, Status::Changed);
+        let mut moved = a.clone();
+        moved.info.line = 40;
+        assert_eq!(item_print(&a), item_print(&moved));
+        let mut edited = a.clone();
+        edited.source.push(model::SourceLine('+', "x += 1;".into()));
+        assert_ne!(item_print(&a), item_print(&edited));
+    }
+
+    #[test]
+    fn local_projects_have_their_own_marks() {
+        let mut d = data();
+        d.out.meta.title = "main → HEAD".into();
+        d.out.meta.project = Some("0123".into());
+        let one = identity(&d);
+        d.out.meta.project = Some("4567".into());
+        assert_ne!(identity(&d), one);
+    }
 
     #[test]
     fn marks_round_trip() {

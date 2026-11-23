@@ -19,6 +19,7 @@ fn analyze_dirs(base: &Path, head: &Path) -> Output {
             url: None,
             resolution: String::new(),
             pr: None,
+            project: None,
         },
     )
 }
@@ -761,6 +762,11 @@ fn git_checkouts_list_and_remove_what_they_must() {
     let listed: Vec<&str> = sub.files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(listed, ["hidden.rs", "leak.rs", "lib.rs"]);
     assert!(sub.title.ends_with(" in src"), "{}", sub.title);
+    // Review marks are kept per project: the repository and the
+    // subdirectory are different projects, and the key is not a path.
+    let key = checkout.project.as_deref().unwrap();
+    assert_eq!(key.len(), 16);
+    assert_ne!(sub.project.as_deref(), Some(key));
 
     // A bare repository has no top-level directory: it is cloned as it is.
     let bare = tempfile::tempdir().unwrap();
@@ -797,6 +803,11 @@ fn dirs_checkouts_skip_build_output() {
         crate::source::Checkout::from_dirs(base.path(), head.path(), Trust::Untrusted).unwrap();
     let listed: Vec<&str> = checkout.files.iter().map(|f| f.path.as_str()).collect();
     assert_eq!(listed, ["src/lib.rs"]);
+    // Another pair of directories is another project.
+    let other =
+        crate::source::Checkout::from_dirs(head.path(), base.path(), Trust::Untrusted).unwrap();
+    assert!(checkout.project.is_some());
+    assert_ne!(other.project, checkout.project);
 }
 
 #[test]

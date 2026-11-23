@@ -328,6 +328,23 @@ pub struct Meta {
     /// The pull request, when one was analyzed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pr: Option<PrMeta>,
+    /// Without a pull request: which project was compared, as a hash of
+    /// the repository's canonical path (`git`) or of both directories'
+    /// (`dirs`). The viewer keeps review marks per project with it. Only a
+    /// hash, so that the page doesn't contain the paths.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+}
+
+/// FNV-1a: the same value on every platform and with every Rust version
+/// (unlike `std`'s hasher), for keys that are stored and compared later.
+pub fn stable_hash(s: &str) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in s.bytes() {
+        h ^= u64::from(b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    h
 }
 
 /// A GitHub pull request and the revisions compared.
