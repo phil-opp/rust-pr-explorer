@@ -191,6 +191,8 @@ details.src.src-chg > summary b { color: var(--changed); }
 .num { color: var(--num); }
 .cm { color: var(--comment); font-style: italic; }
 .attr { color: var(--muted); }
+.yk { color: var(--mod); }
+.expr { color: var(--type); }
 .ref { color: var(--link); border-radius: 2px; }
 .ref[data-kind="struct"], .ref[data-kind="enum"], .ref[data-kind="union"], .ref[data-kind="type_alias"] { color: var(--type); }
 .ref[data-kind="trait"] { color: var(--trait); }

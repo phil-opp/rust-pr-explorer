@@ -5,6 +5,7 @@ use crate::code::{
     Links, Seg, code_html, esc, markdown_diff_segs, markdown_file_html, marked_html, sig_diff_html,
 };
 use crate::data::Data;
+use crate::yaml;
 use model::{ChangedFile, ManifestChange, PyChange, SourceLine, Status};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -23,14 +24,17 @@ fn stats(added: u32, removed: u32) -> String {
     format!(r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>"#)
 }
 
-/// Hunks of a line diff. Rust and Python get syntax colors; nothing is
-/// linked.
+/// Hunks of a line diff. Rust, Python and YAML get syntax colors; nothing
+/// is linked.
 pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
     let mut new_line = 0usize;
     let mut old_line = 0usize;
+    // YAML block scalars span lines; each side keeps its own state.
+    let (mut old_yaml, mut new_yaml) = (yaml::State::default(), yaml::State::default());
     let mut body = String::new();
     for l in lines {
         if l.0 == '@' {
+            (old_yaml, new_yaml) = (yaml::State::default(), yaml::State::default());
             let mut it = l.1.split(' ').filter_map(|n| n.parse::<usize>().ok());
             old_line = it.next().unwrap_or(1);
             new_line = it.next().unwrap_or(1);
@@ -41,6 +45,14 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
         }
         let code = match lang {
             "rust" | "python" => code_html(d, &l.1, Links::None),
+            "yaml" => match l.0 {
+                '-' => yaml::line_html(&mut old_yaml, &l.1),
+                '+' => yaml::line_html(&mut new_yaml, &l.1),
+                _ => {
+                    yaml::line_html(&mut old_yaml, &l.1);
+                    yaml::line_html(&mut new_yaml, &l.1)
+                }
+            },
             _ => esc(&l.1),
         };
         let (class, no) = match l.0 {
