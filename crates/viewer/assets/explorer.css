@@ -78,6 +78,10 @@ body {
   color: var(--text);
   font: 15px/1.45 var(--sans);
   overflow: hidden;
+  /* The header takes its height (two rows, more on a narrow screen), the
+     layout below the rest. */
+  display: flex;
+  flex-direction: column;
 }
 button {
   font: inherit;
@@ -102,6 +106,7 @@ code { font-size: .92em; }
 /* Two rows: what is shown (brand, PR title, settings, search), then how
    to look at it (views, review). The PR title gets the room of the first. */
 #top {
+  flex: none;
   height: 84px;
   box-sizing: border-box;
   border-bottom: 1px solid var(--border);
@@ -133,7 +138,9 @@ code { font-size: .92em; }
 #search-results div { padding: 4px 10px; cursor: pointer; font-family: var(--mono); font-size: 13px; }
 #search-results div:hover, #search-results div.sel { background: var(--bg-alt); }
 
-#layout { display: flex; height: calc(100% - 84px); }
+#layout { display: flex; flex: 1; min-height: 0; position: relative; }
+/* Opens the sidebar drawer on a narrow screen. */
+#side-btn { display: none; font-size: 16px; padding: 0 9px; line-height: 28px; flex: none; }
 #sidebar {
   width: 260px; flex: none; overflow: auto; border-right: 1px solid var(--border);
   background: var(--panel); padding: 10px 0; font-size: 14px;
@@ -772,6 +779,12 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 body:not(.reviewing) .rv-scope { display: none; }
 .hunk-rv .rv-fold { display: none; }
 body:not(.reviewing) .hunk-rv:not(:has(.rvc.done, .rvc.stale)) { display: none; }
+/* Showing what one commit changed. */
+.commit-pick { display: flex; align-items: center; gap: 6px; font-size: 13px; }
+.commit-pick select { font: 13px var(--sans); max-width: 360px; padding: 3px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); }
+.commit-banner { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; margin: 10px 0; padding: 8px 12px; border: 1px solid var(--link); border-left-width: 4px; border-radius: 6px; background: var(--panel); font-size: 14px; }
+.commit-banner > div:first-child { flex-basis: 100%; }
+.commit-banner > .dim { flex: 1; }
 /* The PR's review threads on GitHub: under their line in a source diff,
    on file cards, and listed on the overview. */
 .rt-row { display: block; white-space: normal; font: 14px/1.45 var(--sans); padding: 4px 8px 6px 18px; position: sticky; left: 0; max-width: min(760px, 100%); }
@@ -804,3 +817,49 @@ body:not(.reviewing) .hunk-rv:not(:has(.rvc.done, .rvc.stale)) { display: none; 
 .keys td { padding: 4px 12px 4px 0; vertical-align: top; }
 .keys td:first-child { white-space: nowrap; }
 kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; background: var(--bg-alt); font-family: var(--mono); font-size: 12px; text-align: center; }
+
+/* Narrow screens (phones in portrait). The sidebar becomes a drawer over the
+   view, the header drops the brand and wraps, the view tabs scroll sideways,
+   and pages use less padding and a smaller title. */
+@media (max-width: 760px) {
+  #top { height: auto; }
+  .top-row { gap: 8px; padding: 0 10px; }
+  .top-row:first-child { min-height: 44px; }
+  .brand, .btn-label { display: none; }
+  #side-btn { display: inline-block; }
+  #pr-title .hd-main { font-size: 14px; }
+  #pr-title .hd-sub { display: none; }
+  .search { flex: 0 1 140px; min-width: 90px; }
+  #search { width: 100%; }
+  #search-results { width: min(420px, calc(100vw - 20px)); }
+  #settings { width: min(280px, calc(100vw - 20px)); }
+  /* View tabs and review controls stay on one line and scroll sideways. */
+  .top-row.sub { overflow-x: auto; scrollbar-width: none; gap: 10px; }
+  .top-row.sub::-webkit-scrollbar { display: none; }
+  .top-row.sub > * { flex: none; }
+  #views button { padding: 4px 10px; }
+  #sidebar {
+    display: none; position: absolute; top: 0; bottom: 0; left: 0; z-index: 40;
+    width: min(320px, 86vw);
+    /* Dims the view beside the drawer. */
+    box-shadow: 0 0 0 100vmax rgba(0, 0, 0, .4);
+  }
+  .side-open #sidebar { display: block; }
+  .page { padding: 14px 12px 60px; }
+  .page h1 { font-size: 20px; overflow-wrap: anywhere; }
+  .page h1 .title-name { font-size: 19px; }
+  .page .sub { overflow-wrap: anywhere; }
+  .page h2 { font-size: 17px; margin-top: 22px; }
+  .ientry { padding: 10px; }
+  /* Review buttons go below the item's name instead of beside it. */
+  .irow { grid-template-columns: minmax(0, 1fr); }
+  .irow .iacts, .rvc { flex-wrap: wrap; }
+  .impl-line { flex-wrap: wrap; margin-left: 6px; }
+  .irow.member { margin-left: 6px; padding: 8px; }
+  #tooltip { max-width: calc(100vw - 16px); }
+  /* The canvas bars scroll sideways instead of overflowing. */
+  #canvas-bar, #space-bar { overflow-x: auto; scrollbar-width: none; white-space: nowrap; }
+  #canvas-bar > *, #space-bar > * { flex: none; }
+}
+/* Dragging on the canvas pans it, and two fingers zoom it (see canvas/events.rs). */
+#viewport { touch-action: none; }

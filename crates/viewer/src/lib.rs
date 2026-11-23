@@ -6,6 +6,7 @@
 
 mod canvas;
 mod code;
+mod commit_filter;
 mod css;
 mod data;
 mod dom;
@@ -145,6 +146,7 @@ pub fn start() {
     review::load(&app.d);
     let title = app.d.header_html();
     dom::set_html("pr-title", &title);
+    dom::set_html("commit-menu", &commit_filter::menu_html(&app.d));
     APP.with(|a| *a.borrow_mut() = Some(app));
     install_listeners();
     with_app(nav::start);
@@ -172,8 +174,10 @@ pub fn set_view(app: &mut App, view: View) {
         );
     }
     // Show or hide the sidebar first, so that the view lays out at its final width.
-    if let Some(el) = dom::by_id("sidebar") {
-        dom::toggle_class(&el, "hidden", !pages::sidebar_shown(app));
+    for id in ["sidebar", "side-btn"] {
+        if let Some(el) = dom::by_id(id) {
+            dom::toggle_class(&el, "hidden", !pages::sidebar_shown(app));
+        }
     }
     match view {
         View::Overview => pages::render_overview(app),
@@ -274,14 +278,18 @@ fn install_listeners() {
             canvas::on_pointer_move(app, &pev);
         });
     });
-    dom::listen(&doc, "pointerup", |ev| {
-        let Ok(pev) = ev.dyn_into::<PointerEvent>() else {
-            return;
-        };
-        with_app(|app| {
-            canvas::on_pointer_up(app, &pev);
+    // A touch the browser takes over (to scroll or zoom the page) ends
+    // like a lifted finger.
+    for name in ["pointerup", "pointercancel"] {
+        dom::listen(&doc, name, |ev| {
+            let Ok(pev) = ev.dyn_into::<PointerEvent>() else {
+                return;
+            };
+            with_app(|app| {
+                canvas::on_pointer_up(app, &pev);
+            });
         });
-    });
+    }
     // Not passive: zooming prevents the page from scrolling.
     dom::listen_with(&doc, "wheel", false, false, |ev| {
         let (Some(el), Ok(wev)) = (dom::target_element(&ev), ev.dyn_into::<WheelEvent>()) else {
@@ -325,6 +333,13 @@ fn install_listeners() {
         };
         with_app(|app| {
             if settings::on_change(&el) {
+                set_view(app, app.s.view);
+            } else if el.id() == "commit-filter" {
+                let value = el
+                    .dyn_ref::<web_sys::HtmlSelectElement>()
+                    .map(|s| s.value())
+                    .unwrap_or_default();
+                commit_filter::set(&app.d, value.parse().ok());
                 set_view(app, app.s.view);
             } else if el.id() == "show-unchanged" {
                 app.s.show_unchanged = el
@@ -451,6 +466,24 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         }
         dom::toggle_class(&panel, "hidden", true);
     }
+    // On a narrow screen the sidebar is a drawer over the view, opened by
+    // its button. Picking one of its rows or clicking outside closes it.
+    if let Some(body) = dom::document().body() {
+        let open = body.class_list().contains("side-open");
+        if dom::closest(el, "#side-btn").is_some() {
+            dom::toggle_class(&body, "side-open", !open);
+            return;
+        }
+        if open && dom::closest(el, "#sidebar").is_none() {
+            // Only closes: the click wasn't aimed at what the drawer covered.
+            ev.prevent_default();
+            dom::toggle_class(&body, "side-open", false);
+            return;
+        }
+        if open && dom::closest(el, ".tree-row").is_some() {
+            dom::toggle_class(&body, "side-open", false);
+        }
+    }
     if on_review_click(app, el) {
         return;
     }
@@ -490,6 +523,16 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
                 None => canvas::open(app, &id, None, true),
             },
         }
+        return;
+    }
+    if dom::closest(el, "[data-commit-clear]").is_some() {
+        commit_filter::set(&app.d, None);
+        if let Some(s) = dom::by_id("commit-filter")
+            .and_then(|e| e.dyn_into::<web_sys::HtmlSelectElement>().ok())
+        {
+            s.set_value("");
+        }
+        set_view(app, app.s.view);
         return;
     }
     if let Some(b) = dom::closest(el, "[data-open]") {

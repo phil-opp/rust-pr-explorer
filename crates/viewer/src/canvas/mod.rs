@@ -70,6 +70,15 @@ pub enum Drag {
         px: f64,
         py: f64,
     },
+    /// Two fingers on a touch screen: their distance zooms, their midpoint
+    /// pans. `d0` and `mx`, `my` are the distance and the midpoint (in
+    /// viewport coordinates) when the pinch started, with the view at `pan`.
+    Pinch {
+        d0: f64,
+        mx: f64,
+        my: f64,
+        pan: Pan,
+    },
 }
 
 pub struct Canvas {
@@ -82,6 +91,8 @@ pub struct Canvas {
     pub pan: Pan,
     pub frames: bool,
     pub drag: Option<Drag>,
+    /// The touch points on the canvas: pointer id and client position.
+    touches: Vec<(i32, f64, f64)>,
     /// The last rendered height of each card, to tell how much it changed.
     heights: HashMap<u32, f64>,
     /// What each "calls", "callers" and "used by" click opened, oldest
@@ -113,6 +124,7 @@ impl Canvas {
             },
             frames: false,
             drag: None,
+            touches: Vec::new(),
             heights: HashMap::new(),
             expansions: Vec::new(),
         }
