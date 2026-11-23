@@ -203,4 +203,3 @@ The tool calls the `git` binary to clone, fetch pull request refs, compute merge
 ## Next steps
 
 - Opt-in rustdoc JSON in trusted mode, for an exact public API.
-- Show the PR description (`gh pr view --json body`).

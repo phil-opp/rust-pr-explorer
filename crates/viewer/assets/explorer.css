@@ -581,6 +581,9 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .rv-flash { animation: rv-flash 1.4s ease-out; }
 @keyframes rv-flash { from { box-shadow: 0 0 0 4px var(--highlight); } to { box-shadow: 0 0 0 0 transparent; } }
+.pr-desc { margin: 12px 0 4px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
+.pr-desc > summary { cursor: pointer; padding: 6px 12px; font-weight: 600; }
+.pr-desc > .docs { padding: 0 16px 8px; border-top: 1px solid var(--border); max-height: 480px; overflow: auto; }
 .rv-since { border: 1px solid var(--changed); color: var(--changed); background: var(--bg); }
 .rv-since:hover { background: var(--changed-bg); }
 .since-intro { margin: 0 0 8px; }
