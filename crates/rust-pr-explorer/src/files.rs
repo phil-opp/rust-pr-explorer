@@ -1,5 +1,6 @@
 //! Every file a PR changes, with a line diff, and structured changes where
-//! the format is understood (`Cargo.toml`, Python, YAML, Markdown).
+//! the format is understood (`Cargo.toml`, lock files, Python, YAML,
+//! Markdown).
 
 use crate::parts::{Def, Span, compare_defs, rust_outline};
 use model::{ChangedFile, ManifestChange, PartChange, SourceLine, Status};
@@ -253,6 +254,9 @@ pub fn changed_files(base: &Path, head: &Path, skip: &[&str]) -> Vec<ChangedFile
                 }
                 if path == "Cargo.toml" || path.ends_with("/Cargo.toml") {
                     file.manifest = manifest_changes(old, new);
+                }
+                if crate::lockfile::is_lock(path) {
+                    file.lock = crate::lockfile::compare(old, new);
                 }
             }
             _ => file.too_large = !binary,

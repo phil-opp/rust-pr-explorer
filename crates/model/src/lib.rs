@@ -512,6 +512,10 @@ pub struct ChangedFile {
     /// Structured changes of a `Cargo.toml`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub manifest: Vec<ManifestChange>,
+    /// The packages whose locked versions changed, for `Cargo.lock`,
+    /// `uv.lock` and `poetry.lock`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lock: Vec<LockChange>,
     /// The file's changed parts, each shown as a box: functions and
     /// classes of a Python file, keys of a YAML file, and for an analyzed
     /// Rust file the code that belongs to no item (tests, macro calls,
@@ -538,6 +542,30 @@ pub struct ManifestChange {
     pub old: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new: Option<String>,
+}
+
+/// A package of a lock file whose locked versions, source or checksum
+/// changed.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct LockChange {
+    pub name: String,
+    /// The locked versions before and after: usually one, several when
+    /// the package is locked in more than one version, none when absent.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub old: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub new: Vec<String>,
+    /// Where it comes from, when that changed (or for an added package),
+    /// unless that is the default registry (crates.io, PyPI): a git
+    /// repository, another registry, a path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_source: Option<String>,
+    /// A version that is locked on both sides, from the same source, has
+    /// another checksum: the published package itself differs.
+    #[serde(default)]
+    pub checksum_changed: bool,
 }
 
 /// A part of a file that changed: a Python function or class, a YAML

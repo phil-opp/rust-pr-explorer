@@ -2,6 +2,7 @@
 
 mod analyze;
 mod files;
+mod lockfile;
 mod merge;
 mod parts;
 #[cfg(feature = "semantic")]
