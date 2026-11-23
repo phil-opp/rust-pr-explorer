@@ -168,3 +168,16 @@ What that leaves out:
 - **Python and Markdown** are compared structurally, not semantically: renamed or moved functions show as removed plus added, and Markdown sections are matched by their heading path.
 - **PR metadata.** The title and branches come from `gh` when it is available; the PR description is not shown.
 - **Build time.** A clean release build takes a few minutes, mostly for rust-analyzer. `--no-default-features` builds without it.
+
+## Development
+
+CI runs `cargo fmt`, clippy (for the host and for wasm) and the tests, builds the demo page, and opens it in headless Chromium in the light and the dark theme (`ci/smoke.mjs`). The smoke test fails on any JavaScript error and on an empty view. The page and screenshots of every view are uploaded as the `demo-page` artifact of each run.
+
+To run the smoke test locally:
+
+```sh
+cargo run --release -- dirs fixtures/demo/base fixtures/demo/head -o demo.html
+npm install --no-save --no-package-lock playwright@1.63.0
+npx playwright install chromium
+node ci/smoke.mjs demo.html smoke
+```
