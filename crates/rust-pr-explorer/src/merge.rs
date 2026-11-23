@@ -313,7 +313,8 @@ fn rewrite_module(norm: &str, old: &str, new: &str) -> String {
 }
 
 /// The doc comments of a struct's or union's fields and of an enum's
-/// variants, by name (tuple fields by index). Only non-empty ones.
+/// variants, by name (tuple fields by index), and of the variants' fields
+/// as `Variant.field`. Only non-empty ones.
 fn member_docs(source: &str) -> HashMap<String, String> {
     use crate::analyze::extract_docs;
     let mut out = HashMap::new();
@@ -328,6 +329,11 @@ fn member_docs(source: &str) -> HashMap<String, String> {
         Ok(syn::Item::Union(u)) => fields(&syn::Fields::Named(u.fields), &mut out),
         Ok(syn::Item::Enum(e)) => {
             for v in &e.variants {
+                let mut of_variant = HashMap::new();
+                fields(&v.fields, &mut of_variant);
+                for (field, docs) in of_variant {
+                    out.insert(format!("{}.{field}", v.ident), docs);
+                }
                 out.insert(v.ident.to_string(), extract_docs(&v.attrs));
             }
         }
