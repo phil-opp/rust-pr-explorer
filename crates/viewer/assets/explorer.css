@@ -526,7 +526,7 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 .manifest .mf-old, .manifest .mf-new { padding-left: 24px; }
 .md-h { font-weight: 600; font-size: 15px; margin: 4px 0; }
 .md-removed .md-h { text-decoration: line-through; text-decoration-color: var(--removed); color: var(--muted); }
-.irow.member.py { margin-top: 8px; }
+.irow.member.part { margin-top: 8px; }
 .ientry > .ihead { display: flex; align-items: center; gap: 8px; }
 #panic { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; background: var(--removed); color: #fff; padding: 10px 16px; font-size: 14px; }
 

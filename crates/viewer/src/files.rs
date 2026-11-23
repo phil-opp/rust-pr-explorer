@@ -1,11 +1,13 @@
 //! Files the Rust analysis doesn't cover: `Cargo.toml` changes, Python
-//! definitions, Markdown sections, and plain line diffs for the rest.
+//! definitions, YAML keys, Markdown sections, and plain line diffs for the
+//! rest. For analyzed Rust files, the code that belongs to no item: tests,
+//! macro calls and `extern` blocks as parts, and the remaining lines.
 
 use crate::code::{
     Links, Seg, code_html, esc, markdown_diff_segs, markdown_file_html, marked_html, sig_diff_html,
 };
 use crate::data::Data;
-use model::{ChangedFile, Kind, ManifestChange, PyChange, SourceLine, Status};
+use model::{ChangedFile, Kind, ManifestChange, PartChange, SourceLine, Status};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Changes up to this many lines are shown directly, larger ones folded.
@@ -106,31 +108,89 @@ fn manifest_html(entries: &[ManifestChange]) -> String {
     html
 }
 
-fn python_html(d: &Data, list: &[PyChange]) -> String {
+/// "2 tests and 1 macro call": the parts counted by kind.
+fn parts_summary(parts: &[PartChange]) -> String {
+    let mut counts: Vec<(&str, usize)> = Vec::new();
+    for p in parts {
+        match counts.iter_mut().find(|c| c.0 == p.kind) {
+            Some(c) => c.1 += 1,
+            None => counts.push((&p.kind, 1)),
+        }
+    }
+    let list: Vec<String> = counts
+        .iter()
+        .map(|&(kind, n)| {
+            let (one, many) = match kind {
+                "fn" => ("function", "functions"),
+                "test" => ("test", "tests"),
+                "bench" => ("benchmark", "benchmarks"),
+                "impl" => ("impl block", "impl blocks"),
+                "extern" => ("extern block", "extern blocks"),
+                "macro call" => ("macro call", "macro calls"),
+                "macro" => ("macro", "macros"),
+                "struct" => ("struct", "structs"),
+                "enum" => ("enum", "enums"),
+                "const" => ("constant", "constants"),
+                "static" => ("static", "statics"),
+                "type" => ("type alias", "type aliases"),
+                "trait" => ("trait", "traits"),
+                _ => ("other part", "other parts"),
+            };
+            format!("{n} {}", if n == 1 { one } else { many })
+        })
+        .collect();
+    match list.split_last() {
+        Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+        _ => list.join(""),
+    }
+}
+
+/// A file's changed parts (see [`PartChange`]), one box each.
+fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
     let no_refs = BTreeMap::new();
+    let code = lang != "yaml";
     list.iter()
         .map(|c| {
             if c.kind == "module" {
-                return r#"<div class="irow member py"><div class="ihead"><span class="kind">module</span><span class="title-name">top-level code</span></div><div class="mark m-chg"><div class="note">Statements outside functions and classes changed; see the line diff.</div></div></div>"#.to_string();
+                return r#"<div class="irow member part"><div class="ihead"><span class="kind">module</span><span class="title-name">top-level code</span></div><div class="mark m-chg"><div class="note">Statements outside functions and classes changed; see the line diff.</div></div></div>"#.to_string();
             }
             let sig = match &c.old_sig {
-                Some(old) => format!(
+                Some(old) if code => format!(
                     r#"<pre class="sig sig-diff">{}</pre>"#,
                     sig_diff_html(d, old, &c.sig, &no_refs, &[])
                 ),
-                None => format!(r#"<pre class="sig">{}</pre>"#, code_html(d, &c.sig, Links::None)),
+                Some(old) => format!(
+                    r#"<pre class="sig"><del>{}</del>
+{}</pre>"#,
+                    esc(old),
+                    esc(&c.sig)
+                ),
+                None if code => {
+                    format!(r#"<pre class="sig">{}</pre>"#, code_html(d, &c.sig, Links::None))
+                }
+                None => format!(r#"<pre class="sig">{}</pre>"#, esc(&c.sig)),
             };
             let (sig_bar, sig_class) = match c.status {
                 Status::Added | Status::Removed => ("", ""),
                 _ if c.old_sig.is_some() => ("m-chg", ""),
                 _ => ("", "m-ref"),
             };
-            let mut segs = vec![Seg::new(
-                sig_bar,
-                format!(r#"<div class="sigbox {sig_class}">{sig}</div>"#),
-            )];
+            let mut segs = Vec::new();
+            // A YAML key's line repeats its name, unless it changed.
+            if code || c.old_sig.is_some() {
+                segs.push(Seg::new(
+                    sig_bar,
+                    format!(r#"<div class="sigbox {sig_class}">{sig}</div>"#),
+                ));
+            }
             if c.doc_changed {
-                segs.push(Seg::new("m-chg", r#"<div class="note">Docstring changed.</div>"#.into()));
+                segs.push(Seg::new(
+                    "m-chg",
+                    format!(
+                        r#"<div class="note">{} changed.</div>"#,
+                        if lang == "python" { "Docstring" } else { "Doc comment" }
+                    ),
+                ));
             }
             let added = c.lines.iter().filter(|l| l.0 == '+').count() as u32;
             let removed = c.lines.iter().filter(|l| l.0 == '-').count() as u32;
@@ -149,7 +209,7 @@ fn python_html(d: &Data, list: &[PyChange]) -> String {
                     if small { "open" } else { "" },
                     stats(added, removed),
                     c.line,
-                    hunks_html(d, &c.lines, "python")
+                    hunks_html(d, &c.lines, lang)
                 ),
             ));
             let status_class = match c.status {
@@ -158,7 +218,7 @@ fn python_html(d: &Data, list: &[PyChange]) -> String {
                 _ => "",
             };
             format!(
-                r#"<div class="irow member py {status_class}"><div class="ihead"><span class="kind">{}</span><span class="title-name">{}</span>{}</div>{}</div>"#,
+                r#"<div class="irow member part {status_class}"><div class="ihead"><span class="kind">{}</span><span class="title-name">{}</span>{}</div>{}</div>"#,
                 esc(&c.kind),
                 esc(&c.name),
                 badge(c.status),
@@ -326,8 +386,19 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
         })
         .flatten();
     let outside = if f.analyzed {
+        let mut what = Vec::new();
+        if !f.parts.is_empty() {
+            what.push(format!("{}, one box each", parts_summary(&f.parts)));
+        }
+        if f.outside_items > 0 {
+            what.push(format!(
+                "{} other changed line{}",
+                f.outside_items,
+                if f.outside_items == 1 { "" } else { "s" }
+            ));
+        }
         format!(
-            r#"<div class="note">This file's items and docs are shown {}. Below are only the {} changed line{} that belong to no item, such as test code, a macro call or an <code>extern</code> block.</div>"#,
+            r#"<div class="note">This file's items and docs are shown {}. Below is only the changed code that belongs to no item: {}.</div>"#,
             match module {
                 Some(m) => format!(
                     r#"on the page of <a data-mod="{}"><code>{}</code></a>"#,
@@ -336,14 +407,13 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
                 ),
                 None => "with the Rust items".to_string(),
             },
-            f.outside_items,
-            if f.outside_items == 1 { "" } else { "s" },
+            what.join(", and "),
         )
     } else {
         String::new()
     };
     let structured = match f.lang.as_str() {
-        "python" if !f.python.is_empty() => python_html(d, &f.python),
+        "python" | "yaml" | "rust" if !f.parts.is_empty() => parts_html(d, &f.parts, &f.lang),
         "markdown" => match (&f.old_text, &f.new_text) {
             (Some(o), Some(n)) => markdown_html(d, o, n),
             _ => String::new(),
@@ -370,7 +440,9 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
         format!(
             r#"<details class="src" {}><summary>{} {}</summary>{}</details>"#,
             if small { "open" } else { "" },
-            if f.analyzed {
+            if f.analyzed && !f.parts.is_empty() {
+                "Other lines outside items"
+            } else if f.analyzed {
                 "Lines outside items"
             } else if structured.is_empty() {
                 "Diff"
@@ -439,18 +511,18 @@ pub fn other_files_html(d: &Data) -> String {
         .out
         .files
         .iter()
-        .filter(|f| !f.analyzed || f.outside_items > 0)
+        .filter(|f| !f.analyzed || f.outside_items > 0 || !f.parts.is_empty())
         .collect();
     let covered = d
         .out
         .files
         .iter()
-        .filter(|f| f.analyzed && f.outside_items == 0)
+        .filter(|f| f.analyzed && f.outside_items == 0 && f.parts.is_empty())
         .count();
     let (generated, own): (Vec<&ChangedFile>, Vec<&ChangedFile>) =
         others.into_iter().partition(|f| f.generated.is_some());
     let mut html = format!(
-        r#"<h2>Other changed files</h2><p class="sub">Files the Rust analysis doesn't cover{}. Python files are compared by function and class, Markdown files by section; other files line by line.</p>"#,
+        r#"<h2>Other changed files</h2><p class="sub">Files the Rust analysis doesn't cover{}. Python files are compared by function and class, YAML files by key, Markdown files by section, and Rust code outside items (tests, macro calls, <code>extern</code> blocks) one item at a time; other files line by line.</p>"#,
         if covered > 0 {
             format!(
                 " ({covered} changed Rust file{} are shown as items above)",
