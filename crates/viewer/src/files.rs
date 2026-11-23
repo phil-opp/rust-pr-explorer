@@ -361,14 +361,14 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
         )
     };
     format!(
-        r#"<div class="ientry file {}"><div class="irow"><div class="ihead"><span class="kind">{}</span><span class="title-name">{}</span>{}{}</div><div class="iacts">{}{}</div></div>{outside}{structured}{lines}</div>"#,
+        r#"<div class="ientry file {}"><div class="irow"><div class="ihead"><span class="title-name">{}</span><span class="kind">{}</span>{}{}</div><div class="iacts">{}{}</div></div>{outside}{structured}{lines}</div>"#,
         match f.status {
             Status::Added => "whole whole-added",
             Status::Removed => "whole whole-removed",
             _ => "",
         },
-        esc(&f.lang),
         esc(&f.path),
+        esc(&f.lang),
         badge(f.status),
         f.generated
             .as_deref()
@@ -394,7 +394,7 @@ pub fn manifests_html(d: &Data) -> String {
         .iter()
         .map(|f| {
             format!(
-                r#"<div class="ientry"><div class="ihead"><span class="kind">manifest</span><span class="title-name">{}</span></div>{}</div>"#,
+                r#"<div class="ientry"><div class="ihead"><span class="title-name">{}</span><span class="kind">manifest</span></div>{}</div>"#,
                 esc(&f.path),
                 manifest_html(&f.manifest)
             )
