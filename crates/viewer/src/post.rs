@@ -246,6 +246,10 @@ fn body(comments: &[Comment], own: &str, event: Verdict) -> String {
 
 /// The request body for GitHub's "create a review" API.
 pub fn review_json(comments: &[Comment], own: &str, event: Verdict, commit: &str) -> String {
+    serde_json::to_string_pretty(&review_value(comments, own, event, commit)).unwrap_or_default()
+}
+
+fn review_value(comments: &[Comment], own: &str, event: Verdict, commit: &str) -> Value {
     let mut v = json!({
         "event": event_name(event),
         "body": body(comments, own, event),
@@ -269,7 +273,7 @@ pub fn review_json(comments: &[Comment], own: &str, event: Verdict, commit: &str
     if !commit.is_empty() {
         v["commit_id"] = json!(commit);
     }
-    serde_json::to_string_pretty(&v).unwrap_or_default()
+    v
 }
 
 /// The review as Markdown, for an ordinary comment.
@@ -299,23 +303,74 @@ pub fn review_markdown(comments: &[Comment], own: &str, event: Verdict) -> Strin
     out
 }
 
-/// The file name a downloaded review gets.
-pub fn file_name(d: &Data) -> String {
-    match &d.out.meta.pr {
-        Some(pr) => format!("review-{}-{}.json", pr.repo.replace('/', "-"), pr.number),
-        None => "review.json".to_string(),
+/// The review as JSON that is safe inside single quotes in bash, zsh and
+/// fish: no `'`, and no backslash followed by a backslash or `'` (fish
+/// unescapes those two even in single quotes). JSON allows `\u0027` and
+/// `\u005c` in strings instead, and has no other place for these.
+fn shell_safe_json(v: &Value) -> String {
+    let json = serde_json::to_string(v).unwrap_or_default();
+    let mut out = String::with_capacity(json.len());
+    let mut chars = json.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '\'' => out.push_str("\\u0027"),
+            '\\' => match chars.next() {
+                Some('\\') => out.push_str("\\u005c"),
+                Some(next) => {
+                    out.push('\\');
+                    out.push(next);
+                }
+                None => out.push('\\'),
+            },
+            c => out.push(c),
+        }
     }
+    out
 }
 
-/// The command that posts a downloaded review.
-pub fn command(d: &Data) -> Option<String> {
+/// One command that posts the review with the GitHub CLI. The JSON is
+/// piped in, so nothing needs to be saved first; `printf` because zsh's
+/// `echo` would turn `\n` into line breaks.
+pub fn command(d: &Data, comments: &[Comment], own: &str, event: Verdict) -> Option<String> {
     let pr = d.out.meta.pr.as_ref()?;
+    let v = review_value(comments, own, event, &pr.head_commit);
     Some(format!(
-        "gh api --method POST repos/{}/pulls/{}/reviews --input ~/Downloads/{}",
+        "printf '%s' '{}' | gh api --method POST repos/{}/pulls/{}/reviews --input -",
+        shell_safe_json(&v),
         pr.repo,
         pr.number,
-        file_name(d)
     ))
+}
+
+/// What the posted review consists of, shown above the copy buttons.
+pub fn posts_html(comments: &[Comment], own: &str, event: Verdict) -> String {
+    let mut parts = vec![
+        match event {
+            Verdict::Approve => "an <b>approval</b>",
+            Verdict::Changes => "a <b>request for changes</b>",
+            Verdict::Comment => "a <b>comment review</b>",
+        }
+        .to_string(),
+    ];
+    if !own.trim().is_empty() {
+        parts.push("your summary".to_string());
+    }
+    let placed = comments.iter().filter(|c| c.loc.is_some()).count();
+    let unplaced = comments.len() - placed;
+    let n = |k: usize, what: &str| format!("{k} {what}{}", if k == 1 { "" } else { "s" });
+    if placed > 0 {
+        parts.push(n(placed, "inline comment"));
+    }
+    if unplaced > 0 {
+        parts.push(format!("{} in the review's text", n(unplaced, "comment")));
+    }
+    let last = parts.pop().unwrap_or_default();
+    let list = if parts.is_empty() {
+        last
+    } else {
+        format!("{} and {last}", parts.join(", "))
+    };
+    format!("The command posts {list}.")
 }
 
 /// The dialog that sums up the review and offers ways to post it.
@@ -386,15 +441,14 @@ pub fn finish_html(d: &Data) -> String {
             )
         })
         .collect();
-    let post = match (&d.out.meta.pr, command(d)) {
-        (Some(pr), Some(cmd)) => format!(
+    let post = match &d.out.meta.pr {
+        Some(pr) => format!(
             r#"<h4>Post it to the pull request</h4>
-<p class="sub">This page has no access to GitHub and holds no token. Download the review and post it with the <a href="https://cli.github.com" target="_blank" rel="noopener">GitHub CLI</a>, which uses your own login. The command works in bash, zsh and fish; change the path if the file was saved elsewhere (or got a number added).</p>
-<div class="rv-row"><button data-rv-out="download" class="primary">Download {file}</button><button data-rv-out="json">Copy JSON</button></div>
-<div class="rv-row"><code class="rv-cmd">{cmd}</code><button data-rv-out="cmd">Copy command</button></div>
+<p class="sub">This page has no access to GitHub and holds no token. Copy the command and run it in a terminal: it posts the review with the <a href="https://cli.github.com" target="_blank" rel="noopener">GitHub CLI</a>, using your own login. It works in bash, zsh and fish.</p>
+<p id="rv-what">{what}</p>
+<div class="rv-row"><button data-rv-out="cmd" class="primary">Copy command</button><button data-rv-out="json">Copy JSON</button></div>
 <p class="sub">The comments go on the commit this page shows ({rev}). If the PR got new commits, GitHub shows them where those lines are now, or as outdated.{custom}</p>"#,
-            file = esc(&file_name(d)),
-            cmd = esc(&cmd),
+            what = posts_html(&s.comments, "", suggested),
             rev = esc(&pr.head_rev),
             custom = if pr.custom_base {
                 " This page compares against a base given with <code>--base</code>, so its diff may differ from GitHub's; GitHub then rejects the review."
@@ -402,7 +456,7 @@ pub fn finish_html(d: &Data) -> String {
                 ""
             },
         ),
-        _ => r#"<p class="sub">This page doesn't show a GitHub pull request, so the review can only be copied as Markdown.</p>"#.to_string(),
+        None => r#"<p class="sub">This page doesn't show a GitHub pull request, so the review can only be copied as Markdown.</p>"#.to_string(),
     };
     format!(
         r#"<div class="rv-finish">
@@ -646,5 +700,37 @@ mod tests {
         // An approval doesn't.
         let v: Value = serde_json::from_str(&review_json(&[], "", Verdict::Approve, "")).unwrap();
         assert!(v.get("body").is_none());
+    }
+
+    #[test]
+    fn shell_safe() {
+        let v = json!({"body": "it's a \\ and \\' and \"q\"\nnext"});
+        let s = shell_safe_json(&v);
+        assert!(!s.contains('\''));
+        assert!(!s.contains("\\\\"));
+        assert!(!s.contains("\\'"));
+        assert_eq!(serde_json::from_str::<Value>(&s).unwrap(), v);
+    }
+
+    #[test]
+    fn posts() {
+        let c = |loc: bool| Comment {
+            name: "f".into(),
+            verdict: Verdict::Comment,
+            text: "x".into(),
+            loc: loc.then(|| Loc {
+                path: "a.rs".into(),
+                line: 1,
+                side: "RIGHT",
+            }),
+        };
+        assert_eq!(
+            posts_html(&[], "", Verdict::Approve),
+            "The command posts an <b>approval</b>."
+        );
+        assert_eq!(
+            posts_html(&[c(true), c(true), c(false)], "Nice", Verdict::Changes),
+            "The command posts a <b>request for changes</b>, your summary, 2 inline comments and 1 comment in the review's text."
+        );
     }
 }
