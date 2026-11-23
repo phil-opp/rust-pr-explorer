@@ -57,6 +57,7 @@ fn lang(path: &str, binary: bool) -> &'static str {
         "py" | "pyi" => "python",
         "md" | "markdown" => "markdown",
         "toml" => "toml",
+        "yml" | "yaml" => "yaml",
         _ => "text",
     }
 }

@@ -4,8 +4,8 @@ use super::{
     Analyzer, ItemData, Node, Pending, Rendered,
     collector::Collector,
     syntax::{
-        extract_docs, fix_private_marker, hide_private_fields, intra_doc_links, is_ident,
-        node_bindings, node_generics, norm_block, norm_expr, shorten_expr, shown_attrs,
+        extract_docs, fix_private_marker, hide_private_fields, intra_doc_links, is_doc_hidden,
+        is_ident, node_bindings, node_generics, norm_block, norm_expr, shorten_expr, shown_attrs,
         sig_link_offsets, strip_body, strip_field_docs, unparse, unparse_type, vis_prefix,
         wrap_fn_sig, wrap_trait_methods,
     },
@@ -542,12 +542,22 @@ impl Analyzer {
         let mut children = self.children.get(&p.id).cloned().unwrap_or_default();
         children.dedup();
 
-        let name_pos = match &p.node {
-            Node::Item(Item::Fn(f)) => Some(f.sig.ident.span().start().into()),
-            Node::ImplFn(f) => Some(f.sig.ident.span().start().into()),
-            Node::TraitFn(f) => Some(f.sig.ident.span().start().into()),
+        let ident = match &p.node {
+            Node::Item(Item::Fn(f)) => Some(&f.sig.ident),
+            Node::Item(Item::Struct(s)) => Some(&s.ident),
+            Node::Item(Item::Enum(e)) => Some(&e.ident),
+            Node::Item(Item::Union(u)) => Some(&u.ident),
+            Node::Item(Item::Trait(t)) => Some(&t.ident),
+            Node::Item(Item::Type(t)) => Some(&t.ident),
+            Node::Item(Item::Const(c)) => Some(&c.ident),
+            Node::Item(Item::Static(s)) => Some(&s.ident),
+            Node::Item(Item::Macro(m)) => m.ident.as_ref(),
+            Node::ImplFn(f) => Some(&f.sig.ident),
+            Node::TraitFn(f) => Some(&f.sig.ident),
             _ => None,
         };
+        let name_pos = ident.map(|i| i.span().start().into());
+        let doc_hidden = is_doc_hidden(&attrs);
         let info = ItemInfo {
             id: p.id.clone(),
             kind,
@@ -577,6 +587,7 @@ impl Analyzer {
             source_refs,
             sig_links,
             sig_public_links,
+            reexport_of: None,
         };
         Some(ItemData {
             info,
@@ -584,6 +595,7 @@ impl Analyzer {
             body_norm,
             source,
             name_pos,
+            doc_hidden,
             call_sites: body_col.sites,
             ext_sites,
         })

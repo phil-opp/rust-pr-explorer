@@ -281,6 +281,11 @@ impl Checkout {
                 repo: format!("{owner}/{repo}"),
                 number,
                 title: gh.as_ref().map(|i| i.title.clone()),
+                body: gh
+                    .as_ref()
+                    .map(|i| i.body.trim())
+                    .filter(|b| !b.is_empty())
+                    .map(str::to_string),
                 base_ref,
                 base_rev: short(&base_rev).to_string(),
                 head_ref: gh.as_ref().map(|i| i.head_ref_name.clone()),
@@ -304,6 +309,9 @@ impl Checkout {
 #[serde(rename_all = "camelCase")]
 struct GhPr {
     title: String,
+    /// The description, as Markdown; empty if there is none.
+    #[serde(default)]
+    body: String,
     base_ref_name: String,
     head_ref_name: String,
     /// `{"login": …}`; read loosely, since only the login is needed.
@@ -313,7 +321,7 @@ struct GhPr {
     is_cross_repository: bool,
 }
 
-/// Asks the GitHub CLI for the PR's title and branches. `None` (with a
+/// Asks the GitHub CLI for the PR's title, description and branches. `None` (with a
 /// note) if `gh` is missing, not logged in, or fails.
 fn gh_pr_view(owner: &str, repo: &str, number: u64) -> Option<GhPr> {
     let out = std::process::Command::new("gh")
@@ -324,7 +332,7 @@ fn gh_pr_view(owner: &str, repo: &str, number: u64) -> Option<GhPr> {
             "--repo",
             &format!("{owner}/{repo}"),
             "--json",
-            "title,baseRefName,headRefName,headRepositoryOwner,isCrossRepository",
+            "title,body,baseRefName,headRefName,headRepositoryOwner,isCrossRepository",
         ])
         .output();
     let parsed = match out {
@@ -333,7 +341,7 @@ fn gh_pr_view(owner: &str, repo: &str, number: u64) -> Option<GhPr> {
     };
     if parsed.is_none() {
         eprintln!(
-            "note: `gh pr view` failed; the PR's title and branch names are left out \
+            "note: `gh pr view` failed; the PR's title, description and branch names are left out \
              and the base is the repository's default branch"
         );
     }
@@ -698,9 +706,10 @@ mod tests {
 
     #[test]
     fn gh_json_is_parsed() {
-        // As printed by `gh pr view --json title,baseRefName,headRefName,headRepositoryOwner,isCrossRepository`.
-        let json = r#"{"baseRefName":"master","headRefName":"value-bag","headRepositoryOwner":{"id":"MDQ6VXNlcjE=","login":"someone","name":"Some One"},"isCrossRepository":true,"title":"Use value-bag"}"#;
+        // As printed by `gh pr view --json title,body,baseRefName,headRefName,headRepositoryOwner,isCrossRepository`.
+        let json = r#"{"baseRefName":"master","body":"Fixes #12.\r\n\r\n- one","headRefName":"value-bag","headRepositoryOwner":{"id":"MDQ6VXNlcjE=","login":"someone","name":"Some One"},"isCrossRepository":true,"title":"Use value-bag"}"#;
         let pr: GhPr = serde_json::from_str(json).unwrap();
+        assert_eq!(pr.body, "Fixes #12.\r\n\r\n- one");
         assert_eq!(pr.base_ref_name, "master");
         assert_eq!(pr.head_ref_name, "value-bag");
         assert!(pr.is_cross_repository);

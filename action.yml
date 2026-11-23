@@ -14,7 +14,10 @@ inputs:
       `pull-requests: write`.
     default: ${{ github.token }}
   pr:
-    description: The pull request number. Defaults to the PR that triggered the workflow.
+    description: >-
+      The pull request number. Defaults to the PR that triggered the
+      workflow. Without one (e.g. on a push), the action only builds and
+      caches the tool.
     default: ${{ github.event.pull_request.number }}
   repository:
     description: The repository of the pull request, as OWNER/REPO.
@@ -27,6 +30,19 @@ inputs:
   syntax-only:
     description: Skip rust-analyzer (faster, but method calls stay unresolved).
     default: "false"
+  cache:
+    description: >-
+      Use the Actions cache: for the built tool (about 12 MB) and, with
+      `save-cache`, for the build's dependencies (about 200 MB). With
+      `false`, nothing is read from or written to the cache, and every run
+      builds the tool from scratch (about 7 minutes).
+    default: "true"
+  save-cache:
+    description: >-
+      Save the cache of the build's dependencies (when `cache` is on). By
+      default only on the default branch, where every pull request can read
+      it. With `false`, only the built tool is cached.
+    default: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
   retention-days:
     description: Days to keep the page. Empty uses the repository's setting (90 days by default).
     default: ""
@@ -42,18 +58,60 @@ outputs:
 runs:
   using: composite
   steps:
+    # rust-analyzer needs cargo and the standard library's source, also when
+    # the tool itself comes from the cache.
     - uses: dtolnay/rust-toolchain@stable
       with:
         targets: wasm32-unknown-unknown
         components: rust-src
+    # The built tool is cached under a hash of its sources, so a run whose
+    # tool sources are unchanged (every run in a repository that only uses
+    # the action) skips the build.
+    - name: Hash the tool's sources
+      id: key
+      shell: bash
+      working-directory: ${{ github.action_path }}
+      run: |
+        hash=$(find Cargo.toml Cargo.lock crates -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-20)
+        echo "key=rust-pr-explorer-bin-$RUNNER_OS-$RUNNER_ARCH-$hash" >> "$GITHUB_OUTPUT"
+        echo "dir=$RUNNER_TEMP/rust-pr-explorer-bin" >> "$GITHUB_OUTPUT"
+    - name: Restore the built tool
+      id: bin
+      if: inputs.cache == 'true'
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.key.outputs.dir }}
+        key: ${{ steps.key.outputs.key }}
+    # Otherwise build it. Dependencies come from rust-cache. Caches are
+    # scoped to a branch, and a pull request can read those of its base
+    # branch, so they are only saved there (see `save-cache`): one cache
+    # that every PR starts from, instead of one per PR evicting the others.
     - uses: Swatinem/rust-cache@v2
+      if: inputs.cache == 'true' && steps.bin.outputs.cache-hit != 'true'
       with:
         workspaces: ${{ github.action_path }} -> target
         shared-key: rust-pr-explorer
+        # Keeps the build script's output, which holds the viewer's own
+        # wasm build and its dependencies.
+        cache-workspace-crates: true
+        save-if: ${{ inputs.save-cache }}
     - name: Build rust-pr-explorer
+      if: steps.bin.outputs.cache-hit != 'true'
       shell: bash
       working-directory: ${{ github.action_path }}
-      run: cargo build --release --locked -p rust-pr-explorer
+      env:
+        DIR: ${{ steps.key.outputs.dir }}
+      run: |
+        # See `[profile.action]` in Cargo.toml.
+        cargo build --profile action --locked -p rust-pr-explorer
+        mkdir -p "$DIR"
+        cp target/action/rust-pr-explorer "$DIR/"
+    - name: Cache the built tool
+      if: inputs.cache == 'true' && steps.bin.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ steps.key.outputs.dir }}
+        key: ${{ steps.key.outputs.key }}
     - name: Analyze the pull request
       id: run
       shell: bash
@@ -63,11 +121,12 @@ runs:
         REPO: ${{ inputs.repository }}
         SYNTAX_ONLY: ${{ inputs.syntax-only }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        TOOL: ${{ github.action_path }}/target/release/rust-pr-explorer
+        TOOL: ${{ steps.key.outputs.dir }}/rust-pr-explorer
       run: |
         if [ -z "$PR" ]; then
-          echo "::error::No pull request: run on a pull_request event or set the 'pr' input."
-          exit 1
+          # E.g. a push to the default branch, run to fill the caches.
+          echo "::notice::No pull request: the tool is built and cached, nothing else to do."
+          exit 0
         fi
         # The tool clones the repository itself. Authenticate that clone for
         # this step only (private repositories), the way actions/checkout
@@ -109,6 +168,7 @@ runs:
         } >> "$GITHUB_OUTPUT"
     - name: Upload the page
       id: upload
+      if: steps.run.outputs.page != ''
       uses: actions/upload-artifact@v7
       with:
         path: ${{ steps.run.outputs.page }}
@@ -117,6 +177,7 @@ runs:
         archive: false
         retention-days: ${{ inputs.retention-days }}
     - name: Link the page
+      if: steps.run.outputs.page != ''
       shell: bash
       env:
         GH_TOKEN: ${{ inputs.github-token }}
