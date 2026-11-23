@@ -1,6 +1,7 @@
 //! Rust PR Explorer: shows a pull request as changed Rust items.
 
 mod analyze;
+mod css;
 mod files;
 mod merge;
 mod parts;

@@ -6,6 +6,7 @@
 
 mod canvas;
 mod code;
+mod css;
 mod data;
 mod dom;
 mod files;
