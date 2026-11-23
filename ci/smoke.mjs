@@ -28,7 +28,7 @@ if (!page_path || !out_dir) {
 mkdirSync(out_dir, { recursive: true });
 const url = pathToFileURL(resolve(page_path)).href;
 
-const VIEWS = ["overview", "module", "canvas", "space"];
+const VIEWS = ["overview", "module", "canvas", "calls", "space"];
 const failures = [];
 // Contrast violations, keyed by theme and color pair, so that a pair that
 // shows on many elements is reported once.

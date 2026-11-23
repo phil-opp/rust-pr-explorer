@@ -294,6 +294,18 @@ fn place(d: &Data, c: &mut Canvas, gi: usize) {
     c.groups[gi].y = y;
 }
 
+/// The card of item `id` as the canvas would show it, looking from
+/// `scope`, for a view outside the canvas (see [`crate::calls`]). `full`
+/// shows an unchanged item's docs and source, not only its signature.
+pub fn card_html_for(d: &Data, scope: &str, id: &str, full: bool) -> String {
+    let mut c = Canvas::new(scope.to_string());
+    let gi = c.add_group(id, 0.0, 0.0);
+    if full {
+        c.groups[gi].expanded.insert(id.to_string());
+    }
+    card_html(d, &c, &c.groups[gi])
+}
+
 pub fn render(app: &mut App) {
     let d = app.d.clone();
     let c = &app.s.canvas;

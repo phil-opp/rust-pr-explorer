@@ -858,6 +858,52 @@ body:not(.reviewing) .hunk-rv:not(:has(.rvc.done, .rvc.stale)) { display: none; 
 .keys td:first-child { white-space: nowrap; }
 kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; background: var(--bg-alt); font-family: var(--mono); font-size: 12px; text-align: center; }
 
+/* Call view (see calls.rs): one item's card, its callers above and its
+   callees below, or left and right of it on a wide screen. */
+#view-calls { padding-top: 0; }
+.cg-trail { position: sticky; top: 0; z-index: 3; display: flex; align-items: center; gap: 6px; overflow-x: auto; white-space: nowrap; scrollbar-width: none;
+  margin: 0 -34px 14px; padding: 8px 34px; background: var(--bg); border-bottom: 1px solid var(--border); font: 13px var(--mono); }
+.cg-trail::-webkit-scrollbar { display: none; }
+.cg-trail a { color: var(--link); }
+.cg-trail .cg-here { font-weight: 700; }
+.cg-sep { color: var(--muted); }
+.cg-grid { display: flex; flex-direction: column; gap: 14px; max-width: 760px; margin: 0 auto; }
+.cg-sec h2 { margin: 0 0 6px; font-size: 15px; }
+.cg-count { color: var(--muted); font-weight: 400; }
+.cg-list { display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.cg-row { display: flex; align-items: center; gap: 8px; width: 100%; min-height: 44px; padding: 6px 12px; text-align: left;
+  border: none; border-radius: 0; border-bottom: 1px solid var(--border); background: var(--bg); font-size: 14px; cursor: pointer; }
+.cg-row:last-child { border-bottom: none; }
+.cg-row:hover { background: var(--panel); }
+.cg-row.context .cg-name { color: var(--muted); }
+.cg-name { font-family: var(--mono); overflow-wrap: anywhere; flex: 1; min-width: 0; }
+.cg-name .kind { font: 12px var(--sans); color: var(--muted); }
+.cg-mod { display: block; font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cg-n { font: 12px var(--mono); color: var(--muted); flex: none; }
+.cg-done { color: var(--added); flex: none; }
+.cg-empty { color: var(--muted); font-size: 13px; padding: 4px 0; }
+.cg-callers h2::before, .cg-users h2::before { content: "↑ "; color: var(--muted); }
+.cg-callees h2::before { content: "↓ "; color: var(--muted); }
+.cg-start .cg-sec { margin-top: 18px; max-width: 760px; }
+/* The focused card is laid out like a page section, not placed on the
+   canvas; what only the canvas can do (close it, open its relatives next
+   to it) is left out, since the lists show the relatives. */
+.cg-focus { scroll-margin-top: 44px; }
+.cg-focus .card { position: relative; left: auto !important; top: auto !important; width: auto; }
+.cg-focus .card-h .x, .cg-focus .card-badge.private,
+.cg-focus [data-act="callers"], .cg-focus [data-act="callees"], .cg-focus [data-act="uses"],
+.cg-focus [data-act="tabs"], .cg-focus [data-act="detach"] { display: none; }
+.cg-focus .card-h, .cg-focus .card-loc { cursor: auto; }
+.cg-focus .card-foot:not(:has(.card-acts > :not([data-act="callers"], [data-act="callees"], [data-act="uses"], [data-act="tabs"], [data-act="detach"], .card-badge.private, .grow))) { display: none; }
+.cg-tools { display: flex; justify-content: flex-end; margin-top: 6px; }
+@media (min-width: 1200px) {
+  .cg-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 640px) minmax(0, 1fr); align-items: start; max-width: none; }
+  .cg-above, .cg-below { position: sticky; top: 52px; display: flex; flex-direction: column; gap: 14px; }
+  .cg-above { grid-column: 1; grid-row: 1; }
+  .cg-focus { grid-column: 2; grid-row: 1; }
+  .cg-below { grid-column: 3; grid-row: 1; }
+}
+
 /* Narrow screens (phones in portrait). The sidebar becomes a drawer over the
    view, the header drops the brand and wraps, the view tabs scroll sideways,
    and pages use less padding and a smaller title. */
@@ -886,6 +932,7 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
   }
   .side-open #sidebar { display: block; }
   .page { padding: 14px 12px 60px; }
+  .cg-trail { margin: 0 -12px 12px; padding: 8px 12px; }
   .page h1 { font-size: 20px; overflow-wrap: anywhere; }
   .page h1 .title-name { font-size: 19px; }
   .page .sub { overflow-wrap: anywhere; }

@@ -1,0 +1,331 @@
+//! The call view: the call graph one item at a time, for narrow screens
+//! where the canvas needs a lot of panning and zooming. The focused item's
+//! card is in the middle, what calls it (or uses it) above, what it calls
+//! below; on a wide screen they are columns left and right of the card. A
+//! tap on a caller, a callee or any name in the card focuses that item,
+//! and the trail at the top leads back.
+
+use crate::code::esc;
+use crate::data::{Data, changed};
+use crate::review::{self, Mark};
+use crate::{App, View, dom};
+use model::{Item, Kind};
+use std::collections::BTreeSet;
+use web_sys::Element;
+
+/// The trail is cut to this many items.
+const TRAIL: usize = 30;
+
+#[derive(Default)]
+pub struct Calls {
+    /// The focused item.
+    pub focus: Option<String>,
+    /// The items focused before, oldest first.
+    trail: Vec<String>,
+    /// Unchanged items whose card shows docs and source.
+    expanded: BTreeSet<String>,
+}
+
+/// Focuses `id` and shows the call view: from the view's own links, the
+/// trail grows (or, for an item already on it, goes back to it).
+pub fn focus(app: &mut App, id: &str) {
+    if app.d.item(id).is_none() {
+        return;
+    }
+    let s = &mut app.s.calls;
+    if s.focus.as_deref() != Some(id) {
+        if let Some(i) = s.trail.iter().position(|t| t == id) {
+            s.trail.truncate(i);
+        } else if let Some(f) = s.focus.take() {
+            s.trail.push(f);
+            if s.trail.len() > TRAIL {
+                s.trail.remove(0);
+            }
+        }
+        s.focus = Some(id.to_string());
+    }
+    if app.s.view == View::Calls {
+        render(app);
+        crate::nav::record(app);
+    } else {
+        crate::set_view(app, View::Calls);
+    }
+    if let Some(sec) = dom::html_by_id("view-calls") {
+        sec.set_scroll_top(0);
+    }
+    // On a phone the card is below the callers: start there.
+    dom::raf(|| {
+        if let Some(card) = dom::query("#view-calls .cg-focus") {
+            let opts = web_sys::ScrollIntoViewOptions::new();
+            opts.set_block(web_sys::ScrollLogicalPosition::Start);
+            card.scroll_into_view_with_scroll_into_view_options(&opts);
+        }
+    });
+}
+
+/// The callees of an item, without repeats, in the order it calls them.
+fn callees(d: &Data, it: &Item) -> Vec<String> {
+    let mut seen = BTreeSet::new();
+    it.info
+        .calls
+        .iter()
+        .map(|c| c.to.clone())
+        .filter(|t| d.item(t).is_some() && seen.insert(t.clone()))
+        .collect()
+}
+
+fn callers(d: &Data, id: &str) -> Vec<String> {
+    let mut v: Vec<String> = d.callers.get(id).map_or(Vec::new(), |v| v.to_vec());
+    v.sort();
+    v.dedup();
+    v.retain(|t| d.item(t).is_some());
+    v
+}
+
+fn users(d: &Data, id: &str) -> Vec<String> {
+    let mut v: Vec<String> = d
+        .used_by
+        .get(id)
+        .map_or(Vec::new(), |v| v.iter().map(|(f, _)| f.clone()).collect());
+    v.sort();
+    v.dedup();
+    v.retain(|t| d.item(t).is_some());
+    v
+}
+
+/// Changed items first; the rest is context.
+fn changed_first(d: &Data, list: &mut [String]) {
+    list.sort_by_key(|t| !d.item(t).is_some_and(|it| changed(it) || d.touched(it)));
+}
+
+/// One related item: a row to tap, with how many callers and callees it
+/// has in turn, so that one can tell where the graph goes on.
+fn row_html(d: &Data, id: &str) -> String {
+    let Some(it) = d.item(id) else {
+        return String::new();
+    };
+    let n_in = callers(d, id).len();
+    let n_out = callees(d, it).len();
+    let counts = match (n_in, n_out) {
+        (0, 0) => String::new(),
+        _ => format!(
+            r#"<span class="cg-n" title="{n_in} caller{}, calls {n_out}">↑{n_in} ↓{n_out}</span>"#,
+            if n_in == 1 { "" } else { "s" }
+        ),
+    };
+    let done = if review::mark(id) == Some(Mark::Done) {
+        r#"<span class="cg-done" title="Reviewed">✓</span>"#
+    } else {
+        ""
+    };
+    let dot = if !changed(it) && d.touched(it) {
+        "changed"
+    } else {
+        it.status.css()
+    };
+    let context = !changed(it) && !d.touched(it);
+    format!(
+        r#"<button class="cg-row{}" data-cfocus="{}" title="{}"><span class="dot {dot}"></span><span class="cg-name"><span class="kind">{}</span> {}<span class="cg-mod">{}</span></span>{done}{counts}</button>"#,
+        if context { " context" } else { "" },
+        esc(id),
+        esc(&format!("Focus {}", d.short_path(id))),
+        it.info.kind.label(),
+        esc(&d.display_name(it)),
+        esc(&d.mod_label(d.mod_of(it))),
+    )
+}
+
+fn section_html(d: &Data, class: &str, title: &str, empty: &str, list: &[String]) -> String {
+    let rows: String = list.iter().map(|t| row_html(d, t)).collect();
+    format!(
+        r#"<section class="cg-sec {class}"><h2>{title} <span class="cg-count">{}</span></h2>{}</section>"#,
+        list.len(),
+        if rows.is_empty() {
+            format!(r#"<div class="cg-empty">{empty}</div>"#)
+        } else {
+            format!(r#"<div class="cg-list">{rows}</div>"#)
+        }
+    )
+}
+
+/// The trail of items focused before, and the focused one.
+fn trail_html(d: &Data, s: &Calls) -> String {
+    let mut parts: Vec<String> = s
+        .trail
+        .iter()
+        .filter_map(|t| d.item(t))
+        .map(|it| {
+            format!(
+                r#"<a data-cfocus="{}">{}</a>"#,
+                esc(&it.info.id),
+                esc(&d.display_name(it))
+            )
+        })
+        .collect();
+    if let Some(it) = s.focus.as_deref().and_then(|f| d.item(f)) {
+        parts.push(format!(
+            r#"<span class="cg-here">{}</span>"#,
+            esc(&d.display_name(it))
+        ));
+    }
+    format!(
+        r#"<nav class="cg-trail" aria-label="Items focused before">{}</nav>"#,
+        parts.join(r#"<span class="cg-sep">›</span>"#)
+    )
+}
+
+/// Where to start without a focus: the changed functions, those that no
+/// other changed item calls first (where a review usually starts).
+fn start_html(d: &Data) -> String {
+    let mut fns: Vec<&Item> = d
+        .items()
+        .filter(|it| {
+            it.info.kind.is_callable()
+                && (changed(it) || d.touched(it))
+                && crate::commit_filter::item_in(&it.info.id)
+        })
+        .collect();
+    let called_by_changed = |it: &Item| {
+        callers(d, &it.info.id)
+            .iter()
+            .any(|c| d.item(c).is_some_and(|c| changed(c) || d.touched(c)))
+    };
+    fns.sort_by(|a, b| {
+        called_by_changed(a)
+            .cmp(&called_by_changed(b))
+            .then_with(|| d.reading_order(a, b))
+    });
+    let (top, rest): (Vec<&Item>, Vec<&Item>) =
+        fns.into_iter().partition(|it| !called_by_changed(it));
+    let ids = |v: &[&Item]| v.iter().map(|it| it.info.id.clone()).collect::<Vec<_>>();
+    format!(
+        r#"<div class="cg-start"><h1>Calls</h1><p class="sub">The call graph one item at a time: what calls it above, what it calls below. Tap an item to focus it.</p>{}{}</div>"#,
+        section_html(
+            d,
+            "cg-roots",
+            "Changed functions nothing changed calls",
+            "None.",
+            &ids(&top)
+        ),
+        if rest.is_empty() {
+            String::new()
+        } else {
+            section_html(
+                d,
+                "cg-rest",
+                "Other changed functions",
+                "None.",
+                &ids(&rest),
+            )
+        }
+    )
+}
+
+pub fn render(app: &App) {
+    let d = &app.d;
+    let s = &app.s.calls;
+    let Some(it) = s.focus.as_deref().and_then(|f| d.item(f)) else {
+        dom::set_html("view-calls", &start_html(d));
+        return;
+    };
+    let id = it.info.id.as_str();
+    let mut up = callers(d, id);
+    changed_first(d, &mut up);
+    let mut down = callees(d, it);
+    changed_first(d, &mut down);
+    let mut used = users(d, id);
+    changed_first(d, &mut used);
+    let is_fn = it.info.kind.is_callable();
+    let mut above = String::new();
+    if is_fn || !up.is_empty() {
+        above.push_str(&section_html(
+            d,
+            "cg-callers",
+            "Called by",
+            "Nothing in the analyzed code calls this.",
+            &up,
+        ));
+    }
+    if !used.is_empty() || !is_fn && it.info.kind != Kind::Mod {
+        above.push_str(&section_html(
+            d,
+            "cg-users",
+            "Used by",
+            "Nothing in the analyzed code uses this.",
+            &used,
+        ));
+    }
+    let below = if is_fn || !down.is_empty() {
+        let unresolved = match it.info.unresolved_calls {
+            0 => String::new(),
+            n => format!(
+                r#"<div class="cg-empty">{n} call site{} not resolved.</div>"#,
+                if n > 1 { "s" } else { "" }
+            ),
+        };
+        section_html(
+            d,
+            "cg-callees",
+            "Calls",
+            "Calls nothing in the analyzed code.",
+            &down,
+        ) + &unresolved
+    } else {
+        String::new()
+    };
+    let card = crate::canvas::card_html_for(d, d.mod_of(it), id, s.expanded.contains(id));
+    let tools = format!(
+        r#"<div class="cg-tools"><button data-open="{}" title="Place this item on the canvas">Open on canvas</button></div>"#,
+        esc(id)
+    );
+    dom::set_html(
+        "view-calls",
+        &format!(
+            r#"{}<div class="cg-grid"><div class="cg-above">{above}</div><div class="cg-focus">{card}{tools}</div><div class="cg-below">{below}</div></div>"#,
+            trail_html(d, s)
+        ),
+    );
+}
+
+/// Handles a click inside the call view. Returns whether it was consumed.
+pub fn on_click(app: &mut App, el: &Element) -> bool {
+    if let Some(r) = dom::closest(el, "[data-cfocus]") {
+        let id = dom::data(&r, "cfocus").unwrap_or_default();
+        focus(app, &id);
+        return true;
+    }
+    // A name in the card: focus its item, as a click on the canvas would
+    // place it next to the card.
+    if let Some(a) = dom::closest(el, ".card a.ref[data-id]") {
+        let id = dom::data(&a, "id").unwrap_or_default();
+        if app.d.item(&id).is_some() {
+            focus(app, &id);
+            return true;
+        }
+        return false;
+    }
+    let Some(focused) = app.s.calls.focus.clone() else {
+        return false;
+    };
+    match dom::closest(el, "[data-act]")
+        .and_then(|b| dom::data(&b, "act"))
+        .as_deref()
+    {
+        Some("expand") => {
+            app.s.calls.expanded.insert(focused);
+            render(app);
+        }
+        Some("fold") => {
+            app.s.calls.expanded.remove(&focused);
+            render(app);
+        }
+        Some("page" | "drill") => {
+            app.s.module = focused;
+            crate::set_view(app, View::Module);
+        }
+        // The rest of the card's buttons ("calls", "members as tabs", …)
+        // belong to the canvas and are hidden here.
+        _ => return false,
+    }
+    true
+}
