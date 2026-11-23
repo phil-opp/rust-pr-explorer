@@ -85,7 +85,9 @@ Lists only the public items that were added, changed or removed, nested by modul
 
 Each public API change is labeled **breaking**, **non-breaking** or **check by hand**, following [Cargo's SemVer rules](https://doc.rust-lang.org/cargo/reference/semver.html), with the reasons listed under the label (and on hover). The top of the section counts them and names the version bump they need. Breaking, for example: removing an item or one of its public paths, adding a variant to an enum that isn't `#[non_exhaustive]`, adding any field to a struct whose fields are all public, a changed function signature, a function that is no longer `const` or is now `unsafe`, a new trait item without a default, a new supertrait. Non-breaking: new items and paths, new fields next to private ones, a type parameter with a default, `const` added, `unsafe` removed, a changed constant value. "Check by hand" is for what the definitions can't settle: a changed macro, `#[repr]` or enum discriminant. Body and doc changes are no API change. Members of trait impls are labeled with their impl.
 
-The sidebar lists the modules that changed or contain changes, with a status symbol and the number of changed items in each. Unchanged modules are left out (except the open module and its parents); **show unchanged modules** lists them too. When the PR changes no Rust item, the sidebar is hidden, except on the module pages, where it is the way to browse the modules.
+The sidebar lists the modules that changed or contain changes, with a status symbol and the number of changed items in each. Unchanged modules are left out (except the open module and its parents); **show unchanged modules** lists them too. When the PR changes no Rust item, the module tree is left out, except on the module pages, where it is the way to browse the modules.
+
+Below the modules, the sidebar lists every changed file with its status and its added and removed lines (the total is in the heading). A Rust file whose changes are all inside items opens its module's page; any other file scrolls to its entry in the overview.
 
 ### Files outside the Rust analysis
 
