@@ -1,5 +1,6 @@
 //! The HTML of one card: its tabs, the active item and its links.
 
+use super::open::Related;
 use super::{Canvas, Group};
 use crate::code::{Links, code_html, docs_html, esc};
 use crate::data::{Data, changed, kind_order};
@@ -46,6 +47,28 @@ fn hidden_badge(d: &Data, scope: &str, list: &[String], what: &str) -> String {
     )
 }
 
+/// A "calls", "callers" or "used by" button. Once clicked, it is shown
+/// pressed, and a second click closes the cards it opened.
+fn toggle_button(
+    c: &Canvas,
+    id: &str,
+    kind: Related,
+    act: &str,
+    title: &str,
+    label: &str,
+) -> String {
+    if c.is_expanded(id, kind) {
+        format!(
+            r#"<button data-act="{act}" class="on" aria-pressed="true" title="Close the cards this opened (Ctrl+Z closes the last ones opened)">{label}</button>"#
+        )
+    } else {
+        format!(
+            r#"<button data-act="{act}" title="{}">{label}</button>"#,
+            esc(title)
+        )
+    }
+}
+
 pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     let Some(it) = d.item(&g.active) else {
         return String::new();
@@ -88,10 +111,24 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         // Callers first: they open to the left of the card, callees to the
         // right.
         if !callers.is_empty() {
-            acts.push_str(&format!(r#"<button data-act="callers" title="Show what calls this">◂ callers <span class="n">{}</span></button>"#, callers.len()));
+            acts.push_str(&toggle_button(
+                c,
+                id,
+                Related::Callers,
+                "callers",
+                "Show what calls this",
+                &format!(r#"◂ callers <span class="n">{}</span>"#, callers.len()),
+            ));
         }
         if !callees.is_empty() {
-            acts.push_str(&format!(r#"<button data-act="callees" title="Show what this calls">calls ▸ <span class="n">{}</span></button>"#, callees.len()));
+            acts.push_str(&toggle_button(
+                c,
+                id,
+                Related::Callees,
+                "callees",
+                "Show what this calls",
+                &format!(r#"calls ▸ <span class="n">{}</span>"#, callees.len()),
+            ));
         }
         if !users.is_empty() {
             let mut ctxs: BTreeMap<UseCtx, usize> = BTreeMap::new();
@@ -103,10 +140,17 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
                 .map(|(c, n)| format!("{n} in {}", c.plural()))
                 .collect::<Vec<_>>()
                 .join(", ");
-            acts.push_str(&format!(
-                r#"<button data-act="uses" title="Show where this is used: {w}">◂ used by <span class="n">{} ({w})</span></button>"#,
-                users.len(),
-                w = esc(&wher)
+            acts.push_str(&toggle_button(
+                c,
+                id,
+                Related::UsedBy,
+                "uses",
+                &format!("Show where this is used: {wher}"),
+                &format!(
+                    r#"◂ used by <span class="n">{} ({})</span>"#,
+                    users.len(),
+                    esc(&wher)
+                ),
             ));
         }
         if !it.info.children.is_empty() {

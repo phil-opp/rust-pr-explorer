@@ -20,7 +20,7 @@ pub use events::{
     on_pointer_move, on_pointer_up, on_unfold, on_wheel,
 };
 pub use layout::show_module_graph;
-pub use open::{open, open_for_review};
+pub use open::{open, open_for_review, undo_expansion};
 
 use card::card_html;
 
@@ -84,6 +84,19 @@ pub struct Canvas {
     pub drag: Option<Drag>,
     /// The last rendered height of each card, to tell how much it changed.
     heights: HashMap<u32, f64>,
+    /// What each "calls", "callers" and "used by" click opened, oldest
+    /// first, so that a second click or Ctrl+Z can close it again.
+    expansions: Vec<Expansion>,
+}
+
+/// The cards and connectors one expansion of an item added.
+struct Expansion {
+    item: String,
+    kind: open::Related,
+    /// The cards it opened (by group), with the item each one shows.
+    cards: Vec<(u32, String)>,
+    /// Connectors it added between cards that were already open.
+    links: Vec<(String, String)>,
 }
 
 impl Canvas {
@@ -101,6 +114,7 @@ impl Canvas {
             frames: false,
             drag: None,
             heights: HashMap::new(),
+            expansions: Vec::new(),
         }
     }
 
@@ -129,7 +143,8 @@ impl Canvas {
         self.groups.len() - 1
     }
 
-    fn add_link(&mut self, from: &str, to: &str) {
+    /// Adds a connector; `false` if there already was one.
+    fn add_link(&mut self, from: &str, to: &str) -> bool {
         if from != to
             && !self
                 .links
@@ -137,7 +152,58 @@ impl Canvas {
                 .any(|(a, b)| (a == from && b == to) || (a == to && b == from))
         {
             self.links.push((from.to_string(), to.to_string()));
+            return true;
         }
+        false
+    }
+
+    /// Whether anything an expansion added is still on the canvas.
+    fn expansion_live(&self, e: &Expansion) -> bool {
+        e.cards.iter().any(|(gid, id)| {
+            self.by_gid(*gid)
+                .is_some_and(|gi| self.groups[gi].tabs.contains(id))
+        }) || e.links.iter().any(|l| self.links.contains(l))
+    }
+
+    /// The live expansion of `item` by `kind`, if any; forgets ones whose
+    /// cards and connectors were all closed by hand.
+    fn live_expansion(&mut self, item: &str, kind: open::Related) -> Option<usize> {
+        let e: Vec<Expansion> = std::mem::take(&mut self.expansions);
+        self.expansions = e.into_iter().filter(|e| self.expansion_live(e)).collect();
+        self.expansions
+            .iter()
+            .rposition(|e| e.item == item && e.kind == kind)
+    }
+
+    /// Whether `item`'s `kind` button would close what it opened.
+    fn is_expanded(&self, item: &str, kind: open::Related) -> bool {
+        self.expansions
+            .iter()
+            .any(|e| e.item == item && e.kind == kind && self.expansion_live(e))
+    }
+
+    /// Closes what an expansion opened; returns how many cards.
+    fn collapse(&mut self, i: usize) -> usize {
+        let e = self.expansions.remove(i);
+        let mut closed = 0;
+        for (gid, id) in &e.cards {
+            let Some(gi) = self.by_gid(*gid) else {
+                continue;
+            };
+            if !self.groups[gi].tabs.contains(id) {
+                continue;
+            }
+            closed += 1;
+            self.groups[gi].tabs.retain(|t| t != id);
+            self.links.retain(|(a, b)| a != id && b != id);
+            if self.groups[gi].tabs.is_empty() {
+                self.groups.remove(gi);
+            } else if self.groups[gi].active == *id {
+                self.groups[gi].active = self.groups[gi].tabs[0].clone();
+            }
+        }
+        self.links.retain(|l| !e.links.contains(l));
+        closed
     }
 }
 
