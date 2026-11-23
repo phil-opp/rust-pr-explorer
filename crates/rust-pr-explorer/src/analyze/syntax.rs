@@ -207,11 +207,11 @@ pub(super) fn item_attrs(item: &Item) -> &[Attribute] {
     }
 }
 
-/// Whether an item is left out: test-only code, except in test and bench
-/// targets, where it is the subject.
-pub(super) fn skipped(module: &str, attrs: &[Attribute]) -> bool {
+/// Whether a module belongs to an integration test or bench target, where
+/// tests are the subject rather than test-only code.
+pub(super) fn in_test_target(module: &str) -> bool {
     let target = module.split("::").next().unwrap_or("");
-    !(target.starts_with("test:") || target.starts_with("bench:")) && is_test_only(attrs)
+    target.starts_with("test:") || target.starts_with("bench:")
 }
 
 /// Whether a crate id is a target other than a library (`bin:…`,
@@ -220,7 +220,8 @@ pub fn is_extra_target(id: &str) -> bool {
     id.split("::").next().unwrap_or("").contains(':')
 }
 
-fn is_test_only(attrs: &[Attribute]) -> bool {
+/// Marked `#[test]` or `#[cfg(test)]`.
+pub(super) fn is_test_only(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|a| {
         a.path().is_ident("test")
             || (a.path().is_ident("cfg") && a.meta.to_token_stream().to_string() == "cfg (test)")

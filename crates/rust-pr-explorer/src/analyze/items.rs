@@ -558,6 +558,10 @@ impl Analyzer {
         };
         let name_pos = ident.map(|i| i.span().start().into());
         let doc_hidden = is_doc_hidden(&attrs);
+        let test_only = self.test_ids.contains(&p.id)
+            || self.is_test_code(&p.module, &attrs)
+            || p.impl_ctx.as_ref().is_some_and(|c| c.test_only)
+            || p.parent.as_ref().is_some_and(|q| self.test_ids.contains(q));
         let info = ItemInfo {
             id: p.id.clone(),
             kind,
@@ -588,6 +592,7 @@ impl Analyzer {
             sig_links,
             sig_public_links,
             reexport_of: None,
+            test_only,
         };
         Some(ItemData {
             info,

@@ -153,6 +153,8 @@ struct ImplCtx {
     self_ty: Option<String>,
     /// Visibility parent of the members.
     vis_parent: Option<String>,
+    /// The impl is test-only (`#[cfg(test)]`, or in a test-only module).
+    test_only: bool,
 }
 
 /// Output of [`Analyzer::render_node`].
@@ -213,6 +215,9 @@ pub struct Analyzer {
     crate_info: HashMap<String, (BTreeSet<String>, Option<u16>)>,
     children: HashMap<String, Vec<String>>,
     crate_roots: BTreeSet<String>,
+    /// Test-only modules, traits and impls (`#[cfg(test)]`, or inside a
+    /// test-only module) of libraries and binaries.
+    test_ids: std::collections::HashSet<String>,
     warnings: Vec<String>,
 }
 
@@ -237,6 +242,7 @@ impl Analyzer {
             crate_info: HashMap::new(),
             children: HashMap::new(),
             crate_roots: BTreeSet::new(),
+            test_ids: Default::default(),
             warnings: Vec::new(),
         };
         let mut crate_order = Vec::new();

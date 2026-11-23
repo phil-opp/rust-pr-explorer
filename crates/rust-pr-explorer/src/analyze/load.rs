@@ -4,8 +4,8 @@ use super::{
     Analyzer, ImplCtx, ModData, Node, Ns, Pending, RawImpl, Res, SrcFile, UseEntry,
     collector::Collector,
     syntax::{
-        flatten_use, generic_names, is_doc_hidden, item_attrs, path_attr, path_segments, skipped,
-        strip_body, unparse, unparse_type,
+        flatten_use, generic_names, in_test_target, is_doc_hidden, is_test_only, item_attrs,
+        path_attr, path_segments, strip_body, unparse, unparse_type,
     },
 };
 use model::{Kind, Ref};
@@ -185,6 +185,14 @@ impl Analyzer {
         }
     }
 
+    /// Whether an item of `module` with `attrs` is test-only code of a
+    /// library or binary: marked `#[test]` or `#[cfg(test)]`, or in a
+    /// test-only module. In test and bench targets, tests are the subject,
+    /// so nothing counts as test-only there.
+    pub(super) fn is_test_code(&self, module: &str, attrs: &[Attribute]) -> bool {
+        !in_test_target(module) && (is_test_only(attrs) || self.test_ids.contains(module))
+    }
+
     /// Pass 1: module tree, definitions and imports.
     pub(super) fn collect_items(
         &mut self,
@@ -194,11 +202,12 @@ impl Analyzer {
         dir: &Path,
     ) {
         for item in items {
-            if skipped(module, item_attrs(item)) {
-                continue;
-            }
+            let test = self.is_test_code(module, item_attrs(item));
             let push = |an: &mut Analyzer, name: String, kind: Kind| -> String {
                 let id = an.unique_id(&format!("{module}::{name}"), item_attrs(item), kind);
+                if test {
+                    an.test_ids.insert(id.clone());
+                }
                 let vis = match item {
                     Item::Fn(i) => i.vis.clone(),
                     Item::Struct(i) => i.vis.clone(),
@@ -299,7 +308,8 @@ impl Analyzer {
                 }),
                 Item::Use(u) => {
                     let public = matches!(u.vis, Visibility::Public(_));
-                    let doc_hidden = is_doc_hidden(&u.attrs);
+                    // A test-only import is no re-export either.
+                    let doc_hidden = is_doc_hidden(&u.attrs) || test;
                     let mut entries = Vec::new();
                     flatten_use(&u.tree, Vec::new(), &mut entries);
                     let m = self.modules.get_mut(module).unwrap();
@@ -379,6 +389,9 @@ impl Analyzer {
                         }
                     };
                     self.define(module, &name, &id, Kind::Mod, &m.vis);
+                    if test {
+                        self.test_ids.insert(id.clone());
+                    }
                     self.modules.insert(
                         id.clone(),
                         ModData {
@@ -429,9 +442,7 @@ impl Analyzer {
         let impls = std::mem::take(&mut self.impls);
         for raw in impls {
             let item = &raw.item;
-            if skipped(&raw.module, &item.attrs) {
-                continue;
-            }
+            let test = self.is_test_code(&raw.module, &item.attrs);
             let self_id = match &*item.self_ty {
                 syn::Type::Path(tp) if tp.qself.is_none() => self
                     .resolve(&raw.module, &path_segments(&tp.path), None, Some(Ns::Type))
@@ -513,6 +524,7 @@ impl Analyzer {
                             }),
                             self_ty: self_id.clone(),
                             vis_parent: self_id.clone(),
+                            test_only: test,
                         })),
                         outer_generics: generic_names(&item.generics),
                     });
@@ -534,19 +546,15 @@ impl Analyzer {
                 }),
                 self_ty: self_id.clone(),
                 vis_parent: self_id.clone(),
+                test_only: test,
             });
             for member in &item.items {
                 let (name, kind, node) = match member {
-                    syn::ImplItem::Fn(f) => {
-                        if skipped(&raw.module, &f.attrs) {
-                            continue;
-                        }
-                        (
-                            f.sig.ident.to_string(),
-                            Kind::Method,
-                            Node::ImplFn(f.clone()),
-                        )
-                    }
+                    syn::ImplItem::Fn(f) => (
+                        f.sig.ident.to_string(),
+                        Kind::Method,
+                        Node::ImplFn(f.clone()),
+                    ),
                     syn::ImplItem::Const(c) => (
                         c.ident.to_string(),
                         Kind::AssocConst,
