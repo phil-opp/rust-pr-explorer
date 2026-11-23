@@ -95,15 +95,17 @@ pre, .sig, .sbs { font-size: var(--code-size); }
 code { font-size: .92em; }
 
 /* Header */
+/* Two rows: what is shown (brand, PR title, settings, search), then how
+   to look at it (views, review). The PR title gets the room of the first. */
 #top {
-  height: 48px;
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 0 14px;
+  height: 84px;
+  box-sizing: border-box;
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
+.top-row { height: 44px; display: flex; align-items: center; gap: 18px; padding: 0 14px; }
+.top-row.sub { height: 39px; border-top: 1px solid var(--border); gap: 14px; }
+#settings-btn { white-space: nowrap; }
 .brand { font-weight: 700; white-space: nowrap; }
 #pr-title { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 14px; }
 #pr-title b { color: var(--text); }
@@ -119,7 +121,7 @@ code { font-size: .92em; }
 #search-results div { padding: 4px 10px; cursor: pointer; font-family: var(--mono); font-size: 13px; }
 #search-results div:hover, #search-results div.sel { background: var(--bg-alt); }
 
-#layout { display: flex; height: calc(100% - 48px); }
+#layout { display: flex; height: calc(100% - 84px); }
 #sidebar {
   width: 260px; flex: none; overflow: auto; border-right: 1px solid var(--border);
   background: var(--panel); padding: 10px 0; font-size: 14px;
@@ -583,12 +585,22 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 
 /* Review mode. The controls show in review mode; an existing mark always. */
 #rv-mode { white-space: nowrap; }
-#rv-mode.on { background: var(--reviewed); border-color: var(--reviewed); color: var(--bg); }
-#rv-mode.on::before { content: "☑ "; }
-#rv-mode:not(.on)::before { content: "☐ "; }
+/* In review mode, "Exit review" in the review bar takes its place. */
+.reviewing #rv-mode { display: none; }
 #rv-bar { display: none; align-items: center; gap: 8px; font-size: 13px; white-space: nowrap; }
 .reviewing #rv-bar { display: flex; }
 #rv-bar button { font-size: 12px; padding: 2px 8px; }
+/* Count and meter as one unit, stacked. */
+.rv-progress { display: inline-flex; flex-direction: column; gap: 3px; min-width: 90px; }
+.rv-progress .rv-count { font-size: 12px; line-height: 1.1; }
+.rv-progress.all .rv-count { color: var(--reviewed); font-weight: 600; }
+.rv-progress .rv-meter { width: 100%; }
+#rv-bar #rv-next { border-color: var(--link); color: var(--link); }
+#rv-bar #rv-finish.primary { background: var(--reviewed); border-color: var(--reviewed); color: var(--bg); font-weight: 600; }
+/* Removes every mark: kept apart from the other actions, and quiet. */
+#rv-bar #rv-clear { margin-left: 6px; border-color: transparent; background: none; color: var(--muted); }
+#rv-bar #rv-clear:hover { color: var(--removed); border-color: var(--removed); }
+#rv-bar #rv-exit { color: var(--muted); }
 .rv-meter { width: 70px; height: 6px; border-radius: 3px; background: var(--bg-alt); border: 1px solid var(--border); overflow: hidden; }
 .rv-meter span { display: block; height: 100%; background: var(--reviewed); }
 .rvc { display: inline-flex; gap: 4px; align-items: center; }

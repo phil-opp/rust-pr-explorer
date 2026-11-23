@@ -808,16 +808,36 @@ fn update_groups() {
     }
 }
 
-/// The progress and the "next" button in the header.
+/// Leaves review mode; the marks stay.
+const EXIT: &str = r#"<button id="rv-exit" title="Hide the review controls; your marks stay">Exit review</button>"#;
+
+/// The progress and the review actions in the header: "Next" while
+/// something is left, then "Finish review…" as the main action. "Clear"
+/// and "Exit review" sit apart.
 pub fn update_progress() {
     update_groups();
     let (done, total) = progress();
     let html = match (done * 100).checked_div(total) {
-        None => r#"<span class="dim">Nothing to review</span>"#.to_string(),
-        Some(percent) => format!(
-            r#"<span class="rv-count" title="Reviewed items and files">{done} / {total} reviewed</span><span class="rv-meter"><span style="width:{}%"></span></span><button id="rv-next" title="Go to the next unreviewed item (n)">Next ▸</button><button id="rv-finish" title="Collect your verdicts and comments for GitHub">Finish review…</button><button id="rv-clear" title="Remove all review marks">Clear</button>"#,
-            percent
-        ),
+        None => format!(r#"<span class="dim">Nothing to review</span>{EXIT}"#),
+        Some(percent) => {
+            let all = done == total;
+            let count = if all {
+                format!("✓ All {total} reviewed")
+            } else {
+                format!("{done} / {total} reviewed")
+            };
+            let next = if all {
+                String::new()
+            } else {
+                r#"<button id="rv-next" title="Go to the next unreviewed item (n)">Next ▸</button>"#
+                    .to_string()
+            };
+            format!(
+                r#"<span class="rv-progress{}" title="Reviewed items and files"><span class="rv-count">{count}</span><span class="rv-meter"><span style="width:{percent}%"></span></span></span>{next}<button id="rv-finish" class="{}" title="Collect your verdicts and comments for GitHub">Finish review…</button><button id="rv-clear" title="Remove all review marks">Clear marks</button>{EXIT}"#,
+                if all { " all" } else { "" },
+                if all { "primary" } else { "" },
+            )
+        }
     };
     dom::set_html("rv-bar", &html);
 }
