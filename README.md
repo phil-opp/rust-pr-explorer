@@ -40,6 +40,32 @@ For `pr`, the repository is cloned without file contents (`--filter=blob:none`),
 
 The demo in `fixtures/demo` is a small calculator crate. Its "PR" adds variables (a new `env` module, a changed `evaluate` signature, new error variants), moves a helper between modules, re-exports `ast::Op` at the crate root and drops the root re-export of `parser::Parser`, extends one doc comment (shown as a word diff), and changes some import styles and formatting. That last part does not show up as a change.
 
+## GitHub Action
+
+The repository is also a GitHub Action that builds the page for every pull request and links it in a comment on the PR:
+
+```yaml
+# .github/workflows/pr-explorer.yml
+name: PR Explorer
+on: pull_request
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: phil-opp/diff-viewer@main
+```
+
+The action builds the tool (cached after the first run), runs `pr` on the pull request and uploads the page as a workflow artifact. The artifact is a single unzipped HTML file, so the link opens the page directly in the browser. The comment is posted once and updated on every push, with a one-line summary of the changed items. The link is also in the job summary.
+
+Who can open the page: anyone logged in to GitHub with access to the repository, the same people who can see the workflow run. It expires with the run's artifacts (90 days unless the repository sets otherwise, or the `retention-days` input).
+
+Inputs: `comment: false` leaves out the comment, `syntax-only: true` skips rust-analyzer, and `pr` and `repository` pick another pull request (by default the one that triggered the workflow). The `page-url` output is the link.
+
+The action never builds or runs the PR's code, so it has no `--trust-project-code` input: the token is in the analysis step's environment. On a PR from a fork, the token GitHub gives the workflow is read-only, so the page is built and uploaded but the comment fails with a warning; the link is still in the job summary.
+
 ## What you see
 
 ### Overview
