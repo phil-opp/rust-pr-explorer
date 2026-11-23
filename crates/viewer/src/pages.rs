@@ -129,16 +129,25 @@ pub fn render_sidebar(app: &App) {
         let subs = submodules(d, m);
         let changes = d.changes_in(m, false);
         let n = changes.len();
-        // In review mode: how many still need a review.
-        let count = if n == 0 {
-            String::new()
-        } else if crate::review::is_on() {
-            match crate::review::open_count(changes.iter().map(|c| c.info.id.as_str())) {
+        // In review mode: how many still need a review. A module without
+        // changes of its own gets the ✓ once its submodules are reviewed.
+        let open_in =
+            |list: &[&Item]| crate::review::open_count(list.iter().map(|c| c.info.id.as_str()));
+        let count = if !crate::review::is_on() {
+            if n == 0 { String::new() } else { n.to_string() }
+        } else if n == 0 {
+            let deep = d.changes_in(m, true);
+            if !deep.is_empty() && open_in(&deep) == 0 {
+                r#"<span class="rv-all" title="Everything in its submodules is reviewed">✓</span>"#
+                    .to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            match open_in(&changes) {
                 0 => r#"<span class="rv-all" title="All reviewed">✓</span>"#.to_string(),
                 left => format!(r#"<span title="{left} of {n} not reviewed yet">{left}</span>"#),
             }
-        } else {
-            n.to_string()
         };
         let private = !d.is_root(it) && it.info.vis_scope.is_some();
         let sel = app.s.view == crate::View::Module && app.s.module == m;
@@ -219,7 +228,7 @@ pub fn render_sidebar(app: &App) {
               <div>Calls resolved with: {}</div>
             </div>{warnings}"#,
             if crate::review::is_on() {
-                "Numbers: changed items defined directly in the module that are not reviewed yet; ✓ when all are."
+                "Numbers: changed items defined directly in the module that are not reviewed yet; ✓ when all are, and for a module without changes of its own, when everything in its submodules is."
             } else {
                 "Numbers: changed items defined directly in the module."
             },
