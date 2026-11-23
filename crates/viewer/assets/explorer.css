@@ -570,3 +570,13 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .rv-flash { animation: rv-flash 1.4s ease-out; }
 @keyframes rv-flash { from { box-shadow: 0 0 0 4px var(--highlight); } to { box-shadow: 0 0 0 0 transparent; } }
+.rv-since { border: 1px solid var(--changed); color: var(--changed); background: var(--bg); }
+.rv-since:hover { background: var(--changed-bg); }
+.since-intro { margin: 0 0 8px; }
+#modal-b h4 { margin: 14px 0 4px; font-size: 14px; }
+.since-stats { font-weight: 400; font-size: 12px; margin-left: 6px; }
+.since-same { margin: 0; }
+.since-facts { margin: 4px 0; padding-left: 18px; }
+.since-facts li.add { color: var(--added); }
+.since-facts li.del { color: var(--removed); }
+.since-facts li .dim { margin-right: 4px; }
