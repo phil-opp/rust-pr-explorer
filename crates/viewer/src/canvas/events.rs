@@ -7,6 +7,7 @@ use super::{
     open::{Related, close_tab, expand, members_as_tabs},
     place, render, visible,
 };
+use crate::data::within;
 use crate::{App, View, dom, toast};
 use web_sys::{Element, PointerEvent, WheelEvent};
 
@@ -106,10 +107,35 @@ pub fn on_pointer_down(app: &mut App, el: &Element, ev: &PointerEvent) -> bool {
         return false;
     }
     let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
+    let d = app.d.clone();
     let c = &mut app.s.canvas;
+    if let Some(frame) = dom::closest(el, "[data-frame]") {
+        let m = dom::data(&frame, "frame").unwrap_or_default();
+        ev.prevent_default();
+        let cards = c
+            .groups
+            .iter()
+            .filter(|g| {
+                visible(&d, c, g) && d.item(&g.active).is_some_and(|it| within(d.mod_of(it), &m))
+            })
+            .map(|g| (g.gid, g.x, g.y))
+            .collect();
+        c.drag = Some(Drag::Frame {
+            sx: x,
+            sy: y,
+            cards,
+        });
+        return true;
+    }
     if let Some(card) = dom::closest(el, ".card") {
-        let handle = dom::closest(el, ".card-h, .card-tabs").is_some();
-        if !handle || dom::closest(el, "[data-close], button, a").is_some() {
+        // Cards are moved by their header, tabs, location line, footer, or
+        // border; not by code or text, which can be selected.
+        let handle = el == &card
+            || dom::closest(el, ".card-h, .card-tabs, .card-loc").is_some()
+            || el
+                .matches(".card-foot, .card-acts, .card-rv")
+                .unwrap_or(false);
+        if !handle || dom::closest(el, "[data-close], button, a, input, textarea").is_some() {
             return false;
         }
         let Some(gi) = dom::data(&card, "gid")
@@ -178,6 +204,20 @@ pub fn on_pointer_move(app: &mut App, ev: &PointerEvent) {
             if let Some(target) = drop_target(x, y, gid) {
                 dom::toggle_class(&target, "hover-target", true);
             }
+        }
+        Some(Drag::Frame { sx, sy, ref cards }) => {
+            let (dx, dy) = ((x - sx) / c.pan.k, (y - sy) / c.pan.k);
+            for &(gid, gx, gy) in cards {
+                let Some(gi) = c.by_gid(gid) else { continue };
+                let g = &mut c.groups[gi];
+                g.x = gx + dx;
+                g.y = gy + dy;
+                if let Some(el) = card_el(gid) {
+                    dom::set_style(&el, "left", &format!("{}px", g.x));
+                    dom::set_style(&el, "top", &format!("{}px", g.y));
+                }
+            }
+            draw_edges(app);
         }
         Some(Drag::Pan { sx, sy, px, py }) => {
             c.pan.x = px + x - sx;
