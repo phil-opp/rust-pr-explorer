@@ -25,8 +25,11 @@ inputs:
     default: ${{ github.repository }}
   comment:
     description: >-
-      Post a comment on the PR that links the page, and update it on every
-      run. With `false`, the link is only in the job summary.
+      Post a comment on the PR that links the page. Every push that changes
+      the PR gets a new comment, which also links a page of the changes
+      since the previous comment's commit; a push that only merges the base
+      branch or rebases onto it updates the previous comment. With `false`,
+      the link is only in the job summary.
     default: "true"
   syntax-only:
     description: Skip rust-analyzer (faster, but method calls stay unresolved).
@@ -40,6 +43,17 @@ inputs:
       the PR's crates and their dependencies to every run. Refused under
       `pull_request_target`, where the PR's code would run with the base
       repository's permissions.
+    default: "false"
+  trust-project-code:
+    description: >-
+      Let rust-analyzer run the PR's build scripts and procedural macros, so
+      that calls into generated code resolve too. This runs the PR's code
+      with the job's token, like a CI job that runs the PR's tests does.
+      Refused under `pull_request_target`, whose token can write also on
+      PRs from forks (see the README). The cargo target directory of the
+      analysis is cached like the build's dependencies (see `cache` and
+      `save-cache`); on a push without a PR, the action fills it from the
+      checked out repository.
     default: "false"
   cache:
     description: >-
@@ -65,10 +79,27 @@ outputs:
   page-path:
     description: Local path of the generated page.
     value: ${{ steps.run.outputs.page }}
+  since-page-url:
+    description: >-
+      URL of the uploaded page of the changes since the previous explorer
+      comment's commit; empty if there is none.
+    value: ${{ steps.upload-since.outputs.artifact-url }}
 
 runs:
   using: composite
   steps:
+    - name: Check the inputs
+      if: inputs.trust-project-code == 'true' || inputs.semver-checks == 'true'
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+      run: |
+        # `pull_request_target` gives the job secrets and a token that can
+        # write, also on PRs from forks: the PR's code must not run there.
+        if [ "$EVENT" = "pull_request_target" ]; then
+          echo "::error::trust-project-code and semver-checks run the PR's code, so they are refused under pull_request_target."
+          exit 1
+        fi
     # rust-analyzer needs cargo and the standard library's source, also when
     # the tool itself comes from the cache.
     - uses: dtolnay/rust-toolchain@stable
@@ -86,6 +117,10 @@ runs:
         hash=$(find Cargo.toml Cargo.lock crates -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-20)
         echo "key=rust-pr-explorer-bin-$RUNNER_OS-$RUNNER_ARCH-$hash" >> "$GITHUB_OUTPUT"
         echo "dir=$RUNNER_TEMP/rust-pr-explorer-bin" >> "$GITHUB_OUTPUT"
+        # The analysis' target directory (trusted mode) only fits the
+        # toolchain that built it.
+        echo "rustc=$(rustc -V | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+        echo "target=$RUNNER_TEMP/rust-pr-explorer-target" >> "$GITHUB_OUTPUT"
     - name: Restore the built tool
       id: bin
       if: inputs.cache == 'true'
@@ -113,6 +148,9 @@ runs:
       env:
         DIR: ${{ steps.key.outputs.dir }}
       run: |
+        # Only for the analysis of this repository (see build.rs): the tool
+        # itself needs its viewer.
+        unset RUST_PR_EXPLORER_STUB_VIEWER
         # See `[profile.action]` in Cargo.toml.
         cargo build --profile action --locked -p rust-pr-explorer
         mkdir -p "$DIR"
@@ -123,12 +161,25 @@ runs:
       with:
         path: ${{ steps.key.outputs.dir }}
         key: ${{ steps.key.outputs.key }}
+    # In trusted mode, cargo builds the dependencies' build scripts and
+    # proc macros for the analysis: most of a trusted run's time when they
+    # aren't cached. Keyed by the checked out repository's lockfiles; a
+    # PR whose dependencies differ starts from the default branch's
+    # directory.
     # A prebuilt binary, in a few seconds instead of a 5 minute build.
     - name: Install cargo-semver-checks
       if: inputs.semver-checks == 'true' && inputs.pr != ''
       uses: taiki-e/install-action@v2
       with:
         tool: cargo-semver-checks
+    - name: Restore the analysis' target directory
+      id: target
+      if: inputs.trust-project-code == 'true' && inputs.cache == 'true'
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.key.outputs.target }}
+        key: rust-pr-explorer-target-${{ runner.os }}-${{ runner.arch }}-${{ steps.key.outputs.rustc }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: rust-pr-explorer-target-${{ runner.os }}-${{ runner.arch }}-${{ steps.key.outputs.rustc }}-
     - name: Analyze the pull request
       id: run
       shell: bash
@@ -136,17 +187,63 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         PR: ${{ inputs.pr }}
         REPO: ${{ inputs.repository }}
+        COMMENT: ${{ inputs.comment }}
         SYNTAX_ONLY: ${{ inputs.syntax-only }}
         SEMVER_CHECKS: ${{ inputs.semver-checks }}
-        EVENT: ${{ github.event_name }}
+        TRUST: ${{ inputs.trust-project-code }}
+        TARGET: ${{ steps.key.outputs.target }}
+        FILL_TARGET: ${{ inputs.cache == 'true' && inputs.save-cache == 'true' && steps.target.outputs.cache-hit != 'true' }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         TOOL: ${{ steps.key.outputs.dir }}/rust-pr-explorer
       run: |
+        trusted=()
+        if [ "$TRUST" = "true" ]; then trusted=(--trust-project-code --target-dir "$TARGET"); fi
         if [ -z "$PR" ]; then
           # E.g. a push to the default branch, run to fill the caches.
-          echo "::notice::No pull request: the tool is built and cached, nothing else to do."
+          if [ "$TRUST" = "true" ] && [ "$FILL_TARGET" = "true" ]; then
+            # Analyzing the checked out repository builds what a PR's
+            # analysis needs.
+            echo "::notice::No pull request: filling the analysis' target directory from the checked out repository."
+            "$TOOL" dirs "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" -o "$RUNNER_TEMP/warm-up.html" "${trusted[@]}"
+          else
+            echo "::notice::No pull request: the tool is built and cached, nothing else to do."
+          fi
           exit 0
         fi
+        dir="$RUNNER_TEMP/rust-pr-explorer"
+        mkdir -p "$dir"
+
+        # The latest explorer comment on the PR, if any, says which commit
+        # it showed: the page of the changes since then starts there.
+        # Only comments by the workflow's bot or by people with write
+        # access count, so that nobody else can pick that commit (or the
+        # links that are carried over from it).
+        prev=
+        if [ "$COMMENT" = "true" ]; then
+          gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '
+            .[]
+            | select(.body | startswith("<!-- rust-pr-explorer"))
+            | select(.user.login == "github-actions[bot]"
+                or (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")))
+            | {id, body} | @json' > "$dir/comments.jsonl" \
+            || echo "::warning::Could not read the PR's comments: every run posts a new one, without the changes since the last"
+          if [ -s "$dir/comments.jsonl" ]; then
+            tail -n1 "$dir/comments.jsonl" | jq -r '.body' > "$dir/previous.md"
+            tail -n1 "$dir/comments.jsonl" | jq -r '.id' > "$dir/previous-id"
+            # `<!-- rust-pr-explorer {…} -->`, else a comment from before
+            # that, which names its commit as "built for <sha>".
+            state=$(sed -n '1s/^<!-- rust-pr-explorer \({.*}\) -->$/\1/p' "$dir/previous.md")
+            if [ -n "$state" ] && jq -e . <<< "$state" > /dev/null 2>&1; then
+              printf '%s' "$state" > "$dir/previous.json"
+              prev=$(jq -r '.head // ""' <<< "$state")
+            else
+              echo '{}' > "$dir/previous.json"
+              prev=$(grep -oE 'built for [0-9a-f]{40}' "$dir/previous.md" | head -n1 | cut -c11-)
+            fi
+            if ! [[ "$prev" =~ ^[0-9a-f]{40}$ ]]; then prev=; fi
+          fi
+        fi
+
         # The tool clones the repository itself. Authenticate that clone for
         # this step only (private repositories), the way actions/checkout
         # does, without writing the token to any git config file.
@@ -157,49 +254,60 @@ runs:
         export GIT_CONFIG_VALUE_0="AUTHORIZATION: basic $auth"
 
         short=${HEAD_SHA:0:7}
-        dir="$RUNNER_TEMP/rust-pr-explorer"
-        mkdir -p "$dir"
         # The artifact is named after the file, so the name must be unique
         # per run.
         page="$dir/pr-explorer-${PR}${short:+-$short}.html"
         args=()
         if [ "$SYNTAX_ONLY" = "true" ]; then args+=(--syntax-only); fi
-        # By default the PR's code is never built or run (no
-        # --trust-project-code): the token is in this step's environment.
-        # `semver-checks` runs it, like any CI job that builds or tests the
-        # PR: under `pull_request`, a fork's PR gets a read-only token and no
-        # secrets. Under `pull_request_target` it would get the base
-        # repository's token, so that is refused.
-        if [ "$SEMVER_CHECKS" = "true" ]; then
-          if [ "$EVENT" = "pull_request_target" ]; then
-            echo "::error::semver-checks runs the PR's code, which must not happen under pull_request_target. Use the pull_request trigger."
-            exit 1
-          fi
-          args+=(--semver-checks)
-        fi
-        "$TOOL" pr "$REPO#$PR" -o "$page" --json "$dir/analysis.json" "${args[@]}"
+        # Runs the PR's code too (see "Check the inputs").
+        if [ "$SEMVER_CHECKS" = "true" ]; then args+=(--semver-checks); fi
+        if [ -n "$prev" ] && [ "$prev" != "$HEAD_SHA" ]; then args+=(--since "$prev"); fi
+        # Without trust-project-code and semver-checks, the PR's code is never
+        # built or run.
+        "$TOOL" pr "$REPO#$PR" -o "$page" --json "$dir/analysis.json" "${args[@]}" "${trusted[@]}" > "$dir/stdout"
+        since=$(sed -n 's/^since: //p' "$dir/stdout" | tail -n1)
 
         # A one-line summary for the comment: changed items (not modules),
         # how many of them are public, and changed files.
-        summary=$(jq -r '
-          [.items[] | select(.kind != "mod" and .status != "unchanged")] as $c
-          | ($c | map(select(.status == "added")) | length) as $a
-          | ($c | map(select(.status == "changed")) | length) as $ch
-          | ($c | map(select(.status == "removed")) | length) as $r
-          | ($c | map(select((.public_paths // []) | length > 0)) | length) as $p
-          | (.files | length) as $f
-          | if ($c | length) == 0 then "No Rust items changed; \($f) changed files."
-            else "\($c | length) changed items (\($a) added, \($ch) changed, \($r) removed), \($p) of them public, in \($f) changed files."
-            end
-          + (if .semver_checks == null then ""
-             elif .semver_checks.error != null then " cargo-semver-checks could not check this PR."
-             else " cargo-semver-checks: \(.semver_checks.findings | length) findings."
-             end)
-        ' "$dir/analysis.json")
+        summarize() {
+          jq -r '
+            [.items[] | select(.kind != "mod" and .status != "unchanged")] as $c
+            | ($c | map(select(.status == "added")) | length) as $a
+            | ($c | map(select(.status == "changed")) | length) as $ch
+            | ($c | map(select(.status == "removed")) | length) as $r
+            | ($c | map(select((.public_paths // []) | length > 0)) | length) as $p
+            | (.files | length) as $f
+            | if ($c | length) == 0 then "No Rust items changed; \($f) changed files."
+              else "\($c | length) changed items (\($a) added, \($ch) changed, \($r) removed), \($p) of them public, in \($f) changed files."
+              end
+            + (if .semver_checks == null then ""
+               elif .semver_checks.error != null then " cargo-semver-checks could not check this PR."
+               else " cargo-semver-checks: \(.semver_checks.findings | length) findings."
+               end)
+          ' "$1"
+        }
         {
           echo "page=$page"
-          echo "summary=$summary"
+          echo "summary=$(summarize "$dir/analysis.json")"
+          echo "head=$(jq -r '.meta.pr.head_commit // ""' "$dir/analysis.json")"
+          echo "previous=$prev"
+          # `changes`, `none` or `unavailable (why)`; empty without --since.
+          echo "since=$since"
+          if [ "$since" = "changes" ]; then
+            echo "since-page=${page%.html}-since.html"
+            echo "since-summary=$(summarize "$dir/analysis-since.json")"
+          fi
+          if [ -f "$dir/previous-id" ]; then
+            echo "previous-id=$(cat "$dir/previous-id")"
+            echo "previous-state=$(cat "$dir/previous.json")"
+          fi
         } >> "$GITHUB_OUTPUT"
+    - name: Cache the analysis' target directory
+      if: inputs.trust-project-code == 'true' && inputs.cache == 'true' && inputs.save-cache == 'true' && steps.target.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ steps.key.outputs.target }}
+        key: ${{ steps.target.outputs.cache-primary-key }}
     - name: Upload the page
       id: upload
       if: steps.run.outputs.page != ''
@@ -208,6 +316,14 @@ runs:
         path: ${{ steps.run.outputs.page }}
         # A single unzipped file: GitHub shows it directly in the browser.
         # The page is self-contained (styles, script, wasm and data inline).
+        archive: false
+        retention-days: ${{ inputs.retention-days }}
+    - name: Upload the page of the changes since the last comment
+      id: upload-since
+      if: steps.run.outputs.since-page != ''
+      uses: actions/upload-artifact@v7
+      with:
+        path: ${{ steps.run.outputs.since-page }}
         archive: false
         retention-days: ${{ inputs.retention-days }}
     - name: Link the page
@@ -220,29 +336,69 @@ runs:
         COMMENT: ${{ inputs.comment }}
         URL: ${{ steps.upload.outputs.artifact-url }}
         SUMMARY: ${{ steps.run.outputs.summary }}
-        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        HEAD: ${{ steps.run.outputs.head }}
+        PREVIOUS: ${{ steps.run.outputs.previous }}
+        PREVIOUS_ID: ${{ steps.run.outputs.previous-id }}
+        PREVIOUS_STATE: ${{ steps.run.outputs.previous-state }}
+        SINCE: ${{ steps.run.outputs.since }}
+        SINCE_URL: ${{ steps.upload-since.outputs.artifact-url }}
+        SINCE_SUMMARY: ${{ steps.run.outputs.since-summary }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
-        marker='<!-- rust-pr-explorer -->'
-        commit=${HEAD_SHA:+ for $HEAD_SHA}
-        body="$marker
-        ### [Explore this PR as changed Rust items]($URL)
+        # A new comment for every push that changed the PR, with the
+        # changes since the previous comment's commit. A push that only
+        # merged the base branch or rebased onto it (and a re-run) updates
+        # the previous comment instead, which keeps its "since" link.
+        if [ -n "$PREVIOUS_ID" ] && { [ "$SINCE" = "none" ] || [ "$PREVIOUS" = "$HEAD" ]; }; then
+          mode=update
+          since=$(jq -c '.since // empty' <<< "$PREVIOUS_STATE")
+        else
+          mode=new
+          since=
+          if [ "$SINCE" = "changes" ]; then
+            since=$(jq -nc --arg from "$PREVIOUS" --arg to "$HEAD" --arg url "$SINCE_URL" \
+              --arg summary "$SINCE_SUMMARY" '{$from, $to, $url, $summary}')
+          fi
+        fi
+        state=$(jq -nc --arg head "$HEAD" --argjson since "${since:-null}" \
+          '{$head} + (if $since then {$since} else {} end)')
+        body="<!-- rust-pr-explorer $state -->
+        ### Rust PR Explorer
 
-        $SUMMARY
+        - **[All changes]($URL)** up to \`${HEAD:0:7}\`: $SUMMARY"
+        if [ -n "$since" ]; then
+          from=$(jq -r '.from' <<< "$since")
+          to=$(jq -r '.to' <<< "$since")
+          upto=
+          if [ "$to" != "$HEAD" ]; then upto=" up to \`${to:0:7}\`"; fi
+          body="$body
+        - **[Changes since \`${from:0:7}\`]($(jq -r '.url' <<< "$since"))**$upto: $(jq -r '.summary' <<< "$since")
 
-        Page built${commit} by [this run]($RUN_URL). The link needs a GitHub login with access to this repository, and it expires with the run's artifacts."
+        \`${from:0:7}\` is the commit the previous explorer comment showed. What the base branch changed since then (merged in or rebased onto) is left out."
+        elif [ "$mode" = new ] && [[ "$SINCE" == unavailable* ]]; then
+          body="$body
+        - The changes since \`${PREVIOUS:0:7}\`, the commit the previous explorer comment showed, could not be shown ${SINCE#unavailable }."
+        fi
+        if [ "$mode" = update ] && [ "$PREVIOUS" != "$HEAD" ]; then
+          body="$body
+
+        Updated for \`${HEAD:0:7}\`, which only merged the base branch or was rebased onto it."
+        fi
+        body="$body
+
+        Built by [this run]($RUN_URL). The links need a GitHub login with access to this repository, and they expire with the run's artifacts."
         {
           echo "### Rust PR Explorer"
           echo
           echo "[Open the page]($URL): $SUMMARY"
+          if [ -n "$SINCE_URL" ]; then
+            echo
+            echo "[Changes since ${PREVIOUS:0:7}]($SINCE_URL): $SINCE_SUMMARY"
+          fi
         } >> "$GITHUB_STEP_SUMMARY"
         if [ "$COMMENT" != "true" ]; then exit 0; fi
-        # One comment per PR, updated on every run.
-        id=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
-          --jq ".[] | select(.body | startswith(\"$marker\")) | .id" \
-          | head -n1)
-        if [ -n "$id" ]; then
-          result=$(gh api -X PATCH "repos/$REPO/issues/comments/$id" -f body="$body" 2>&1) || failed=1
+        if [ "$mode" = update ]; then
+          result=$(gh api -X PATCH "repos/$REPO/issues/comments/$PREVIOUS_ID" -f body="$body" 2>&1) || failed=1
         else
           result=$(gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$body" 2>&1) || failed=1
         fi

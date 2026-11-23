@@ -591,6 +591,7 @@ fn semantic_calls() {
         root,
         std::slice::from_ref(root),
         Trust::Untrusted,
+        None,
         &mut analysis,
     )
     .unwrap();
@@ -1290,7 +1291,14 @@ fn mutual_glob_imports_stay_fast() {
 #[cfg(feature = "semantic")]
 fn analyze_semantic(dir: &Path) -> crate::analyze::Analysis {
     let mut analysis = Analyzer::run(dir, &crate::source::find_crates(dir));
-    crate::semantic::refine(dir, &[dir.to_path_buf()], Trust::Untrusted, &mut analysis).unwrap();
+    crate::semantic::refine(
+        dir,
+        &[dir.to_path_buf()],
+        Trust::Untrusted,
+        None,
+        &mut analysis,
+    )
+    .unwrap();
     analysis
 }
 

@@ -28,6 +28,9 @@ pub fn arrange_by_module(app: &mut App) {
     }
     const COLS: usize = 2;
     const GAP: f64 = 40.0;
+    // Wider between columns: connectors between the columns run there, each
+    // in a lane of its own.
+    const COL_GAP: f64 = 80.0;
     struct Layout<'a> {
         d: &'a Data,
         c: &'a mut Canvas,
@@ -59,11 +62,11 @@ pub fn arrange_by_module(app: &mut App) {
                 let mut rh: f64 = 0.0;
                 for (j, &gi) in row.iter().enumerate() {
                     let g = &mut self.c.groups[gi];
-                    g.x = x + 24.0 + j as f64 * (CARD_W + GAP);
+                    g.x = x + 24.0 + j as f64 * (CARD_W + COL_GAP);
                     g.y = *cy;
                     rh = rh.max(self.heights.get(&g.gid).copied().unwrap_or(200.0));
                 }
-                *w = w.max(row.len() as f64 * (CARD_W + GAP));
+                *w = w.max(row.len() as f64 * (CARD_W + COL_GAP) - COL_GAP + GAP);
                 *cy += rh + GAP;
             }
         }

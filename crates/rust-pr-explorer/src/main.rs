@@ -56,6 +56,17 @@ struct Cli {
     /// `--trust-project-code`).
     #[arg(long, global = true)]
     semver_checks: bool,
+    /// With `--trust-project-code`: the cargo target directory for the
+    /// build scripts and proc macros, shared by both versions (and the
+    /// "since" one). Keep it between runs (e.g. in a CI cache) to only
+    /// build the dependencies once. Defaults to a temporary directory.
+    #[arg(
+        long,
+        global = true,
+        env = "RUST_PR_EXPLORER_TARGET_DIR",
+        requires = "trust_project_code"
+    )]
+    target_dir: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -66,6 +77,14 @@ enum Input {
         /// Base revision (defaults to the merge base with the default branch).
         #[arg(long)]
         base: Option<String>,
+        /// An earlier commit of the PR (in full): also write a page with
+        /// only what changed since then, leaving out what the base branch
+        /// changed in between. It goes next to `--out` (and `--json`), with
+        /// `-since` added to the name, if the PR changed since then. Prints
+        /// `since: changes`, `since: none` or `since: unavailable (reason)`
+        /// on stdout.
+        #[arg(long, conflicts_with = "base")]
+        since: Option<String>,
     },
     /// Two revisions of a local git repository.
     Git {
@@ -94,13 +113,40 @@ fn main() -> Result<()> {
         source::Trust::Untrusted
     };
     let checkout = match &cli.input {
-        Input::Pr { pr, base } => source::Checkout::from_github_pr(pr, base.as_deref(), trust)?,
+        Input::Pr { pr, base, since } => {
+            source::Checkout::from_github_pr(pr, base.as_deref(), since.as_deref(), trust)?
+        }
         Input::Git { repo, base, head } => source::Checkout::from_git(repo, base, head, trust)?,
         Input::Dirs { base, head } => source::Checkout::from_dirs(base, head, trust)?,
     };
-    let mut output = analyze_checkout(&checkout, !cli.syntax_only, trust);
+    // Build scripts and proc macros are built once, for all versions: the
+    // registry dependencies are the same in each (only the workspace's own
+    // crates are rebuilt, because their paths differ).
+    let temp_target;
+    let given_target;
+    let target_dir = match (trust, &cli.target_dir) {
+        (source::Trust::Untrusted, _) => None,
+        (source::Trust::Trusted, Some(dir)) => {
+            // cargo runs in each checkout: a relative path would point into
+            // it.
+            given_target = std::path::absolute(dir)?;
+            Some(given_target.as_path())
+        }
+        (source::Trust::Trusted, None) => {
+            temp_target = tempfile::tempdir()?;
+            Some(temp_target.path())
+        }
+    };
+    let how = Settings {
+        semantic: !cli.syntax_only,
+        trust,
+        target_dir,
+    };
+    let (mut output, since) = analyze_all(&checkout, &how);
     if cli.semver_checks {
         eprintln!("running cargo-semver-checks: build scripts and proc macros may run");
+        // Base and head: the page of the changes since an earlier commit
+        // keeps the definitions' labels.
         semver_checks::run(&checkout.base_dir, &checkout.head_dir, &mut output);
         if let Some(r) = &output.semver_checks {
             match &r.error {
@@ -114,16 +160,47 @@ fn main() -> Result<()> {
             }
         }
     }
+    write_outputs(&output, &cli.out, cli.json.as_deref())?;
+    match (&checkout.since, since) {
+        (Some(source::Since::Changes(s)), Some(since)) => {
+            eprintln!("changes since {}:", s.commit);
+            write_outputs(
+                &since,
+                &with_suffix(&cli.out, "-since"),
+                cli.json
+                    .as_deref()
+                    .map(|j| with_suffix(j, "-since"))
+                    .as_deref(),
+            )?;
+            println!("since: changes");
+        }
+        (Some(source::Since::Nothing), _) => {
+            eprintln!("nothing changed since the given commit but the base branch");
+            println!("since: none");
+        }
+        (Some(source::Since::Unavailable(why)), _) => {
+            eprintln!("warning: no page of the changes since the given commit: {why}");
+            // One line, for scripts.
+            let why = why.split_whitespace().collect::<Vec<_>>().join(" ");
+            println!("since: unavailable ({why})");
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Writes the page, and the analysis as JSON if asked to.
+fn write_outputs(output: &model::Output, out: &Path, json: Option<&Path>) -> Result<()> {
     for w in &output.warnings {
         eprintln!("warning: {w}");
     }
-    let json = serde_json::to_string(&output)?;
-    if let Some(path) = &cli.json {
-        std::fs::write(path, serde_json::to_string_pretty(&output)?)
+    if let Some(path) = json {
+        std::fs::write(path, serde_json::to_string_pretty(output)?)
             .with_context(|| format!("writing {}", path.display()))?;
     }
-    std::fs::write(&cli.out, render_page(&output.meta.title, &json))
-        .with_context(|| format!("writing {}", cli.out.display()))?;
+    let data = serde_json::to_string(output)?;
+    std::fs::write(out, render_page(&output.meta.title, &data))
+        .with_context(|| format!("writing {}", out.display()))?;
     let changed = output
         .items
         .values()
@@ -132,38 +209,121 @@ fn main() -> Result<()> {
     eprintln!(
         "{} items analyzed, {changed} added/changed/removed → {}",
         output.items.len(),
-        cli.out.display()
+        out.display()
     );
     Ok(())
 }
 
+/// `dir/name.ext` → `dir/name{suffix}.ext`.
+fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
+    let stem = path.file_stem().unwrap_or_default().to_string_lossy();
+    let name = match path.extension() {
+        Some(ext) => format!("{stem}{suffix}.{}", ext.to_string_lossy()),
+        None => format!("{stem}{suffix}"),
+    };
+    path.with_file_name(name)
+}
+
+/// How to analyze each version.
+struct Settings<'a> {
+    /// Resolve calls with rust-analyzer.
+    semantic: bool,
+    #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
+    trust: source::Trust,
+    /// The cargo target directory for build scripts and proc macros (only
+    /// when trusted). `None` uses the project's own.
+    #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
+    target_dir: Option<&'a Path>,
+}
+
+#[cfg(test)]
 fn analyze_checkout(
     checkout: &source::Checkout,
     semantic: bool,
     trust: source::Trust,
 ) -> model::Output {
-    // Taken by the checkout before anything was removed from the copies.
-    let mut files = checkout.files.clone();
-    let (base, base_note) = analyze_side(&checkout.base_dir, semantic, trust, "base");
-    let (head, head_note) = analyze_side(&checkout.head_dir, semantic, trust, "head");
+    let how = Settings {
+        semantic,
+        trust,
+        target_dir: None,
+    };
+    analyze_all(checkout, &how).0
+}
+
+/// The analysis of the checkout, and of the changes since an earlier
+/// commit if it has them (see [`source::Since`]). The head is analyzed
+/// once for both.
+fn analyze_all(
+    checkout: &source::Checkout,
+    how: &Settings,
+) -> (model::Output, Option<model::Output>) {
+    let base = analyze_side(&checkout.base_dir, how, "base");
+    let head = analyze_side(&checkout.head_dir, how, "head");
+    let meta = |label: &str, pr: Option<model::PrMeta>| model::Meta {
+        title: checkout.title.clone(),
+        base: label.to_string(),
+        head: checkout.head_label.clone(),
+        url: checkout.url.clone(),
+        resolution: String::new(),
+        pr,
+        project: checkout.project.clone(),
+        commits: Vec::new(),
+        versions: Default::default(),
+    };
+    let since = match &checkout.since {
+        Some(source::Since::Changes(s)) => {
+            let since_base = analyze_side(&s.dir, how, "since");
+            let pr = checkout.pr.clone().map(|pr| model::PrMeta {
+                base_rev: s.commit[..s.commit.len().min(10)].to_string(),
+                custom_base: true,
+                since: Some(s.commit.clone()),
+                ..pr
+            });
+            Some(compare(
+                (&s.dir, since_base),
+                (&checkout.head_dir, head.clone()),
+                s.files.clone(),
+                meta(&s.label, pr),
+                // Commits are traced from the PR's base, which this page
+                // doesn't compare with.
+                None,
+            ))
+        }
+        _ => None,
+    };
+    let output = compare(
+        (&checkout.base_dir, base),
+        (&checkout.head_dir, head),
+        // Taken by the checkout before anything was removed from the copies.
+        checkout.files.clone(),
+        meta(&checkout.base_label, checkout.pr.clone()),
+        checkout.git.as_ref(),
+    );
+    (output, since)
+}
+
+/// Compares two analyzed trees: the base and the head, each with the note
+/// of [`analyze_side`].
+fn compare(
+    (base_dir, (base, base_note)): (&Path, (analyze::Analysis, String)),
+    (head_dir, (head, head_note)): (&Path, (analyze::Analysis, String)),
+    mut files: Vec<model::ChangedFile>,
+    meta: model::Meta,
+    git: Option<&source::GitRange>,
+) -> model::Output {
     let resolution = if base_note == head_note {
         head_note
     } else {
         format!("base: {base_note}; head: {head_note}")
     };
+    let versions = source::crate_versions(base_dir, head_dir);
     let mut output = merge::merge(
         base,
         head,
         model::Meta {
-            title: checkout.title.clone(),
-            base: checkout.base_label.clone(),
-            head: checkout.head_label.clone(),
-            url: checkout.url.clone(),
             resolution,
-            pr: checkout.pr.clone(),
-            project: checkout.project.clone(),
-            commits: Vec::new(),
-            versions: source::crate_versions(&checkout.base_dir, &checkout.head_dir),
+            versions,
+            ..meta
         },
     );
     // Files the Rust analysis covers: one per module.
@@ -177,7 +337,7 @@ fn analyze_checkout(
         f.analyzed = analyzed.contains(f.path.as_str());
         if f.analyzed {
             let text = |dir: &Path| std::fs::read_to_string(dir.join(&f.path)).unwrap_or_default();
-            let (old, new) = (text(&checkout.base_dir), text(&checkout.head_dir));
+            let (old, new) = (text(base_dir), text(head_dir));
             (f.added_lines, f.removed_lines) = files::changed_lines(&f.hunks);
             // The items show the other changes: keep only these.
             (f.outside_items, f.hunks, f.parts) =
@@ -185,7 +345,7 @@ fn analyze_checkout(
         }
     }
     output.files = files;
-    if let Some(git) = &checkout.git {
+    if let Some(git) = git {
         eprintln!("tracing which commit changed what…");
         let mut warnings = Vec::new();
         output.meta.commits = commits::commits(git, &output.items, &output.files, &mut warnings);
@@ -196,16 +356,11 @@ fn analyze_checkout(
 
 /// Analyzes one source tree. Returns the analysis and a note on how calls
 /// were resolved.
-fn analyze_side(
-    root: &Path,
-    semantic: bool,
-    trust: source::Trust,
-    label: &str,
-) -> (analyze::Analysis, String) {
+fn analyze_side(root: &Path, how: &Settings, label: &str) -> (analyze::Analysis, String) {
     let crates = source::find_crates(root);
     #[allow(unused_mut)]
     let mut analysis = analyze::Analyzer::run(root, &crates);
-    if !semantic {
+    if !how.semantic {
         return (analysis, "syntax only".into());
     }
     #[cfg(feature = "semantic")]
@@ -217,13 +372,13 @@ fn analyze_side(
             crates.iter().map(|c| c.manifest_dir.clone()).collect()
         };
         dirs.dedup();
-        match semantic::refine(root, &dirs, trust, &mut analysis) {
+        match semantic::refine(root, &dirs, how.trust, how.target_dir, &mut analysis) {
             Ok(stats) => {
                 eprintln!(
                     "{label}: {} functions, {} call sites resolved, {} unresolved, {} external items described",
                     stats.functions, stats.resolved_sites, stats.unresolved_sites, stats.externals
                 );
-                let mut note = match trust {
+                let mut note = match how.trust {
                     source::Trust::Untrusted => "rust-analyzer".to_string(),
                     source::Trust::Trusted => {
                         "rust-analyzer, with build scripts and proc macros".to_string()
@@ -257,7 +412,7 @@ fn analyze_side(
     }
     #[cfg(not(feature = "semantic"))]
     {
-        let _ = (label, trust);
+        let _ = (label, how);
         (analysis, "syntax only (built without rust-analyzer)".into())
     }
 }
