@@ -403,6 +403,10 @@ pub struct PrMeta {
     /// From the GitHub CLI, if it was available.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// The PR's description (Markdown), from the GitHub CLI; `None` if it
+    /// is empty or `gh` wasn't available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
     /// The branch the PR targets, e.g. `main`.
     pub base_ref: String,
     /// The compared base commit (abbreviated): the merge base of the PR
@@ -458,7 +462,8 @@ pub struct ChangedFile {
     /// Path relative to the repository root.
     pub path: String,
     pub status: Status,
-    /// `rust`, `python`, `markdown`, `toml`, `binary` or `text`.
+    /// `rust`, `python`, `markdown`, `toml`, `yaml`, `binary`, `symlink` or
+    /// `text`.
     pub lang: String,
     /// Part of the Rust analysis (shown as items, not as a file).
     #[serde(default)]

@@ -7,19 +7,59 @@ use crate::dom;
 use model::{Item, Kind, Status};
 use std::collections::BTreeMap;
 
+/// Whether the sidebar shows. Without any Rust change, a tree of unchanged
+/// modules only gets in the way, so it shows only on the module pages, where
+/// it is the way to browse the modules.
+pub fn sidebar_shown(app: &App) -> bool {
+    app.d.rust_changed() || (app.s.view == crate::View::Module && !app.d.roots().is_empty())
+}
+
+fn warnings_html(d: &Data) -> String {
+    d.out
+        .warnings
+        .iter()
+        .map(|w| format!(r#"<div class="side-warn">⚠ {}</div>"#, esc(w)))
+        .collect()
+}
+
 pub fn render_sidebar(app: &App) {
     let d = &app.d;
-    fn tree(app: &App, m: &str) -> String {
-        let d = &app.d;
-        let Some(it) = d.item(m) else {
-            return String::new();
-        };
+    let shown = sidebar_shown(app);
+    if let Some(el) = dom::by_id("sidebar") {
+        dom::toggle_class(&el, "hidden", !shown);
+    }
+    if !shown {
+        return;
+    }
+    fn submodules<'a>(d: &'a Data, m: &str) -> Vec<&'a Item> {
         let mut subs: Vec<&Item> = d
             .mod_children_items(m)
             .into_iter()
             .filter(|c| c.info.kind == Kind::Mod)
             .collect();
         subs.sort_by(|a, b| a.info.name.cmp(&b.info.name));
+        subs
+    }
+    fn count(d: &Data, m: &str) -> usize {
+        1 + submodules(d, m)
+            .iter()
+            .map(|s| count(d, &s.info.id))
+            .sum::<usize>()
+    }
+    // Unchanged modules are left out unless asked for, except the open
+    // module page's module and its parents.
+    fn tree(app: &App, m: &str, hidden: &mut usize) -> String {
+        let d = &app.d;
+        let Some(it) = d.item(m) else {
+            return String::new();
+        };
+        let open = app.s.view == crate::View::Module
+            && (app.s.module == m || app.s.module.starts_with(&format!("{m}::")));
+        if !app.s.side_all && !d.touched(it) && !open {
+            *hidden += count(d, m);
+            return String::new();
+        }
+        let subs = submodules(d, m);
         let changes = d.changes_in(m, false);
         let n = changes.len();
         // In review mode: how many still need a review.
@@ -68,25 +108,45 @@ pub fn render_sidebar(app: &App) {
                 format!(
                     r#"<ul class="tree">{}</ul>"#,
                     subs.iter()
-                        .map(|s| tree(app, &s.info.id))
+                        .map(|s| tree(app, &s.info.id, hidden))
                         .collect::<String>()
                 )
             }
         )
     }
-    let roots: String = d.roots().iter().map(|r| tree(app, r)).collect();
-    let warnings: String = d
-        .out
-        .warnings
+    let mut hidden = 0;
+    let roots: String = d
+        .roots()
         .iter()
-        .map(|w| format!(r#"<div class="side-warn">⚠ {}</div>"#, esc(w)))
+        .map(|r| tree(app, r, &mut hidden))
         .collect();
+    let warnings = warnings_html(d);
+    let note = if d.rust_changed() {
+        ""
+    } else {
+        r#"<div class="side-note">No module changed in this PR.</div>"#
+    };
+    // Offered only when it would show more.
+    let toggle = if hidden > 0 || app.s.side_all {
+        format!(
+            r#"<label class="side-opt"><input type="checkbox" id="side-all" {}> show unchanged modules{}</label>"#,
+            if app.s.side_all { "checked" } else { "" },
+            if hidden > 0 {
+                format!(" ({hidden})")
+            } else {
+                String::new()
+            }
+        )
+    } else {
+        String::new()
+    };
     dom::set_html(
         "sidebar",
         &format!(
-            r#"<div class="side-h">Modules</div><ul class="tree">{roots}</ul>
+            r#"<div class="side-h">Modules</div>{note}<ul class="tree">{roots}</ul>{toggle}
             <div class="side-legend">
-              <div><span class="dot added"></span> added &nbsp; <span class="dot changed"></span> changed &nbsp; <span class="dot removed"></span> removed</div>
+              <div class="legend-dots"><span><span class="dot added"></span> added</span><span><span class="dot changed"></span> changed</span><span><span class="dot removed"></span> removed</span></div>
+              <div>No symbol: unchanged.</div>
               <div class="legend-bars"><span class="lb m-add">added</span><span class="lb m-chg">changed</span><span class="lb m-del">removed</span></div>
               <div>{}</div>
               <div>Calls resolved with: {}</div>
@@ -354,11 +414,11 @@ pub fn render_overview(app: &App) {
         })
         .collect();
     // Without any Rust change, say so instead of showing empty sections.
-    let rust_changed = d.items().any(|it| it.info.kind != Kind::Mod && changed(it));
-    let rust_html = if !rust_changed {
+    let rust_html = if !d.rust_changed() {
         let analyzed = d.out.crates.len();
+        // The sidebar is hidden then, so its warnings go here.
         format!(
-            r#"<h2>Rust code</h2><div class="empty-state">No Rust item was added, changed or removed{}. The changed files are listed below.</div>"#,
+            r#"<h2>Rust code</h2><div class="empty-state">No Rust item was added, changed or removed{}. The changed files are listed below.</div>{}"#,
             if analyzed == 0 {
                 " (no Rust crate was found)".to_string()
             } else {
@@ -366,7 +426,8 @@ pub fn render_overview(app: &App) {
                     " in the {analyzed} analyzed crate{}",
                     if analyzed == 1 { "" } else { "s and targets" }
                 )
-            }
+            },
+            warnings_html(d)
         )
     } else {
         format!(
@@ -396,6 +457,7 @@ pub fn render_overview(app: &App) {
         <div class="sub">{}</div>
         {}
         {}
+        {}
         {}"#,
         esc(meta
             .pr
@@ -403,6 +465,7 @@ pub fn render_overview(app: &App) {
             .and_then(|p| p.title.as_deref())
             .unwrap_or(&meta.title)),
         d.compared_html(),
+        description_html(d),
         crate::files::manifests_html(d),
         rust_html,
         crate::files::other_files_html(d),
@@ -450,6 +513,94 @@ fn semver_summary(d: &Data) -> String {
         r#"<div class="semver-sum">{} <span class="dim">By Cargo's SemVer rules, this needs {bump}. Hover a label for why.</span></div>"#,
         parts.join(" ")
     )
+}
+
+/// Descriptions up to this many lines are shown open.
+const SHORT_DESCRIPTION: usize = 20;
+
+/// The PR's description, rendered as Markdown like a doc comment: raw HTML
+/// is shown as text, except HTML comments, which GitHub doesn't show
+/// either (PR templates use them for instructions). Images are left out,
+/// so the page never loads anything from elsewhere.
+fn description_html(d: &Data) -> String {
+    let Some(body) = d.out.meta.pr.as_ref().and_then(|p| p.body.as_deref()) else {
+        return String::new();
+    };
+    let text = strip_html_comments(&body.replace("\r\n", "\n"));
+    let text = text.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+    let lines = text.lines().count();
+    format!(
+        r#"<details class="pr-desc"{}><summary>Description <span class="dim">{lines} line{}</span></summary><div class="docs">{}</div></details>"#,
+        if lines <= SHORT_DESCRIPTION {
+            " open"
+        } else {
+            ""
+        },
+        if lines == 1 { "" } else { "s" },
+        crate::code::markdown_file_html(d, text)
+    )
+}
+
+/// Removes `<!-- … -->` comments outside fenced code blocks; an unclosed
+/// one runs to the end, as in HTML. Lines that held only a comment are
+/// dropped.
+fn strip_html_comments(s: &str) -> String {
+    let mut out = String::new();
+    let mut fence: Option<&str> = None;
+    let mut in_comment = false;
+    for line in s.lines() {
+        let t = line.trim_start();
+        if !in_comment {
+            if let Some(f) = fence {
+                if t.starts_with(f) {
+                    fence = None;
+                }
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            if let Some(f) = ["```", "~~~"].into_iter().find(|f| t.starts_with(f)) {
+                fence = Some(f);
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+        }
+        let mut kept = String::new();
+        let mut rest = line;
+        loop {
+            if in_comment {
+                match rest.find("-->") {
+                    Some(j) => {
+                        rest = &rest[j + 3..];
+                        in_comment = false;
+                    }
+                    None => break,
+                }
+            } else {
+                match rest.find("<!--") {
+                    Some(i) => {
+                        kept.push_str(&rest[..i]);
+                        rest = &rest[i + 4..];
+                        in_comment = true;
+                    }
+                    None => {
+                        kept.push_str(rest);
+                        break;
+                    }
+                }
+            }
+        }
+        if kept.trim().is_empty() && kept.len() != line.len() {
+            continue;
+        }
+        out.push_str(&kept);
+        out.push('\n');
+    }
+    out
 }
 
 /// Module page: a module as a privacy boundary.
@@ -621,4 +772,20 @@ pub fn render_module_page(app: &App) {
         },
     );
     dom::set_html("view-module", &html);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_html_comments;
+
+    #[test]
+    fn html_comments_are_removed_outside_code() {
+        let md = "<!-- Describe the change -->\n## What\nFix <!-- inline --> it.\n<!--\nmulti\nline -->\n```html\n<!-- kept -->\n```\nend";
+        assert_eq!(
+            strip_html_comments(md),
+            "## What\nFix  it.\n```html\n<!-- kept -->\n```\nend\n"
+        );
+        // Unclosed: runs to the end.
+        assert_eq!(strip_html_comments("a\n<!-- b\nc"), "a\n");
+    }
 }

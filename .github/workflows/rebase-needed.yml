@@ -1,0 +1,177 @@
+name: Rebase needed
+
+# Leaves a review on every open pull request that has merge conflicts with its
+# base branch, asking for a rebase. The review is posted once per conflict:
+# while the PR stays in conflict, later runs leave it alone. Once the
+# conflicts are gone, the review's text is edited to say so and the
+# `rebase-needed` label is removed. If the PR runs into conflicts again later,
+# it gets a new review.
+#
+# A push to `main` can put any open PR in conflict, so it checks all of them.
+# A push to a PR (or a change of its base branch) checks only that PR.
+#
+# `pull_request_target` runs this file from the base branch with a token that
+# can write reviews also on PRs from forks. That is safe here because the job
+# never checks out or runs the PR's code: it only calls the GitHub API.
+on:
+  push:
+    branches: [main]
+  pull_request_target:
+    types: [opened, reopened, synchronize, edited, ready_for_review]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+# One run at a time, so two runs can't both see "no review yet" and both post
+# one. Runs queue instead of cancelling each other.
+concurrency:
+  group: rebase-needed
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # `edited` also fires for title and description edits: only a change of
+    # the base branch can change whether the PR has conflicts.
+    if: >-
+      github.event_name != 'pull_request_target' ||
+      github.event.action != 'edited' ||
+      github.event.changes.base != null
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const MARKER_OPEN = '<!-- rebase-needed:conflict -->';
+            const MARKER_DONE = '<!-- rebase-needed:resolved -->';
+            const LABEL = 'rebase-needed';
+            const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+            // GitHub computes `mergeable` in the background, and after a push
+            // to the base branch it is `null` until that is done. Fetching
+            // the PR starts the computation; poll until there is a result.
+            async function fetchMergeable(number) {
+              for (let attempt = 0; attempt < 12; attempt++) {
+                const { data: pr } = await github.rest.pulls.get({
+                  owner, repo, pull_number: number,
+                });
+                if (pr.state !== 'open') return { pr, mergeable: null };
+                if (pr.mergeable !== null) return { pr, mergeable: pr.mergeable };
+                await sleep(5000);
+              }
+              const { data: pr } = await github.rest.pulls.get({
+                owner, repo, pull_number: number,
+              });
+              return { pr, mergeable: pr.mergeable };
+            }
+
+            // Adding a label that doesn't exist would create it in gray;
+            // create it once with a color that stands out in the PR list.
+            let labelReady = false;
+            async function ensureLabel() {
+              if (labelReady) return;
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name: LABEL });
+              } catch (e) {
+                if (e.status !== 404) throw e;
+                await github.rest.issues.createLabel({
+                  owner, repo, name: LABEL, color: 'd93f0b',
+                  description: 'Has merge conflicts with its base branch',
+                });
+              }
+              labelReady = true;
+            }
+
+            async function check(number) {
+              const { pr, mergeable } = await fetchMergeable(number);
+              if (pr.state !== 'open') return;
+              if (mergeable === null) {
+                core.warning(`#${number}: GitHub did not report whether it can be merged; skipped.`);
+                return;
+              }
+              // `mergeable` is false only for conflicts; failing checks or
+              // missing reviews show up in `mergeable_state`, not here.
+              const conflicting = mergeable === false;
+
+              const reviews = await github.paginate(github.rest.pulls.listReviews, {
+                owner, repo, pull_number: number, per_page: 100,
+              });
+              const open = reviews.filter(
+                (r) => r.user?.login === 'github-actions[bot]' && r.body?.includes(MARKER_OPEN),
+              );
+              const hasLabel = pr.labels.some((l) => l.name === LABEL);
+
+              if (conflicting) {
+                if (open.length === 0) {
+                  const body = [
+                    MARKER_OPEN,
+                    `This pull request has merge conflicts with \`${pr.base.ref}\`. ` +
+                      `Please rebase it onto the latest \`${pr.base.ref}\` and resolve the conflicts.`,
+                    '',
+                    `_Checked at head ${pr.head.sha.slice(0, 7)} against ` +
+                      `\`${pr.base.ref}\` at ${pr.base.sha.slice(0, 7)}. ` +
+                      'This review is updated once the conflicts are resolved._',
+                  ].join('\n');
+                  await github.rest.pulls.createReview({
+                    owner, repo, pull_number: number, event: 'COMMENT', body,
+                    commit_id: pr.head.sha,
+                  });
+                  core.info(`#${number}: has conflicts, review posted.`);
+                } else {
+                  core.info(`#${number}: has conflicts, already reviewed.`);
+                }
+                if (!hasLabel) {
+                  await ensureLabel();
+                  await github.rest.issues.addLabels({
+                    owner, repo, issue_number: number, labels: [LABEL],
+                  });
+                }
+              } else {
+                for (const review of open) {
+                  const body = [
+                    MARKER_DONE,
+                    `**Resolved:** the conflicts with \`${pr.base.ref}\` are gone ` +
+                      `as of head ${pr.head.sha.slice(0, 7)}.`,
+                    '',
+                    '<details><summary>Original review</summary>',
+                    '',
+                    review.body.replace(MARKER_OPEN, '').trim(),
+                    '',
+                    '</details>',
+                  ].join('\n');
+                  await github.rest.pulls.updateReview({
+                    owner, repo, pull_number: number, review_id: review.id, body,
+                  });
+                }
+                if (hasLabel) {
+                  await github.rest.issues.removeLabel({
+                    owner, repo, issue_number: number, name: LABEL,
+                  });
+                }
+                core.info(`#${number}: no conflicts` + (open.length ? ', review marked resolved.' : '.'));
+              }
+            }
+
+            let numbers;
+            if (context.eventName === 'pull_request_target') {
+              numbers = [context.payload.pull_request.number];
+            } else {
+              const prs = await github.paginate(github.rest.pulls.list, {
+                owner, repo, state: 'open', per_page: 100,
+              });
+              numbers = prs.map((p) => p.number);
+            }
+
+            let failed = false;
+            for (const number of numbers) {
+              try {
+                await check(number);
+              } catch (e) {
+                failed = true;
+                core.error(`#${number}: ${e.message}`);
+              }
+            }
+            if (failed) core.setFailed('Some pull requests could not be checked.');

@@ -99,6 +99,59 @@ fn different_code_with_the_same_name_is_not_a_move() {
 }
 
 #[test]
+fn moved_and_edited_items_are_detected() {
+    let f = |extra: &str| {
+        format!(
+            "pub fn total(xs: &[u32], scale: u32) -> u32 {{\n\
+             let mut sum = 0;\n\
+             for x in xs {{ sum += x * scale; }}\n\
+             {extra}sum\n\
+             }}\n"
+        )
+    };
+    let base = write_crate(&[(
+        "src/lib.rs",
+        &format!(
+            "mod a {{ {} pub struct S {{ pub x: u8, pub y: u8, pub z: u8 }} }}\nmod b {{}}\n",
+            f("")
+        ),
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        &format!(
+            "mod a {{}}\nmod b {{ {} pub struct S {{ pub x: u8, pub y: u8, pub z: u8, pub w: u8 }} }}\n",
+            f("if sum > 100 { return 100; }\n")
+        ),
+    )]);
+    let out = analyze_dirs(base.path(), head.path());
+    let total = &out.items["t::b::total"];
+    assert_eq!(total.status, Status::Changed);
+    assert_eq!(total.changes.moved_from.as_deref(), Some("t::a::total"));
+    assert!(total.changes.body && !total.changes.signature);
+    let s = &out.items["t::b::S"];
+    assert_eq!(s.changes.moved_from.as_deref(), Some("t::a::S"));
+    assert!(s.changes.signature);
+    assert!(!out.items.contains_key("t::a::total"));
+    assert!(!out.items.contains_key("t::a::S"));
+}
+
+#[test]
+fn rewritten_items_with_the_same_name_are_not_a_move() {
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "mod a { pub fn parse(s: &str) -> Option<u32> { s.trim().parse().ok() } }\nmod b {}\n",
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        "mod a {}\nmod b { pub fn parse(s: &str) -> Option<u32> { \
+         let mut n = 0; for c in s.chars() { n = n * 10 + c.to_digit(10)?; } Some(n) } }\n",
+    )]);
+    let out = analyze_dirs(base.path(), head.path());
+    assert_eq!(out.items["t::a::parse"].status, Status::Removed);
+    assert_eq!(out.items["t::b::parse"].status, Status::Added);
+}
+
+#[test]
 fn calls_and_uses() {
     let out = demo();
     let calc = &out.items["tinycalc::calc"].info;

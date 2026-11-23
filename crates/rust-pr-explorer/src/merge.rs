@@ -212,35 +212,63 @@ fn find_moves(
             added.entry(key(item)).or_default().push(id);
         }
     }
-    // Only identical code counts as moved: the body for items that have
-    // one (a function whose visibility changed while moving still counts),
-    // the whole definition otherwise.
-    let same_code = |old: &ItemData, new: &ItemData| {
-        let has_body = old.info.kind.is_callable()
+    // The code compared: the body for items that have one (a function
+    // whose visibility changed while moving still counts as the same), the
+    // whole definition otherwise.
+    fn code(item: &ItemData) -> &str {
+        let has_body = item.info.kind.is_callable()
             || matches!(
-                old.info.kind,
+                item.info.kind,
                 Kind::Const | Kind::Static | Kind::AssocConst | Kind::Macro
             );
-        let (o, n) = if has_body {
-            (&old.body_norm, &new.body_norm)
+        if has_body {
+            &item.body_norm
         } else {
-            (&old.sig_norm, &new.sig_norm)
-        };
-        // Names of items that moved along (siblings, `Self`) point into the
-        // new module: compare with the old module's paths rewritten.
-        o == n || rewrite_module(o, &old.info.module, &new.info.module) == *n
-    };
+            &item.sig_norm
+        }
+    }
     let mut moves = HashMap::new();
     for (k, new_ids) in added {
         if let [new_id] = new_ids.as_slice()
             && let Some([old_id]) = removed.get(&k).map(Vec::as_slice)
-            && same_code(&base[*old_id], &head[*new_id])
         {
-            moves.insert((*new_id).clone(), (*old_id).clone());
+            let (old, new) = (&base[*old_id], &head[*new_id]);
+            // Names of items that moved along (siblings, `Self`) point into
+            // the new module: compare with the old module's paths rewritten.
+            let old_code = rewrite_module(code(old), &old.info.module, &new.info.module);
+            if old_code == code(new) || similar_code(&old_code, code(new)) {
+                moves.insert((*new_id).clone(), (*old_id).clone());
+            }
         }
     }
     moves
 }
+
+/// Whether two normalized forms are close enough for an item that is the
+/// only candidate on both sides to count as moved and edited, rather than
+/// removed and added.
+///
+/// The forms are compared token by token. At least half of the tokens must
+/// be the same, and at least [`MIN_SHARED_TOKENS`] of them, so that small
+/// unrelated items with the same name (`fn f() -> u8 { 1 }` and
+/// `fn f() -> u8 { 2 }`) are not paired.
+fn similar_code(old: &str, new: &str) -> bool {
+    let old: Vec<&str> = old.split_whitespace().collect();
+    let new: Vec<&str> = new.split_whitespace().collect();
+    let diff = TextDiff::configure()
+        .timeout(std::time::Duration::from_millis(100))
+        .diff_slices(&old, &new);
+    let shared: usize = diff
+        .ops()
+        .iter()
+        .filter(|op| op.tag() == similar::DiffTag::Equal)
+        .map(|op| op.old_range().len())
+        .sum();
+    shared >= MIN_SHARED_TOKENS && 2 * shared >= old.len().max(new.len())
+}
+
+/// See [`similar_code`].
+const MIN_SHARED_TOKENS: usize = 10;
 
 /// `norm` (a normalized form, with full paths in quotes) with paths into
 /// module `old` pointing into module `new` instead.

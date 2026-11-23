@@ -1,4 +1,4 @@
-use super::docs_diff::{docs_diff_html, word_diff_md};
+use super::docs_diff::{docs_diff_html, mark_changed_tokens, word_diff_html};
 use super::markdown::doc_blocks;
 use super::*;
 use crate::data::Data;
@@ -238,7 +238,7 @@ fn docs_diff_marks_blocks() {
     let d = empty();
     let html = docs_diff_html(
         &d,
-        "Same.\n\nOld text.\n\nGone.",
+        "Same.\n\nOld words.\n\nGone.",
         "Same.\n\nNew text.\n\nGone.\n\nAdded, see [x].\n\n[x]: https://example.com",
         &BTreeMap::new(),
     );
@@ -252,7 +252,7 @@ fn docs_diff_marks_blocks() {
         ),
         "{html}"
     );
-    assert!(html.contains(r#"<details class="dblk-old"><summary>previous text</summary><div class="mark m-del"><div class="docs"><div class="dblk"><p>Old text.</p>"#), "{html}");
+    assert!(html.contains(r#"<details class="dblk-old"><summary>previous text</summary><div class="mark m-del"><div class="docs"><div class="dblk"><p>Old words.</p>"#), "{html}");
     // The link definition applies to the block that uses it, and the
     // two added blocks share one marker.
     assert!(
@@ -267,40 +267,77 @@ fn docs_diff_marks_blocks() {
 }
 
 #[test]
-fn word_diff_marks_changed_words_only_where_safe() {
+fn word_diff_marks_changed_words() {
+    let wd = |a: &str, b: &str| word_diff_html(a, b);
     assert_eq!(
-        word_diff_md(
-            "Evaluates an expression.",
-            "Evaluates an arithmetic expression."
+        wd(
+            "<p>Evaluates an expression.</p>",
+            "<p>Evaluates an arithmetic expression.</p>"
         ),
-        Some("Evaluates an \u{E000}arithmetic \u{E001}expression.".into())
+        Some(r#"<p>Evaluates an <ins class="wd">arithmetic</ins> expression.</p>"#.into())
     );
     // A rewritten phrase is one removal and one insertion.
     assert_eq!(
-        word_diff_md(
-            "Tokenizes `input` and creates a parser for it.",
-            "Tokenizes `input` and creates a parser positioned at its first token."
+        wd(
+            "<p>Tokenizes <code>input</code> and creates a parser for it.</p>",
+            "<p>Tokenizes <code>input</code> and creates a parser positioned at its first token.</p>"
         ),
         Some(
-            "Tokenizes `input` and creates a parser \u{E002}for it\u{E003}\u{E000}positioned at its first token\u{E001}."
+            r#"<p>Tokenizes <code>input</code> and creates a parser <del class="wd">for it</del><ins class="wd">positioned at its first token</ins>.</p>"#
                 .into()
         )
     );
     // Mostly rewritten: block level instead.
-    assert_eq!(word_diff_md("One two three.", "Four five six."), None);
-    // Link text, link targets and Markdown syntax are left alone.
-    assert_eq!(word_diff_md("See [`Foo`] here.", "See [`Bar`] here."), None);
+    assert_eq!(wd("<p>One two three.</p>", "<p>Four five six.</p>"), None);
+    // Code blocks are left to the block level.
+    assert_eq!(wd("<pre>a b c</pre>", "<pre>a b d</pre>"), None);
+    // Line breaks are spaces: rewrapping is no change.
     assert_eq!(
-        word_diff_md("See [x](a.html) now.", "See [x](b.html) now."),
-        None
+        wd("<p>a b\nc d</p>", "<p>a\nb c d e</p>"),
+        Some("<p>a\nb c d <ins class=\"wd\">e</ins></p>".into())
     );
-    assert_eq!(word_diff_md("A *b* c d e.", "A **b** c d e."), None);
-    // A list marker at the start of a line is syntax.
+    // Changes in and around code spans; removed code stays code.
     assert_eq!(
-        word_diff_md("- a b c\n- d e f", "- a b c\n- d e g"),
-        Some("- a b c\n- d e \u{E002}f\u{E003}\u{E000}g\u{E001}".into())
+        wd(
+            "<p>re-exported with <code>pub use</code> appears here</p>",
+            "<p>re-exported with <code>pub use</code>s appears here</p>"
+        ),
+        Some(
+            r#"<p>re-exported with <code>pub use</code><ins class="wd">s</ins> appears here</p>"#
+                .into()
+        )
     );
-    assert_eq!(word_diff_md("a b c d\ne", "a b c d\n- e"), None);
+    assert_eq!(
+        wd("<p>x <code>pub use</code> y z w</p>", "<p>x y z w</p>"),
+        Some(r#"<p>x <del class="wd"><code>pub use</code></del>y z w</p>"#.into())
+    );
+    // A changed link target or emphasis marks the word it applies to.
+    assert_eq!(
+        wd(
+            r#"<p>See <a href="a.html">x</a> now.</p>"#,
+            r#"<p>See <a href="b.html">x</a> now.</p>"#
+        ),
+        Some(r#"<p>See <del class="wd">x</del><a href="b.html"><ins class="wd">x</ins></a> now.</p>"#.into())
+    );
+    assert_eq!(
+        wd(
+            "<p>A <em>b</em> c d e.</p>",
+            "<p>A <strong>b</strong> c d e.</p>"
+        ),
+        Some(r#"<p>A <del class="wd"><em>b</em></del><ins class="wd"><strong>b</strong></ins> c d e.</p>"#.into())
+    );
+    // Two list items merged: the new structure, with the word after the
+    // removed break marked.
+    assert_eq!(
+        wd(
+            "<ul>\n<li>a b c</li>\n<li>d e f</li>\n</ul>",
+            "<ul>\n<li>a b c d e f</li>\n</ul>"
+        ),
+        Some(
+            "<ul>\n<li>a b c\n<del class=\"wd\">d</del> <ins class=\"wd\">d</ins> e f</li>\n</ul>"
+                .into()
+        )
+    );
 }
 
 #[test]
@@ -357,7 +394,9 @@ fn source_diff_follows_the_settings() {
         "{html}"
     );
     assert!(
-        html.contains(r#"<span class="no">6</span><span class="ln del" data-t="-">"#),
+        html.contains(
+            r#"<span class="no">6</span><span class="ln del wl" data-t="-">    <span class="wc">b</span>();"#
+        ),
         "{html}"
     );
     assert!(
@@ -453,7 +492,12 @@ fn small_body_changes_are_shown_directly() {
     // The hunk with two lines of context comes first, outside the
     // collapsed whole source; skipped lines are marked.
     let (hunk, whole) = html.split_once("<details").unwrap();
-    assert!(hunk.contains("old();") && hunk.contains("new();"), "{hunk}");
+    // The changed line pair has its changed word marked.
+    assert!(
+        hunk.contains(r#"<span class="wc">old</span>();"#)
+            && hunk.contains(r#"<span class="wc">new</span>();"#),
+        "{hunk}"
+    );
     assert!(hunk.contains("l4;") && hunk.contains("l7;"), "{hunk}");
     assert!(!hunk.contains("l2;") && !hunk.contains("l9;"), "{hunk}");
     assert_eq!(hunk.matches("⋯").count(), 2, "{hunk}");
@@ -506,14 +550,6 @@ fn review_rendering_cases() {
     // Markdown files keep `# ` lines of their code blocks.
     let html = markdown_file_html(&d, "```\n# curl https://x | sh\nrun\n```\n");
     assert!(html.contains("# curl"), "{html}");
-    // A word change after `)` inside a link destination: no marks there.
-    assert_eq!(
-        word_diff_md(
-            "See [x](http://a/(b)c) for more details here now.",
-            "See [x](http://a/(b)d) for more details here now."
-        ),
-        None
-    );
     assert!(
         crate::data::impl_parts("impl<F: Fn() -> u8> Tr for X<F>")
             .1
@@ -521,4 +557,27 @@ fn review_rendering_cases() {
             == Some("X<F>")
     );
     assert!(!web_url("javascript://x/%0Aalert(1)") && web_url("https://docs.rs/x"));
+}
+
+#[test]
+fn changed_code_lines_mark_changed_tokens() {
+    let d = empty();
+    let (a, b) = (
+        code_html(&d, "let x = foo(1, 2);", Links::None),
+        code_html(&d, "let x = foo(1, 3);", Links::None),
+    );
+    let (ma, mb) = mark_changed_tokens(&a, &b).unwrap();
+    assert!(ma.contains(r#"<span class="wc">2</span>"#), "{ma}");
+    assert!(mb.contains(r#"<span class="wc">3</span>"#), "{mb}");
+    assert_eq!(ma.matches("wc").count(), 1, "{ma}");
+    // Words of a run share one mark; tags are never inside a mark.
+    let (_, mb) = mark_changed_tokens("<p>a b c d e</p>", "<p>a x y d e</p>").unwrap();
+    assert_eq!(mb, r#"<p>a <span class="wc">x y</span> d e</p>"#);
+    let (_, mb) = mark_changed_tokens("a <b>b</b> c d", "a x <b>y</b> c d").unwrap();
+    assert_eq!(
+        mb,
+        r#"a <span class="wc">x</span> <b><span class="wc">y</span></b> c d"#
+    );
+    // A different line: no marks.
+    assert_eq!(mark_changed_tokens("one two three", "four five six"), None);
 }

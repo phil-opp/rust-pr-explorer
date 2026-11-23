@@ -39,7 +39,7 @@ In a sandboxed environment, `--trust-project-code` (or `RUST_PR_EXPLORER_TRUST_P
 
 For `git`, the path may also be a subdirectory of the repository (then only that subdirectory is analyzed and listed) or a bare repository. For `dirs`, `target/` and `node_modules/` directories are skipped.
 
-For `pr`, the repository is cloned without file contents (`--filter=blob:none`), and only the two revisions being compared are checked out. If the GitHub CLI (`gh`) is installed and logged in, `gh pr view` supplies the PR's title, its base branch and its own branch; the page header then shows the repository, PR number and title, `base-branch @ commit ← pr-branch @ commit`. Without `gh`, the title and PR branch are left out. Without `--base`, the base is the merge base of the PR head and the PR's base branch (without `gh`: the default branch). For a PR that was already merged with a merge commit, the base is the state just before that merge.
+For `pr`, the repository is cloned without file contents (`--filter=blob:none`), and only the two revisions being compared are checked out. If the GitHub CLI (`gh`) is installed and logged in, `gh pr view` supplies the PR's title, description, base branch and its own branch; the page header then shows the repository, PR number and title, `base-branch @ commit ← pr-branch @ commit`, and the overview starts with the description (folded when it is longer than 20 lines). The description is rendered as Markdown like doc comments: raw HTML is shown as text, HTML comments (such as PR template instructions) are left out, and images show only their alt text, so the page loads nothing from elsewhere. Without `gh`, the title, description and PR branch are left out. Without `--base`, the base is the merge base of the PR head and the PR's base branch (without `gh`: the default branch). For a PR that was already merged with a merge commit, the base is the state just before that merge.
 
 The demo in `fixtures/demo` is a small calculator crate. Its "PR" adds variables (a new `env` module, a changed `evaluate` signature, new error variants), moves a helper between modules, re-exports `ast::Op` at the crate root and drops the root re-export of `parser::Parser`, extends one doc comment (shown as a word diff), and changes some import styles and formatting. That last part does not show up as a change.
 
@@ -50,7 +50,11 @@ The repository is also a GitHub Action that builds the page for every pull reque
 ```yaml
 # .github/workflows/pr-explorer.yml
 name: PR Explorer
-on: pull_request
+on:
+  pull_request:
+  # Optional, to fill the build cache that new pull requests start from.
+  push:
+    branches: [main]
 permissions:
   contents: read
   pull-requests: write
@@ -61,7 +65,11 @@ jobs:
       - uses: phil-opp/diff-viewer@main
 ```
 
-The action builds the tool (cached after the first run), runs `pr` on the pull request and uploads the page as a workflow artifact. The artifact is a single unzipped HTML file, so the link opens the page directly in the browser. The comment is posted once and updated on every push, with a one-line summary of the changed items. The link is also in the job summary.
+The action builds the tool, runs `pr` on the pull request and uploads the page as a workflow artifact. The artifact is a single unzipped HTML file, so the link opens the page directly in the browser. The comment is posted once and updated on every push, with a one-line summary of the changed items. The link is also in the job summary.
+
+Build time: the built tool is cached under a hash of its sources, so once a run has built it, later runs skip the build (in a repository that only uses the action, that is every run after the first). The build's dependencies, mainly rust-analyzer, are cached on the default branch, the only branch whose caches every pull request can read, so the `push` trigger above keeps new pull requests from building them from scratch (about 5 minutes). On a push, the action only builds and caches the tool. The tool is built with the `action` profile (see `Cargo.toml`): dependencies optimized, the tool's own crates not, which builds faster than `--release` and analyzes as fast.
+
+To keep the action out of the repository's cache storage (10 GB per repository, shared with other workflows), set `cache: false`: every run then builds the tool from scratch, about 7 minutes. `save-cache: false` caches only the built tool (about 12 MB) and not the dependencies (about 200 MB).
 
 Who can open the page: anyone logged in to GitHub with access to the repository, the same people who can see the workflow run. It expires with the run's artifacts (90 days unless the repository sets otherwise, or the `retention-days` input).
 
@@ -77,6 +85,8 @@ Lists only the public items that were added, changed or removed, nested by modul
 
 Each public API change is labeled **breaking**, **non-breaking** or **check by hand**, following [Cargo's SemVer rules](https://doc.rust-lang.org/cargo/reference/semver.html), with the reasons listed under the label (and on hover). The top of the section counts them and names the version bump they need. Breaking, for example: removing an item or one of its public paths, adding a variant to an enum that isn't `#[non_exhaustive]`, adding any field to a struct whose fields are all public, a changed function signature, a function that is no longer `const` or is now `unsafe`, a new trait item without a default, a new supertrait. Non-breaking: new items and paths, new fields next to private ones, a type parameter with a default, `const` added, `unsafe` removed, a changed constant value. "Check by hand" is for what the definitions can't settle: a changed macro, `#[repr]` or enum discriminant. Body and doc changes are no API change. Members of trait impls are labeled with their impl.
 
+The sidebar lists the modules that changed or contain changes, with a status symbol and the number of changed items in each. Unchanged modules are left out (except the open module and its parents); **show unchanged modules** lists them too. When the PR changes no Rust item, the sidebar is hidden, except on the module pages, where it is the way to browse the modules.
+
 ### Files outside the Rust analysis
 
 Every file the PR changes is accounted for:
@@ -84,6 +94,7 @@ Every file the PR changes is accounted for:
 - **Other changed files**, at the end: each changed file the Rust analysis doesn't cover, with its +/− counts.
   - **Python** files are compared by function and class (nested ones under their `__qualname__`, e.g. `Corpus.build` or `f.<locals>.g`). For each one: added, removed, or what changed: the header (diffed), the docstring, the body; changes in only whitespace or comments are marked as such. Changes to top-level statements are noted. A small tokenizer tracks strings, comments, brackets and line continuations, so that `def` inside a string or a bracket is never taken for a definition.
   - **Markdown** files are compared section by section (headings outside code fences): changed paragraphs are marked as in doc comments, with word-level marks where safe, added sections get a bar, removed headings are struck through, and unchanged sections are counted.
+  - **YAML** files (`.yml`, `.yaml`), such as GitHub Actions workflows, show a line diff with syntax colors: keys, strings, numbers, booleans, comments, anchors and tags, and `${{ … }}` expressions wherever they appear. Block scalars (`run: |`) are followed across lines, so a script's lines aren't taken for keys.
   - **Other text files** show a line diff (shown directly when small).
   - **Binary** and very large files (over 1 MB) are listed without a diff.
   - **Generated and vendored** files (lock files, `vendor/`, `third_party/`, `node_modules/`, minified files, files marked `@generated` or "do not edit") are collapsed into one group.
@@ -93,14 +104,14 @@ Every file the PR changes is accounted for:
 
 Every item shows what rustdoc would show: its definition or signature (private fields hidden when looking from outside the module), its docs, and its place in the module tree.
 
-- **Change markers**: inside a changed item, a bar on the left marks each part that changed, so the eye finds changes without reading labels. Each kind differs in line style as well as color, so it doesn't depend on telling red from green: changed, the most common, is a plain solid amber line; added is a dotted green line and removed a dashed red line. Removed text is also struck through, and status dots differ in shape (disc, diamond, hollow square). Neighboring parts that changed the same way share one bar.
+- **Change markers**: inside a changed item, a bar on the left marks each part that changed, so the eye finds changes without reading labels. Each kind differs in line style as well as color, so it doesn't depend on telling red from green: changed, the most common, is a plain solid amber line; added is a dotted green line and removed a dashed red line. Removed text is also struck through, and status symbols differ in shape: a small square with a plus (added), a dot (changed) or a minus (removed); unchanged items have no symbol. Neighboring parts that changed the same way share one bar.
 - **New and removed items** are marked as a whole instead: a NEW or REMOVED badge, and a tinted background with a border around the item (solid for new, dashed for removed). A new type and its new methods form one group, and the badge appears once, on the type; inside a new module only the module has it.
   - The signature block gets a bar when the signature changed. An unchanged signature, shown only for reference, is drawn muted and outlined instead.
   - Docs are compared paragraph by paragraph (lists and code blocks count as one paragraph). Changed and added paragraphs get a bar; removed paragraphs are shown struck through. When a paragraph changed only a few words, the words are marked inside it (inserted underlined, removed struck through). This is done only when it can't change how the Markdown renders: not for changes to link text or targets, Markdown syntax, the start of a line, or code blocks. Otherwise the previous text of the paragraph can be expanded. **Compare docs side by side** opens both versions next to each other, with changed paragraphs aligned.
   - After the docs, a line such as **Body changed +9 −6** expands to the source diff. A small change (at most 4 changed lines) is shown right away: the changed lines with two lines of context, and the whole source behind a toggle.
   - **Public paths**: an item that becomes public under a new path, for example through a new `pub use`, or loses a public path, is a change: "+ now public as `crate::Op`", "− no longer public as `crate::Parser`".
 - **Settings** (⚙ in the header, remembered per browser): source diffs inline or side by side, hiding whitespace-only changes (like GitHub), and the code font and size. The default font is Iosevka, embedded in the page; ligatures are off so that `->` and `=>` show as written.
-  - Items moved to another module are marked as *moved*. If only formatting, comments or import style changed, the item is marked *formatting only* and counts as unchanged.
+  - Items moved to another module are marked as *moved*, also when they were edited while moving: an item is paired with the one of the same kind and name (and parent type) that disappeared elsewhere, if that is the only candidate on both sides and at least half of its code is the same. Its changes are then shown as for any changed item. If only formatting, comments or import style changed, the item is marked *formatting only* and counts as unchanged.
 - **Private fields**: seen from outside its module, a type is shown as rustdoc shows it, with private fields hidden. An expandable "Full definition" section below it shows every field, with a diff if the definition changed.
 - **Signature layout**: long function signatures are broken into lines the way rustfmt does (one parameter per line, `where` predicates on their own lines), never soft-wrapped.
 - **Signature diffs**: a changed signature is diffed by structure, not text.
@@ -200,5 +211,18 @@ What that leaves out:
 - **Code outside items.** Changes in code that is no item, such as macro invocations without a name (`thread_local!`, `bitflags!`), `extern` blocks and `#[cfg(test)]` code in libraries, are counted per file: such a file is also listed under "Other changed files", with a note and its line diff.
 - **Python and Markdown** are compared structurally, not semantically: renamed or moved functions show as removed plus added, and Markdown sections are matched by their heading path.
 - **SemVer labels.** They are read from the definitions alone. A new required trait item counts as breaking even if the trait is sealed, type changes count as breaking even where inference or coercion would hide them, and changes in auto traits (`Send`, `Sync`) or in trait impls generated by derives the syntactic pass doesn't see are not detected.
-- **PR metadata.** The title and branches come from `gh` when it is available; the PR description is not shown.
+- **PR metadata.** The title, description and branches come from `gh` when it is available. GitHub-specific Markdown in the description (`#123` references, `@` mentions, task lists, images) is shown as plain text.
 - **Build time.** A clean release build takes a few minutes, mostly for rust-analyzer. `--no-default-features` builds without it.
+
+## Development
+
+CI runs `cargo fmt`, clippy (for the host and for wasm) and the tests, builds the demo page, and opens it in headless Chromium in the light and the dark theme (`ci/smoke.mjs`). The smoke test fails on any JavaScript error and on an empty view. The page and screenshots of every view are uploaded as the `demo-page` artifact of each run.
+
+To run the smoke test locally:
+
+```sh
+cargo run --release -- dirs fixtures/demo/base fixtures/demo/head -o demo.html
+npm install --no-save --no-package-lock playwright@1.63.0
+npx playwright install chromium
+node ci/smoke.mjs demo.html smoke
+```
