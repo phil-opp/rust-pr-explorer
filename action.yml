@@ -98,7 +98,10 @@ runs:
           | ($c | map(select(.status == "changed")) | length) as $ch
           | ($c | map(select(.status == "removed")) | length) as $r
           | ($c | map(select((.public_paths // []) | length > 0)) | length) as $p
-          | "\($c | length) changed items (\($a) added, \($ch) changed, \($r) removed), \($p) of them public, in \(.files | length) changed files."
+          | (.files | length) as $f
+          | if ($c | length) == 0 then "No Rust items changed; \($f) changed files."
+            else "\($c | length) changed items (\($a) added, \($ch) changed, \($r) removed), \($p) of them public, in \($f) changed files."
+            end
         ' "$dir/analysis.json")
         {
           echo "page=$page"
