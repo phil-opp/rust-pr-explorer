@@ -344,7 +344,7 @@ a.ref:hover { text-decoration: underline; }
 .src-small pre, .src-small .sbs { margin-top: 0; }
 .src .ln.skip, .src-small .ln.skip, .sbs .skip { color: var(--muted); text-align: center; }
 .sbs .skip { grid-column: 1 / -1; }
-.unfold { cursor: pointer; user-select: none; color: var(--link) !important; background: color-mix(in srgb, var(--link) 8%, transparent); font-family: var(--sans); font-size: 12px; }
+.unfold { cursor: pointer; user-select: none; color: var(--link) !important; background: color-mix(in srgb, var(--link) 8%, transparent); font-family: var(--sans); font-size: 12px; text-align: left !important; padding-left: 12px !important; }
 .unfold:hover { background: color-mix(in srgb, var(--link) 16%, transparent); }
 .src .ln.unfold::before { content: none; }
 .fold { display: contents; }
