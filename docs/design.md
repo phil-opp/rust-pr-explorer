@@ -15,7 +15,13 @@ This document records how the Rust PR Explorer prototype gets its information an
 crates/model             data types shared by analysis and viewer (serde)
 crates/rust-pr-explorer  CLI: get sources, analyze, compare, write the page
   src/source.rs          git worktrees or directory copies; finds crates and targets
-  src/analyze.rs         syntactic analysis with syn (items, names, edges)
+  src/analyze/           syntactic analysis with syn (items, names, edges)
+    load.rs              module files, items and impls (passes 1 and 2)
+    resolve.rs           name resolution: imports, globs, prelude, visibility
+    items.rs             signatures, docs and edges of each item (pass 3)
+    public.rs            re-exports, reachability, public paths
+    collector.rs         resolving the paths inside an item
+    syntax.rs            rendering and normalizing syntax
   src/semantic.rs        call resolution with rust-analyzer (feature "semantic")
   src/merge.rs           base/head comparison, moves
   src/sigdiff.rs         structured signature diffs
@@ -24,7 +30,8 @@ crates/rust-pr-explorer  CLI: get sources, analyze, compare, write the page
   build.rs               compiles crates/viewer to wasm, runs wasm-bindgen
 crates/viewer            the page's front end (wasm, web-sys, pulldown-cmark)
   src/pages.rs           overview and module pages
-  src/canvas.rs          canvas of cards
+  src/code/              highlighting, signature diffs, Markdown, doc diffs
+  src/canvas/            canvas of cards: cards, edges, layout, events
   src/map.rs, route.rs   structure view (module map, matrix) and arrow routing
   src/files.rs           other changed files (Markdown sections, Python, manifests)
 ```
