@@ -443,13 +443,11 @@ a.ref:hover { text-decoration: underline; }
 .sbs .ln { white-space: pre; padding-right: 12px; }
 .sbs .ln::before { content: attr(data-t); display: inline-block; width: 14px; color: var(--muted); }
 .sbs .ln.add { background: var(--added-bg); }
-.sbs .ln.del { background: var(--removed-bg); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--removed) 60%, transparent); }
+.sbs .ln.del { background: var(--removed-bg); }
 .sbs .ln.gap { background: repeating-linear-gradient(135deg, transparent 0 4px, var(--border) 4px 5px); opacity: .5; }
 .card:has(details.src[open] .sbs), .card:has(.src-small .sbs) { width: 1080px; }
-.src .ln.del { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--removed) 60%, transparent); }
-/* A changed line paired with its new version: only the changed words are
-   marked, the rest of the line reads normally. */
-.src .ln.del.wl, .sbs .ln.del.wl, .hunks .ln.del.wl { text-decoration: none; }
+/* Removed lines are marked by their background and "-" alone. A changed
+   line paired with its new version also has its changed words marked. */
 .ln.del .wc { background: color-mix(in srgb, var(--removed) 28%, transparent); text-decoration: line-through 1.5px var(--removed); border-radius: 2px; }
 .ln.add .wc { background: color-mix(in srgb, var(--added) 28%, transparent); border-radius: 2px; }
 
@@ -565,7 +563,7 @@ details.private-def .sigbox { margin-top: 4px; }
 .hunks .ln { display: block; padding: 0 8px 0 4px; white-space: pre; }
 .hunks .ln::before { content: attr(data-t); display: inline-block; width: 14px; color: var(--muted); }
 .hunks .ln.add { background: var(--added-bg); }
-.hunks .ln.del { background: var(--removed-bg); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--removed) 60%, transparent); }
+.hunks .ln.del { background: var(--removed-bg); }
 .hunks .ln.skip { color: var(--muted); font-style: italic; background: var(--panel); }
 .note { font-size: 13px; color: var(--muted); }
 details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px 0; }
