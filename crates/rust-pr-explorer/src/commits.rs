@@ -212,11 +212,12 @@ fn parse_porcelain(text: &str) -> HashMap<usize, String> {
         }
         let f: Vec<&str> = line.split(' ').collect();
         let is_sha = |s: &str| s.len() >= 40 && s.chars().all(|c| c.is_ascii_hexdigit());
-        if f.len() >= 3 && is_sha(f[0]) {
-            if let Ok(n) = f[2].parse::<usize>() {
-                out.insert(n, f[0].to_string());
-                header = false;
-            }
+        if f.len() >= 3
+            && is_sha(f[0])
+            && let Ok(n) = f[2].parse::<usize>()
+        {
+            out.insert(n, f[0].to_string());
+            header = false;
         }
     }
     out
