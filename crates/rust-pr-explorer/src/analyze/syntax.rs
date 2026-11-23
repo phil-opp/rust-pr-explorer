@@ -220,11 +220,27 @@ pub fn is_extra_target(id: &str) -> bool {
     id.split("::").next().unwrap_or("").contains(':')
 }
 
-/// Marked `#[test]` or `#[cfg(test)]`.
+/// Marked `#[test]` or `#[cfg(test)]`, or as a test by another test
+/// attribute (see [`is_test_fn`]).
 pub(super) fn is_test_only(attrs: &[Attribute]) -> bool {
+    is_test_fn(attrs)
+        || attrs.iter().any(|a| {
+            a.path().is_ident("cfg") && a.meta.to_token_stream().to_string() == "cfg (test)"
+        })
+}
+
+/// Marked as a test: `#[test]`, or an attribute macro that wraps it, such
+/// as `#[tokio::test]`, `#[rstest]`, `#[test_case(…)]` or
+/// `#[wasm_bindgen_test]`. Matched by the attribute's last path segment,
+/// since the macros are often imported under their crate's path.
+pub(super) fn is_test_fn(attrs: &[Attribute]) -> bool {
     attrs.iter().any(|a| {
-        a.path().is_ident("test")
-            || (a.path().is_ident("cfg") && a.meta.to_token_stream().to_string() == "cfg (test)")
+        a.path().segments.last().is_some_and(|s| {
+            matches!(
+                s.ident.to_string().as_str(),
+                "test" | "rstest" | "test_case" | "wasm_bindgen_test"
+            )
+        })
     })
 }
 
