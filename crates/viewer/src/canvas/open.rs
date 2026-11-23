@@ -47,10 +47,17 @@ pub fn open(app: &mut App, id: &str, from: Option<&str>, switch_view: bool) {
         }
     };
     let gid = c.groups[gi].gid;
+    if switch_view {
+        // Opened from outside the canvas, or jumped to: a history entry.
+        app.s.canvas_focus = Some(id.to_string());
+    }
     if switch_view && app.s.view != View::Canvas {
         crate::set_view(app, View::Canvas);
     } else {
         render(app);
+        if switch_view {
+            crate::nav::record(app);
+        }
     }
     flash(gid);
     settle(gid);

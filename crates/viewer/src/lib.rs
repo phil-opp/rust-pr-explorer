@@ -10,6 +10,7 @@ mod data;
 mod dom;
 mod files;
 mod map;
+mod nav;
 mod pages;
 mod review;
 mod route;
@@ -56,6 +57,9 @@ pub struct State {
     pub module: String,
     pub show_unchanged: bool,
     pub canvas: canvas::Canvas,
+    /// The item last opened on the canvas from outside it, for the history
+    /// entry (see [`nav`]).
+    pub canvas_focus: Option<String>,
     pub space: space::Space,
     search: Vec<String>,
     search_sel: usize,
@@ -116,6 +120,7 @@ pub fn start() {
             module: root.clone(),
             show_unchanged: false,
             canvas: canvas::Canvas::new(root),
+            canvas_focus: None,
             space: space::Space::new(),
             search: Vec::new(),
             search_sel: 0,
@@ -129,10 +134,15 @@ pub fn start() {
     dom::set_html("pr-title", &title);
     APP.with(|a| *a.borrow_mut() = Some(app));
     install_listeners();
-    with_app(|app| set_view(app, View::Overview));
+    with_app(nav::start);
 }
 
+/// Shows a view, and adds a history entry for it if it differs from the
+/// current one.
 pub fn set_view(app: &mut App, view: View) {
+    if view != View::Canvas {
+        app.s.canvas_focus = None;
+    }
     app.s.view = view;
     for b in dom::query_all("#views button") {
         dom::toggle_class(
@@ -155,6 +165,7 @@ pub fn set_view(app: &mut App, view: View) {
         View::Space => space::show(app),
     }
     pages::render_sidebar(app);
+    nav::record(app);
 }
 
 thread_local! {
@@ -355,6 +366,10 @@ fn install_listeners() {
             });
         });
     }
+    // Back and Forward.
+    dom::listen(&dom::window().into(), "hashchange", |_| {
+        with_app(nav::on_hash_change);
+    });
     dom::listen(&dom::window().into(), "resize", |_| {
         with_app(|app| match app.s.view {
             View::Canvas => canvas::draw_edges(app),
