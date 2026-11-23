@@ -4,13 +4,13 @@ use crate::App;
 use crate::code::esc;
 use crate::data::{Data, changed, kind_order};
 use crate::dom;
-use model::{Item, Kind, Status};
+use model::{ChangedFile, Item, Kind, Status};
 use std::collections::BTreeMap;
 
-/// Whether the sidebar shows. Without any Rust change, a tree of unchanged
-/// modules only gets in the way, so it shows only on the module pages, where
-/// it is the way to browse the modules.
-pub fn sidebar_shown(app: &App) -> bool {
+/// Whether the sidebar lists the modules. Without any Rust change, a tree of
+/// unchanged modules only gets in the way, so it shows only on the module
+/// pages, where it is the way to browse the modules.
+fn modules_shown(app: &App) -> bool {
     app.d.rust_changed() || (app.s.view == crate::View::Module && !app.d.roots().is_empty())
 }
 
@@ -20,6 +20,68 @@ pub fn help_html(text: &str) -> String {
     format!(
         r#"<span class="help" title="{0}" aria-label="{0}">?</span>"#,
         esc(text)
+    )
+}
+
+/// Whether the sidebar shows: it lists the changed modules and files.
+pub fn sidebar_shown(app: &App) -> bool {
+    modules_shown(app) || !app.d.out.files.is_empty()
+}
+
+/// Every changed file, with its status and line counts. A Rust file whose
+/// changes are all inside items opens its module's page; any other file
+/// opens its entry in the overview.
+fn files_html(d: &Data) -> String {
+    let mut files: Vec<&ChangedFile> = d.out.files.iter().collect();
+    if files.is_empty() {
+        return String::new();
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    let (added, removed) = files
+        .iter()
+        .fold((0, 0), |(a, r), f| (a + f.added, r + f.removed));
+    let rows: String = files
+        .iter()
+        .map(|f| {
+            let module = (f.analyzed && f.outside_items == 0)
+                .then(|| {
+                    d.items()
+                        .find(|it| it.info.kind == Kind::Mod && it.info.file == f.path)
+                })
+                .flatten();
+            let target = match module {
+                Some(m) => format!(r#"data-mod="{}""#, esc(&m.info.id)),
+                None => format!(r#"data-goto-file="{}""#, esc(&f.path)),
+            };
+            let (dir, name) = match f.path.rsplit_once('/') {
+                Some((dir, name)) => (dir.to_string(), name),
+                None => (String::new(), f.path.as_str()),
+            };
+            let counts = if f.lang == "binary" {
+                r#"<span class="dim">bin</span>"#.to_string()
+            } else {
+                format!(
+                    r#"<span class="d-add">+{}</span> <span class="d-del">−{}</span>"#,
+                    f.added, f.removed
+                )
+            };
+            format!(
+                r#"<li><div class="tree-row file-row {}" {target} title="{}{}"><span class="dot {}"></span><span class="fn">{}<span class="fdir">{}</span></span><span class="cnt">{counts}</span></div></li>"#,
+                if f.generated.is_some() { "gen" } else { "" },
+                esc(&f.path),
+                f.generated
+                    .as_deref()
+                    .map(|g| format!(" ({})", esc(g)))
+                    .unwrap_or_default(),
+                f.status.css(),
+                esc(name),
+                esc(&dir),
+            )
+        })
+        .collect();
+    format!(
+        r#"<div class="side-h">Files <span class="side-h-n">{} · <span class="d-add">+{added}</span> <span class="d-del">−{removed}</span></span></div><ul class="tree files">{rows}</ul>"#,
+        files.len()
     )
 }
 
@@ -38,6 +100,11 @@ pub fn render_sidebar(app: &App) {
         dom::toggle_class(&el, "hidden", !shown);
     }
     if !shown {
+        return;
+    }
+    let files = files_html(d);
+    if !modules_shown(app) {
+        dom::set_html("sidebar", &format!("{files}{}", warnings_html(d)));
         return;
     }
     fn submodules<'a>(d: &'a Data, m: &str) -> Vec<&'a Item> {
@@ -71,16 +138,25 @@ pub fn render_sidebar(app: &App) {
         let subs = submodules(d, m);
         let changes = d.changes_in(m, false);
         let n = changes.len();
-        // In review mode: how many still need a review.
-        let count = if n == 0 {
-            String::new()
-        } else if crate::review::is_on() {
-            match crate::review::open_count(changes.iter().map(|c| c.info.id.as_str())) {
+        // In review mode: how many still need a review. A module without
+        // changes of its own gets the ✓ once its submodules are reviewed.
+        let open_in =
+            |list: &[&Item]| crate::review::open_count(list.iter().map(|c| c.info.id.as_str()));
+        let count = if !crate::review::is_on() {
+            if n == 0 { String::new() } else { n.to_string() }
+        } else if n == 0 {
+            let deep = d.changes_in(m, true);
+            if !deep.is_empty() && open_in(&deep) == 0 {
+                r#"<span class="rv-all" title="Everything in its submodules is reviewed">✓</span>"#
+                    .to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            match open_in(&changes) {
                 0 => r#"<span class="rv-all" title="All reviewed">✓</span>"#.to_string(),
                 left => format!(r#"<span title="{left} of {n} not reviewed yet">{left}</span>"#),
             }
-        } else {
-            n.to_string()
         };
         let private = !d.is_root(it) && it.info.vis_scope.is_some();
         let sel = app.s.view == crate::View::Module && app.s.module == m;
@@ -152,7 +228,7 @@ pub fn render_sidebar(app: &App) {
     dom::set_html(
         "sidebar",
         &format!(
-            r#"<div class="side-h">Modules</div>{note}<ul class="tree">{roots}</ul>{toggle}
+            r#"<div class="side-h">Modules</div>{note}<ul class="tree">{roots}</ul>{toggle}{files}
             <div class="side-legend">
               <div class="legend-dots"><span><span class="dot added"></span> added</span><span><span class="dot changed"></span> changed</span><span><span class="dot removed"></span> removed</span></div>
               <div>No symbol: unchanged.</div>
@@ -161,7 +237,7 @@ pub fn render_sidebar(app: &App) {
               <div>Calls resolved with: {}</div>
             </div>{warnings}"#,
             if crate::review::is_on() {
-                "Numbers: changed items defined directly in the module that are not reviewed yet; ✓ when all are."
+                "Numbers: changed items defined directly in the module that are not reviewed yet; ✓ when all are, and for a module without changes of its own, when everything in its submodules is."
             } else {
                 "Numbers: changed items defined directly in the module."
             },
@@ -200,7 +276,7 @@ fn item_row(
     };
     // What changed in the body, expandable to the diff.
     let src = if it.changes.body || it.changes.cosmetic {
-        d.source_seg(it, false, false)
+        d.source_seg(it, false, false, &Default::default())
     } else {
         None
     };
@@ -423,9 +499,13 @@ pub fn render_overview(app: &App) {
         })
         .collect();
     // Sections without changes are left out. Without any Rust change, only
-    // the analysis warnings remain (the sidebar that shows them is hidden).
+    // the analysis warnings remain, and only if no sidebar shows them.
     let rust_html = if !d.rust_changed() {
-        warnings_html(d)
+        if sidebar_shown(app) {
+            String::new()
+        } else {
+            warnings_html(d)
+        }
     } else {
         let semver = semver_summary(d);
         let public = if public_html.is_empty() && semver.is_empty() {

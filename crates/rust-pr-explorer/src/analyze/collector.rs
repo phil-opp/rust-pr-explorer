@@ -65,9 +65,15 @@ impl<'a> Collector<'a> {
         self.shadowed.extend(names);
     }
 
-    /// Resolves a path unless its first name is shadowed.
+    /// Whether a path names a local binding. Only a single name can: in
+    /// `files::f`, `files` is a module even if a local `files` exists.
+    fn is_local(&self, segs: &[String]) -> bool {
+        segs.len() == 1 && self.shadowed.contains(&segs[0])
+    }
+
+    /// Resolves a path unless it names a local binding.
     fn resolve(&self, segs: &[String], ns: Option<Ns>) -> Option<Res> {
-        if segs.is_empty() || self.shadowed.contains(&segs[0]) {
+        if segs.is_empty() || self.is_local(segs) {
             return None;
         }
         if segs.len() == 1 && matches!(segs[0].as_str(), "self" | "crate" | "super") {
@@ -197,8 +203,7 @@ impl VisitMut for Collector<'_> {
         let site = match &*call.func {
             Expr::Path(p) if p.qself.is_none() => {
                 let segs = path_segments(&p.path);
-                let shadowed = self.shadowed.contains(&segs[0]);
-                (!shadowed).then(|| {
+                (!self.is_local(&segs)).then(|| {
                     let res = self.resolve(&segs, Some(Ns::Value));
                     let target = res
                         .as_ref()

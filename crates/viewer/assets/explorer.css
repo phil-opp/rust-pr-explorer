@@ -144,6 +144,12 @@ code { font-size: .92em; }
 .side-legend div { margin: 3px 0; }
 .legend-dots { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 .legend-dots > span { display: inline-flex; align-items: center; gap: 5px; }
+.side-h-n { text-transform: none; letter-spacing: 0; margin-left: 4px; }
+.tree.files { padding-left: 6px; }
+.file-row .fn { font-family: var(--mono); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; min-width: 0; white-space: nowrap; }
+.file-row .fdir { color: var(--muted); font-size: 11.5px; margin-left: 6px; }
+.file-row.gen .fn { opacity: .7; }
+.file-row .cnt { flex: none; font-family: var(--mono); }
 .side-opt { display: flex; align-items: center; gap: 6px; padding: 8px 14px 0; font-size: 12px; color: var(--muted); cursor: pointer; }
 .side-note { padding: 2px 14px 8px; font-size: 12px; color: var(--muted); }
 .side-warn { padding: 6px 14px; font-size: 12px; color: var(--removed); }
@@ -294,6 +300,10 @@ a.ref:hover { text-decoration: underline; }
 .frame rect.frame-bg { fill: var(--bg); fill-opacity: .55; stroke: none; }
 .frame rect.priv { stroke: var(--private); stroke-dasharray: 6 4; stroke-width: 1; }
 .frame text { font: 600 13px var(--mono); fill: var(--mod); }
+/* Module frames are moved by their border or their name. */
+.frame rect.frame-grip { stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: grab; }
+.frame text[data-frame] { pointer-events: auto; cursor: grab; user-select: none; }
+.card-h, .card-tabs, .card-loc { cursor: grab; }
 .frame text.priv { fill: var(--private); font-size: 11px; font-weight: 400; }
 .edge { fill: none; stroke-width: 1.6; }
 .edge.call { stroke: var(--fn); }
@@ -357,6 +367,12 @@ a.ref:hover { text-decoration: underline; }
 .src-small pre, .src-small .sbs { margin-top: 0; }
 .src .ln.skip, .src-small .ln.skip, .sbs .skip { color: var(--muted); text-align: center; }
 .sbs .skip { grid-column: 1 / -1; }
+.unfold { cursor: pointer; user-select: none; color: var(--link) !important; background: color-mix(in srgb, var(--link) 8%, transparent); font-family: var(--sans); font-size: 12px; text-align: left !important; padding-left: 12px !important; }
+.unfold:hover { background: color-mix(in srgb, var(--link) 16%, transparent); }
+.src .ln.unfold::before { content: none; }
+.fold { display: contents; }
+.fold[hidden] { display: none; }
+.unfold-all { margin-top: 4px; }
 .card-impl { font: 12px var(--mono); color: var(--muted); }
 .card-acts { display: flex; gap: 4px; flex-wrap: wrap; }
 .card-acts button { font-size: 12px; padding: 1px 7px; }
@@ -426,13 +442,13 @@ a.ref:hover { text-decoration: underline; }
 .sbs { display: grid; grid-template-columns: auto minmax(max-content, 1fr) auto minmax(max-content, 1fr); margin: 4px 0 0;
   background: var(--bg-code); border-radius: 4px; overflow-x: auto; padding: 4px 0; }
 .sbs .no { color: var(--muted); text-align: right; padding: 0 6px 0 8px; user-select: none; border-left: 1px solid var(--border); }
-.sbs .no:first-child, .sbs .no:nth-child(4n+1) { border-left: none; }
+.sbs .no.o { border-left: none; }
 .sbs .ln { white-space: pre; padding-right: 12px; }
 .sbs .ln::before { content: attr(data-t); display: inline-block; width: 14px; color: var(--muted); }
 .sbs .ln.add { background: var(--added-bg); }
 .sbs .ln.del { background: var(--removed-bg); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--removed) 60%, transparent); }
 .sbs .ln.gap { background: repeating-linear-gradient(135deg, transparent 0 4px, var(--border) 4px 5px); opacity: .5; }
-.card:has(details.src[open] .sbs) { width: 1080px; }
+.card:has(details.src[open] .sbs), .card:has(.src-small .sbs) { width: 1080px; }
 .src .ln.del { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--removed) 60%, transparent); }
 /* A changed line paired with its new version: only the changed words are
    marked, the rest of the line reads normally. */
@@ -564,7 +580,7 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 .manifest .mf-old, .manifest .mf-new { padding-left: 24px; }
 .md-h { font-weight: 600; font-size: 15px; margin: 4px 0; }
 .md-removed .md-h { text-decoration: line-through; text-decoration-color: var(--removed); color: var(--muted); }
-.irow.member.py { margin-top: 8px; }
+.irow.member.part { margin-top: 8px; }
 .ientry > .ihead { display: flex; align-items: center; gap: 8px; }
 #panic { position: fixed; top: 0; left: 0; right: 0; z-index: 1000; background: var(--removed); color: #fff; padding: 10px 16px; font-size: 14px; }
 
@@ -583,15 +599,24 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 .rv-btn { display: none; }
 .reviewing .rv-btn { display: inline-block; border-color: var(--reviewed); color: var(--reviewed); }
 .reviewing .rv-btn:hover { background: var(--reviewed); color: var(--bg); }
+.reviewing .rv-btn.changes { border-color: var(--removed); color: var(--removed); }
+.reviewing .rv-btn.changes:hover { background: var(--removed); color: var(--bg); }
+.reviewing .rv-btn.comment { border-color: var(--link); color: var(--link); }
+.reviewing .rv-btn.comment:hover { background: var(--link); color: var(--bg); }
 .rv-chip { border: 1px solid var(--reviewed); color: var(--reviewed); background: var(--reviewed-bg); font-weight: 600; }
+.rv-chip.changes { border-color: var(--removed); color: var(--removed); background: var(--removed-bg); }
+.rv-chip.commented { border-color: var(--link); color: var(--link); background: var(--bg); }
+.rvc .rv-note { border-style: dashed; color: var(--muted); font-style: italic; max-width: 30ch; overflow: hidden; text-overflow: ellipsis; }
+.rvc .rv-edit, .rvc .rv-fold { color: var(--muted); }
+body:not(.reviewing) .rv-edit, .card-rv .rv-fold { display: none; }
 .rv-chip.stale { border: 1px dashed var(--changed); color: var(--changed); background: var(--changed-bg); }
 .rv-all { color: var(--reviewed); font-weight: 700; }
 /* A reviewed row: one line, dimmed, with a check bar. Removing the mark
    shows its details again. */
 .irow:has(> .iacts .rvc.done), .impl-line:has(.rvc.done) { box-shadow: inset 3px 0 0 var(--reviewed); padding-left: 10px !important; }
-.irow:has(> .iacts .rvc.done) > :not(.ihead, .iacts) { display: none; }
-.irow:has(> .iacts .rvc.done) > .ihead, .impl-line:has(.rvc.done) > code { opacity: .6; }
-.ientry.file:has(> .irow .rvc.done) > :not(.irow) { display: none; }
+.irow:has(> .iacts .rvc.done:not(.unfold)) > :not(.ihead, .iacts) { display: none; }
+.irow:has(> .iacts .rvc.done:not(.unfold)) > .ihead, .impl-line:has(.rvc.done:not(.unfold)) > code { opacity: .6; }
+.ientry.file:has(> .irow .rvc.done:not(.unfold)) > :not(.irow) { display: none; }
 .card:has(.card-rv .rvc.done) { outline: 2px solid var(--reviewed); }
 .card-rv { padding: 6px 10px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; }
 .card-rv:has(.rvc.done:only-child) { justify-content: flex-start; }
@@ -611,3 +636,19 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .since-facts li.add { color: var(--added); }
 .since-facts li.del { color: var(--removed); }
 .since-facts li .dim { margin-right: 4px; }
+/* The comment editor and the "Finish review" dialog. */
+#modal-box:has(.rv-editor, .rv-finish) { width: min(760px, 94vw); }
+.rv-editor textarea, .rv-finish textarea { width: 100%; box-sizing: border-box; font: 14px var(--sans); padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); resize: vertical; }
+.rv-finish #rv-out { font: 12px var(--mono); margin-top: 8px; }
+.rv-editor .sub, .rv-finish .sub { color: var(--muted); font-size: 13px; margin: 6px 0; }
+.rv-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
+.rv-row .grow { flex: 1; }
+.rv-editor button, .rv-finish button { padding: 4px 12px; }
+#modal-b button.primary { background: var(--reviewed); border-color: var(--reviewed); color: var(--bg); font-weight: 600; }
+.rv-ev { display: block; margin: 4px 0; cursor: pointer; }
+.rv-cmd { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 4px 8px; background: var(--bg-code); border-radius: 4px; font-size: 12px; }
+.rv-list { padding-left: 18px; margin: 4px 0; }
+.rv-list li { margin: 6px 0; }
+.rv-k { font-size: 12px; font-weight: 600; color: var(--link); }
+.rv-k.changes { color: var(--removed); }
+.rv-q { white-space: pre-wrap; color: var(--text); font-size: 13px; border-left: 3px solid var(--border); padding-left: 8px; margin-top: 2px; }
