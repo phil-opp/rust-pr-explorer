@@ -234,7 +234,11 @@ details.src.src-chg > summary b { color: var(--changed); }
 a.ref:hover { text-decoration: underline; }
 /* In source views: names of items the PR adds. */
 .ref.new { font-weight: 700; text-decoration: underline 2px var(--added); text-underline-offset: 3px; }
-.ref.new::after { content: "new"; display: inline-block; font-family: var(--sans); font-size: 9px; font-weight: 700; line-height: 0; vertical-align: super; margin-left: 1px; color: var(--added); }
+.ref.new::after, .ref.chg::after { content: "new"; display: inline-block; font-family: var(--sans); font-size: 9px; font-weight: 700; line-height: 0; vertical-align: super; margin-left: 1px; color: var(--added); }
+.ref.chg { font-weight: 700; text-decoration: underline 2px var(--changed); text-underline-offset: 3px; }
+.ref.chg::after { content: "changed"; color: var(--changed); }
+.reviewing .ref.new.rv-ok::after { content: "new ✓"; color: var(--reviewed); }
+.reviewing .ref.chg.rv-ok::after { content: "changed ✓"; color: var(--reviewed); }
 .ref.ext { color: inherit; border-bottom: 1px dotted var(--border); cursor: help; }
 .ref.on-canvas { background: var(--highlight); box-shadow: 0 0 0 1px var(--highlight); }
 .title-name { font-family: var(--mono); font-weight: 600; }
@@ -751,3 +755,8 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 body:not(.reviewing) .rv-scope { display: none; }
 .hunk-rv .rv-fold { display: none; }
 body:not(.reviewing) .hunk-rv:not(:has(.rvc.done, .rvc.stale)) { display: none; }
+#rv-bar #rv-keys { margin-left: 6px; min-width: 26px; color: var(--muted); }
+.keys { border-collapse: collapse; margin-top: 8px; }
+.keys td { padding: 4px 12px 4px 0; vertical-align: top; }
+.keys td:first-child { white-space: nowrap; }
+kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; background: var(--bg-alt); font-family: var(--mono); font-size: 12px; text-align: center; }

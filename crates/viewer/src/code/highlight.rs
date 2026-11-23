@@ -72,12 +72,38 @@ pub fn ref_html(d: &Data, text: &str, r: &Ref, extra: &str) -> String {
     }
 }
 
-/// `new` for a reference to an item that the PR adds, so that source
-/// views can point out what is new.
-fn new_class(d: &Data, r: &Ref) -> &'static str {
-    match r.id.as_deref().and_then(|id| d.item(id)) {
-        Some(it) if it.status == Status::Added && d.external(&it.info.id).is_none() => "new",
-        _ => "",
+/// Classes that point out, in source views, a reference to an item that
+/// the PR adds (`new`), or a call of a function that it changes (`chg`),
+/// as each of them needs a review of its own (see [`ref_tag`]). Once that
+/// item is reviewed, `rv-ok` adds a ✓ in review mode (kept up to date by
+/// `review::refresh`).
+fn mark_class(d: &Data, r: &Ref, of: &str) -> &'static str {
+    let Some(id) = r.id.as_deref() else {
+        return "";
+    };
+    let done = || crate::review::mark(id) == Some(crate::review::Mark::Done);
+    match ref_tag(d, id, of) {
+        Some("new") if done() => "new rv-ok",
+        Some("chg") if done() => "chg rv-ok",
+        Some(tag) => tag,
+        None => "",
+    }
+}
+
+/// How the source of item `of` tags a reference to item `id`: `new` for
+/// an item the PR adds, `chg` for a function or method it changes. Names
+/// of changed types are not tagged: they are everywhere, and calls are
+/// what a top-down review follows. A reference of an item to itself (a
+/// recursive call) is not tagged either.
+pub fn ref_tag(d: &Data, id: &str, of: &str) -> Option<&'static str> {
+    let it = d.item(id).filter(|_| id != of)?;
+    if d.external(id).is_some() || !crate::review::is_unit_item(it) {
+        return None;
+    }
+    match it.status {
+        Status::Added => Some("new"),
+        Status::Changed if it.info.kind.is_callable() => Some("chg"),
+        _ => None,
     }
 }
 
@@ -93,10 +119,12 @@ pub enum Links<'a> {
         at: &'a [u32],
         base: usize,
     },
-    /// A line of source: names are linked by `line:column`.
+    /// A line of source: names are linked by `line:column`. `of` is the
+    /// item the source belongs to.
     Source {
         line: usize,
         refs: &'a BTreeMap<String, Ref>,
+        of: &'a str,
     },
 }
 
@@ -187,9 +215,9 @@ pub fn code_html(d: &Data, text: &str, links: Links) -> String {
                 // A method call or field access.
                 out.push('.');
                 match links {
-                    Links::Source { line, refs } => {
+                    Links::Source { line, refs, of } => {
                         match refs.get(&format!("{line}:{}", start + 1)) {
-                            Some(r) => out.push_str(&ref_html(d, name, r, new_class(d, r))),
+                            Some(r) => out.push_str(&ref_html(d, name, r, mark_class(d, r, of))),
                             None => out.push_str(&esc(name)),
                         }
                     }
@@ -202,10 +230,12 @@ pub fn code_html(d: &Data, text: &str, links: Links) -> String {
                     {
                         out.push_str(&path_html(d, &path, refs))
                     }
-                    Links::Source { line, refs } => match refs.get(&format!("{line}:{start}")) {
-                        Some(r) => out.push_str(&ref_html(d, &path, r, new_class(d, r))),
-                        None => out.push_str(&plain_path(&path)),
-                    },
+                    Links::Source { line, refs, of } => {
+                        match refs.get(&format!("{line}:{start}")) {
+                            Some(r) => out.push_str(&ref_html(d, &path, r, mark_class(d, r, of))),
+                            None => out.push_str(&plain_path(&path)),
+                        }
+                    }
                     _ => out.push_str(&plain_path(&path)),
                 }
             }
