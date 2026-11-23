@@ -9,6 +9,7 @@ mod code;
 mod data;
 mod dom;
 mod files;
+mod js;
 mod map;
 mod nav;
 mod pages;

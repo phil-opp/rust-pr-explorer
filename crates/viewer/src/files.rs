@@ -8,6 +8,7 @@ use crate::code::{
     marked_html, sig_diff_html,
 };
 use crate::data::Data;
+use crate::js;
 use crate::yaml;
 use model::{ChangedFile, Kind, ManifestChange, PartChange, SourceLine, Status};
 use std::collections::{BTreeMap, BTreeSet};
@@ -27,18 +28,22 @@ fn stats(added: u32, removed: u32) -> String {
     format!(r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>"#)
 }
 
-/// Hunks of a line diff. Rust, Python and YAML get syntax colors; nothing
+/// Hunks of a line diff. Rust, Python, JavaScript and YAML get syntax
+/// colors; nothing
 /// is linked.
 pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
     let mut new_line = 0usize;
     let mut old_line = 0usize;
     // YAML block scalars span lines; each side keeps its own state.
     let (mut old_yaml, mut new_yaml) = (yaml::State::default(), yaml::State::default());
+    // So do JavaScript comments and template literals.
+    let (mut old_js, mut new_js) = (js::State::default(), js::State::default());
     let mut body = String::new();
     let mut codes: Vec<String> = Vec::with_capacity(lines.len());
     for l in lines {
         if l.0 == '@' {
             (old_yaml, new_yaml) = (yaml::State::default(), yaml::State::default());
+            (old_js, new_js) = (js::State::default(), js::State::default());
         }
         codes.push(match lang {
             "rust" | "python" => code_html(d, &l.1, Links::None),
@@ -48,6 +53,14 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
                 _ => {
                     yaml::line_html(&mut old_yaml, &l.1);
                     yaml::line_html(&mut new_yaml, &l.1)
+                }
+            },
+            "javascript" => match l.0 {
+                '-' => js::line_html(&mut old_js, &l.1),
+                '+' => js::line_html(&mut new_js, &l.1),
+                _ => {
+                    js::line_html(&mut old_js, &l.1);
+                    js::line_html(&mut new_js, &l.1)
                 }
             },
             _ => esc(&l.1),
@@ -181,7 +194,16 @@ fn parts_summary(parts: &[PartChange]) -> String {
 /// A file's changed parts (see [`PartChange`]), one box each.
 fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
     let no_refs = BTreeMap::new();
-    let code = lang != "yaml";
+    // Rust and Python headers are highlighted (and diffed) as code; YAML
+    // and JavaScript ones with their own highlighters.
+    let code = lang == "rust" || lang == "python";
+    let plain = |text: &str| -> String {
+        if lang == "javascript" {
+            js::text_html(text)
+        } else {
+            yaml::line_html(&mut yaml::State::default(), text)
+        }
+    };
     list.iter()
         .map(|c| {
             if c.kind == "module" {
@@ -195,13 +217,13 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
                 Some(old) => format!(
                     r#"<pre class="sig"><del>{}</del>
 {}</pre>"#,
-                    yaml::line_html(&mut yaml::State::default(), old),
-                    yaml::line_html(&mut yaml::State::default(), &c.sig)
+                    plain(old),
+                    plain(&c.sig)
                 ),
                 None if code => {
                     format!(r#"<pre class="sig">{}</pre>"#, code_html(d, &c.sig, Links::None))
                 }
-                None => format!(r#"<pre class="sig">{}</pre>"#, yaml::line_html(&mut yaml::State::default(), &c.sig)),
+                None => format!(r#"<pre class="sig">{}</pre>"#, plain(&c.sig)),
             };
             let (sig_bar, sig_class) = match c.status {
                 Status::Added | Status::Removed => ("", ""),
@@ -210,7 +232,7 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
             };
             let mut segs = Vec::new();
             // A YAML key's line repeats its name, unless it changed.
-            if code || c.old_sig.is_some() {
+            if lang != "yaml" || c.old_sig.is_some() {
                 segs.push(Seg::new(
                     sig_bar,
                     format!(r#"<div class="sigbox {sig_class}">{sig}</div>"#),
@@ -221,7 +243,11 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
                     "m-chg",
                     format!(
                         r#"<div class="note">{} changed.</div>"#,
-                        if lang == "python" { "Docstring" } else { "Doc comment" }
+                        match lang {
+                            "python" => "Docstring",
+                            "javascript" => "JSDoc comment",
+                            _ => "Doc comment",
+                        }
                     ),
                 ));
             }
@@ -446,7 +472,9 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
         String::new()
     };
     let structured = match f.lang.as_str() {
-        "python" | "yaml" | "rust" if !f.parts.is_empty() => parts_html(d, &f.parts, &f.lang),
+        "python" | "javascript" | "yaml" | "rust" if !f.parts.is_empty() => {
+            parts_html(d, &f.parts, &f.lang)
+        }
         "markdown" => match (&f.old_text, &f.new_text) {
             (Some(o), Some(n)) => markdown_html(d, o, n),
             _ => String::new(),
@@ -569,7 +597,8 @@ pub fn other_files_html(d: &Data) -> String {
         r#"<h2>Other changed files {}</h2>"#,
         crate::pages::help_html(&format!(
             "Files the Rust analysis doesn't cover{}. Python files are compared by function \
-             and class, YAML files by key, Markdown files by section, and Rust code outside \
+             and class, JavaScript files by function, class, method and test block, YAML \
+             files by key, Markdown files by section, and Rust code outside \
              items (tests, macro calls, extern blocks) one item at a time; other files line \
              by line.",
             if covered > 0 {
