@@ -609,6 +609,12 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 body:not(.reviewing) .rv-edit, .card-rv .rv-fold { display: none; }
 .rv-chip.stale { border: 1px dashed var(--changed); color: var(--changed); background: var(--changed-bg); }
 .rv-all { color: var(--reviewed); font-weight: 700; }
+/* The review state in lists of changes (the overview's internal changes). */
+.rv-group { margin-left: 10px; font-size: 12px; white-space: nowrap; }
+.rv-group .rv-left { color: var(--changed); font-weight: 600; }
+body:not(.reviewing) .rv-group { display: none; }
+.reviewing .rv-it.done { color: var(--reviewed); }
+.reviewing .rv-it.done::after { content: " ✓"; font-weight: 700; }
 /* A reviewed row: one line, dimmed, with a check bar. Removing the mark
    shows its details again. */
 .irow:has(> .iacts .rvc.done), .impl-line:has(.rvc.done) { box-shadow: inset 3px 0 0 var(--reviewed); padding-left: 10px !important; }

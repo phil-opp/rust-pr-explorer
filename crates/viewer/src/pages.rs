@@ -478,13 +478,17 @@ pub fn render_overview(app: &App) {
         .map(|(m, list)| {
             format!(
                 r#"<div class="irow"><div class="ihead"><a data-mod="{}" class="title-name"><span class="k-mod">{}</span></a>
-                <span class="dim">{} changed item{} not in the public API: {}</span></div>
+                <span class="dim">{} changed item{} not in the public API: {}</span><span class="rv-group">{}</span></div>
                 <div class="iacts"><button data-graph="{}">Internal call graph ▸</button></div></div>"#,
                 esc(m),
                 esc(&d.mod_label(m)),
                 list.len(),
                 if list.len() > 1 { "s" } else { "" },
-                list.iter().map(|it| esc(&d.display_name(it))).collect::<Vec<_>>().join(", "),
+                list.iter()
+                    .map(|it| crate::review::item_tag(&it.info.id, &d.display_name(it)))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                crate::review::group_html(list.iter().map(|it| it.info.id.as_str())),
                 esc(m)
             )
         })
