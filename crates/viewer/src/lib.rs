@@ -14,6 +14,7 @@ mod pages;
 mod review;
 mod route;
 mod settings;
+mod since;
 mod space;
 
 use code::esc;
@@ -440,12 +441,14 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
 fn on_review_click(app: &mut App, el: &Element) -> bool {
     if let Some(c) = dom::closest(el, ".rvc") {
         let id = dom::data(&c, "rv").unwrap_or_default();
-        if dom::closest(el, "[data-rv-done]").is_some() {
-            review::set_mark(&id, true);
+        if dom::closest(el, "[data-rv-since]").is_some() {
+            show_since_review(app, &id);
+        } else if dom::closest(el, "[data-rv-done]").is_some() {
+            review::set_mark(&app.d, &id, true);
             pages::render_sidebar(app);
             go_next(app, Some(id));
         } else if dom::closest(el, "[data-rv-undo]").is_some() {
-            review::set_mark(&id, false);
+            review::set_mark(&app.d, &id, false);
             app.s.rv_current = Some(id);
             pages::render_sidebar(app);
         }
@@ -477,6 +480,32 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
         return true;
     }
     false
+}
+
+/// The dialog with what changed since a stale mark was made.
+fn show_since_review(app: &App, id: &str) {
+    let Some(now) = since::snapshot(&app.d, id) else {
+        return;
+    };
+    let saved = review::reviewed_version(id);
+    let when = saved.as_ref().map_or(String::new(), |s| {
+        js_sys::Date::new(&wasm_bindgen::JsValue::from_f64(s.at))
+            .to_locale_string("default", &wasm_bindgen::JsValue::UNDEFINED)
+            .as_string()
+            .unwrap_or_default()
+    });
+    let name = match id.strip_prefix("file:") {
+        Some(path) => format!("<code>{}</code>", esc(path)),
+        None => app
+            .d
+            .item(id)
+            .map(|it| format!("<code>{}</code>", esc(&app.d.display_name(it))))
+            .unwrap_or_default(),
+    };
+    open_modal(
+        &format!("Changes since your review: {name}"),
+        &since::since_html(&app.d, saved.as_ref(), &now, &when),
+    );
 }
 
 /// Shows the next unit that still needs a review, after unit `from`: on

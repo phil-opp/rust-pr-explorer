@@ -2710,6 +2710,7 @@ dependencies = [
  "js-sys",
  "model",
  "pulldown-cmark 0.13.6",
+ "serde",
  "serde_json",
  "similar",
  "wasm-bindgen",
