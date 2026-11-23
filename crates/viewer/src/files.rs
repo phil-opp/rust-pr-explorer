@@ -233,7 +233,9 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
                 _ if c.body_changed => ("<b>Body changed</b>", "m-chg"),
                 _ => ("Source", ""),
             };
-            let small = c.status == Status::Changed && added + removed <= 4;
+            // Like Rust items' bodies: small changes start open.
+            let small =
+                c.status == Status::Changed && added + removed <= crate::data::SMALL_BODY as u32;
             segs.push(Seg::new(
                 bar,
                 format!(

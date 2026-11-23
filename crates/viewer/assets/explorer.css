@@ -364,11 +364,8 @@ a.ref:hover { text-decoration: underline; }
 .card-b { padding: 6px 10px 12px; display: flex; flex-direction: column; gap: 10px; }
 .card > .members { padding: 8px 10px 10px; border-top: 1px solid var(--border); }
 .card-foot { padding: 8px 10px; border-top: 1px solid var(--border); background: var(--panel); border-radius: 0 0 8px 8px; display: flex; flex-direction: column; gap: 6px; }
-.card-b details.src, .card-b .src-small, .irow details.src, .irow .src-small { border-top: 1px solid var(--border); padding-top: 8px; }
-.src-sum { font-size: 12.5px; color: var(--muted); margin: 0 0 4px; }
-.src-small.src-chg .src-sum b { color: var(--changed); }
-.src-small pre, .src-small .sbs { margin-top: 0; }
-.src .ln.skip, .src-small .ln.skip, .sbs .skip { color: var(--muted); text-align: center; }
+.card-b details.src, .irow details.src { border-top: 1px solid var(--border); padding-top: 8px; }
+.src .ln.skip, .sbs .skip { color: var(--muted); text-align: center; }
 .sbs .skip { grid-column: 1 / -1; }
 .unfold { cursor: pointer; user-select: none; color: var(--link) !important; background: color-mix(in srgb, var(--link) 8%, transparent); font-family: var(--sans); font-size: 12px; text-align: left !important; padding-left: 12px !important; }
 .unfold:hover { background: color-mix(in srgb, var(--link) 16%, transparent); }
@@ -451,7 +448,7 @@ a.ref:hover { text-decoration: underline; }
 .sbs .ln.add { background: var(--added-bg); }
 .sbs .ln.del { background: var(--removed-bg); }
 .sbs .ln.gap { background: repeating-linear-gradient(135deg, transparent 0 4px, var(--border) 4px 5px); opacity: .5; }
-.card:has(details.src[open] .sbs), .card:has(.src-small .sbs) { width: 1080px; }
+.card:has(details.src[open] .sbs) { width: 1080px; }
 /* Removed lines are marked by their background and "-" alone. A changed
    line paired with its new version also has its changed words marked. */
 .ln.del .wc { background: color-mix(in srgb, var(--removed) 28%, transparent); text-decoration: line-through 1.5px var(--removed); border-radius: 2px; }
@@ -478,7 +475,6 @@ button.mini { font: inherit; font-size: 12px; padding: 1px 8px; }
 details.private-def > summary { cursor: pointer; font-size: 12.5px; color: var(--muted); margin: 2px 0; }
 details.private-def > summary b { color: var(--changed); font-weight: 600; }
 details.private-def .sigbox { margin-top: 4px; }
-.src-small details.src { border-top: none !important; padding-top: 0 !important; }
 
 /* Added and removed items: every part is new (or gone), so the item as a
    whole is marked: a badge, and a tinted, bordered background around it
