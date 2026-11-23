@@ -25,6 +25,7 @@ crates/rust-pr-explorer  CLI: get sources, analyze, compare, write the page
   src/semantic.rs        call resolution with rust-analyzer (feature "semantic")
   src/public_api.rs      exact public API from rust-analyzer's name resolution
   src/merge.rs           base/head comparison, moves
+  src/semver.rs          breaking / non-breaking labels for API changes
   src/sigdiff.rs         structured signature diffs
   src/files.rs           every changed file: line diffs, Cargo.toml entries
   src/parts.rs           files split into parts compared one by one: YAML keys,
