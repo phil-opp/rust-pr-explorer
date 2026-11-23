@@ -146,6 +146,35 @@ pub fn hunk_loc(files: &[ChangedFile], it: &Item, h: &review::Hunk) -> Option<Lo
     }
 }
 
+/// The address of a line in the pull request's "Files changed" view on
+/// GitHub. Its anchor is `diff-` with the SHA-256 of the file's path, then
+/// `L` (base) or `R` (PR) and the line number.
+pub fn github_url(d: &Data, l: &Loc) -> Option<String> {
+    let pr = d.out.meta.pr.as_ref()?;
+    Some(format!(
+        "https://github.com/{}/pull/{}/files#diff-{}{}{}",
+        pr.repo,
+        pr.number,
+        crate::sha256::hex(l.path.as_bytes()),
+        if l.side == "LEFT" { 'L' } else { 'R' },
+        l.line
+    ))
+}
+
+/// A link that opens `l` on GitHub, or nothing if the page isn't for a
+/// pull request or there is no line to go to.
+pub fn github_link(d: &Data, l: Option<Loc>, class: &str, label: &str, what: &str) -> String {
+    let Some((url, l)) = l.and_then(|l| Some((github_url(d, &l)?, l))) else {
+        return String::new();
+    };
+    format!(
+        r#"<a class="{class}" href="{}" target="_blank" rel="noopener" title="Open {what} on GitHub ({} line {})">{label}</a>"#,
+        esc(&url),
+        esc(&l.path),
+        l.line
+    )
+}
+
 /// Where a unit's comment goes, if on a line.
 pub fn loc(d: &Data, unit: &str) -> Option<Loc> {
     if let Some(item) = review::hunk_item(unit) {

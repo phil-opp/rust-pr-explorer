@@ -5,9 +5,9 @@ use super::{
     collector::Collector,
     syntax::{
         extract_docs, fix_private_marker, hide_private_fields, intra_doc_links, is_doc_hidden,
-        is_ident, node_bindings, node_generics, norm_block, norm_expr, shorten_expr, shown_attrs,
-        sig_link_offsets, strip_body, strip_field_docs, unparse, unparse_type, vis_prefix,
-        wrap_fn_sig, wrap_trait_methods,
+        is_ident, is_test_fn, node_bindings, node_generics, norm_block, norm_expr, shorten_expr,
+        shown_attrs, sig_link_offsets, strip_body, strip_field_docs, unparse, unparse_type,
+        vis_prefix, wrap_fn_sig, wrap_trait_methods,
     },
 };
 use model::{Call, ItemInfo, Kind, Ref, Use, UseCtx};
@@ -562,6 +562,7 @@ impl Analyzer {
             || self.is_test_code(&p.module, &attrs)
             || p.impl_ctx.as_ref().is_some_and(|c| c.test_only)
             || p.parent.as_ref().is_some_and(|q| self.test_ids.contains(q));
+        let test = kind == Kind::Fn && is_test_fn(&attrs);
         let info = ItemInfo {
             id: p.id.clone(),
             kind,
@@ -593,6 +594,7 @@ impl Analyzer {
             sig_public_links,
             reexport_of: None,
             test_only,
+            test,
         };
         Some(ItemData {
             info,

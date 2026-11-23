@@ -200,6 +200,11 @@ pub struct ItemInfo {
     /// trait. Never part of the public API.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub test_only: bool,
+    /// A test function: marked `#[test]`, or by an attribute macro that
+    /// wraps it, such as `#[tokio::test]`. Set in integration tests too,
+    /// where `test_only` is not.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub test: bool,
 }
 
 fn is_zero(n: &u32) -> bool {
