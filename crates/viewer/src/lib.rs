@@ -527,7 +527,14 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         return;
     }
     if let Some(b) = dom::closest(el, "[data-impact]") {
-        canvas::show_impact(app, &dom::data(&b, "impact").unwrap_or_default());
+        let id = dom::data(&b, "impact").unwrap_or_default();
+        // On a phone: the item in the call view, whose callers lead up
+        // to the public API.
+        if narrow() {
+            calls::focus(app, &id);
+        } else {
+            canvas::show_impact(app, &id);
+        }
         return;
     }
     if dom::closest(el, "#view-canvas").is_some() && canvas::on_click(app, el) {
@@ -550,7 +557,7 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
             // it on the canvas.
             None => match row_on_page(&a, &id) {
                 Some(row) => reveal(&row),
-                None => canvas::open(app, &id, None, true),
+                None => open_item(app, &id),
             },
         }
         return;
@@ -565,12 +572,17 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         set_view(app, app.s.view);
         return;
     }
+    if let Some(b) = dom::closest(el, "[data-open-canvas]") {
+        let id = dom::data(&b, "open-canvas").unwrap_or_default();
+        canvas::open(app, &id, None, true);
+        return;
+    }
     if let Some(b) = dom::closest(el, "[data-open]") {
-        canvas::open(app, &dom::data(&b, "open").unwrap_or_default(), None, true);
+        open_item(app, &dom::data(&b, "open").unwrap_or_default());
         return;
     }
     if let Some(b) = dom::closest(el, "[data-graph]") {
-        canvas::show_module_graph(app, &dom::data(&b, "graph").unwrap_or_default());
+        show_module_graph(app, &dom::data(&b, "graph").unwrap_or_default());
         return;
     }
     if let Some(f) = dom::closest(el, "[data-goto-file]") {
@@ -598,7 +610,38 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
     }
     if dom::closest(el, "#mod-graph").is_some() {
         let m = app.s.module.clone();
-        canvas::show_module_graph(app, &m);
+        show_module_graph(app, &m);
+    }
+}
+
+/// Whether the screen is phone-sized: as narrow as the layout for phones
+/// in `explorer.css` (`max-width: 760px`).
+pub fn narrow() -> bool {
+    dom::window()
+        .inner_width()
+        .ok()
+        .and_then(|w| w.as_f64())
+        .is_some_and(|w| w <= 760.0)
+}
+
+/// Shows an item that a link or button outside the canvas points to: on
+/// a phone, or while the call view is open, in the call view, which needs
+/// no panning and zooming; else on the canvas.
+pub fn open_item(app: &mut App, id: &str) {
+    if narrow() || app.s.view == View::Calls {
+        calls::focus(app, id);
+    } else {
+        canvas::open(app, id, None, true);
+    }
+}
+
+/// A module's internal call graph: on a phone, its changed items in the
+/// call view; else laid out on the canvas.
+fn show_module_graph(app: &mut App, m: &str) {
+    if narrow() {
+        calls::focus(app, m);
+    } else {
+        canvas::show_module_graph(app, m);
     }
 }
 
@@ -1199,9 +1242,7 @@ fn pick_search(app: &mut App, i: usize) {
     {
         app.s.module = id;
         set_view(app, View::Module);
-    } else if app.s.view == View::Calls {
-        calls::focus(app, &id);
     } else {
-        canvas::open(app, &id, None, true);
+        open_item(app, &id);
     }
 }

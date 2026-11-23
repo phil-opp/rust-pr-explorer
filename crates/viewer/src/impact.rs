@@ -159,10 +159,26 @@ pub fn line_html(d: &Data, it: &Item) -> String {
         return format!(r#"<div class="impact none">{}</div>"#, no_path_note(d, it));
     }
     format!(
-        r#"<div class="impact"><span class="impact-h">Affects public API:</span> {} <button data-impact="{}" title="Open every chain on the canvas">Show on canvas ▸</button></div>"#,
+        r#"<div class="impact"><span class="impact-h">Affects public API:</span> {} <button data-impact="{}" title="{}">{}</button></div>"#,
         reached_html(d, &imp),
-        esc(&it.info.id)
+        esc(&it.info.id),
+        impact_button().0,
+        impact_button().1,
     )
+}
+
+/// The tooltip and label of the button that shows how the public API
+/// reaches an item: every chain on the canvas, or on a phone the item in
+/// the call view (see `crate::open_item`).
+fn impact_button() -> (&'static str, &'static str) {
+    if crate::narrow() {
+        (
+            "Show the item with its callers, which lead up to the public API",
+            "Show callers ▸",
+        )
+    } else {
+        ("Open every chain on the canvas", "Show on canvas ▸")
+    }
 }
 
 /// The impact of a module's changed internal items, one line per item, for
@@ -177,9 +193,15 @@ pub fn list_html(d: &Data, items: &[&Item]) -> String {
                 r#"<span class="dim">no public item reaches it</span>"#.to_string()
             } else {
                 format!(
-                    r#"affects {} <button data-impact="{}" title="Open every chain on the canvas">canvas ▸</button>"#,
+                    r#"affects {} <button data-impact="{}" title="{}">{}</button>"#,
                     reached_html(d, &imp),
-                    esc(&it.info.id)
+                    esc(&it.info.id),
+                    impact_button().0,
+                    if crate::narrow() {
+                        "callers ▸"
+                    } else {
+                        "canvas ▸"
+                    },
                 )
             };
             format!(

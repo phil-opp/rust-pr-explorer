@@ -4,6 +4,10 @@
 //! below; on a wide screen they are columns left and right of the card. A
 //! tap on a caller, a callee or any name in the card focuses that item,
 //! and the trail at the top leads back.
+//!
+//! On a phone, the links that elsewhere open the canvas (an item's
+//! "Open ▸", "Internal call graph ▸", a name on a page) open this view
+//! instead; see [`crate::open_item`].
 
 use crate::code::esc;
 use crate::data::{Data, changed};
@@ -175,20 +179,22 @@ fn trail_html(d: &Data, s: &Calls) -> String {
 }
 
 /// Where to start without a focus: the changed functions, those that no
-/// other changed item calls first (where a review usually starts).
-fn start_html(d: &Data) -> String {
+/// other changed item calls first (where a review usually starts). With a
+/// module (focused, or picked as "Internal call graph"), only the module's
+/// own changed items, and "other" means other in that module.
+fn start_html(d: &Data, module: Option<&str>) -> String {
+    let in_scope = |it: &Item| module.is_none_or(|m| d.mod_of(it) == m);
+    let changed_here = |it: &Item| {
+        (changed(it) || d.touched(it)) && in_scope(it) && crate::commit_filter::item_in(&it.info.id)
+    };
     let mut fns: Vec<&Item> = d
         .items()
-        .filter(|it| {
-            it.info.kind.is_callable()
-                && (changed(it) || d.touched(it))
-                && crate::commit_filter::item_in(&it.info.id)
-        })
+        .filter(|it| it.info.kind.is_callable() && changed_here(it))
         .collect();
     let called_by_changed = |it: &Item| {
         callers(d, &it.info.id)
             .iter()
-            .any(|c| d.item(c).is_some_and(|c| changed(c) || d.touched(c)))
+            .any(|c| d.item(c).is_some_and(&changed_here))
     };
     fns.sort_by(|a, b| {
         called_by_changed(a)
@@ -198,36 +204,78 @@ fn start_html(d: &Data) -> String {
     let (top, rest): (Vec<&Item>, Vec<&Item>) =
         fns.into_iter().partition(|it| !called_by_changed(it));
     let ids = |v: &[&Item]| v.iter().map(|it| it.info.id.clone()).collect::<Vec<_>>();
-    format!(
-        r#"<div class="cg-start"><h1>Calls</h1><p class="sub">The call graph one item at a time: what calls it above, what it calls below. Tap an item to focus it.</p>{}{}</div>"#,
-        section_html(
-            d,
-            "cg-roots",
-            "Changed functions nothing changed calls",
-            "None.",
-            &ids(&top)
-        ),
-        if rest.is_empty() {
-            String::new()
-        } else {
-            section_html(
-                d,
-                "cg-rest",
-                "Other changed functions",
-                "None.",
-                &ids(&rest),
+    let (title, intro, top_title, others) = match module.and_then(|m| d.item(m)) {
+        Some(m) => {
+            let mut others: Vec<&Item> = d
+                .items()
+                .filter(|it| {
+                    !it.info.kind.is_callable()
+                        && !matches!(it.info.kind, Kind::Mod | Kind::Impl)
+                        && changed_here(it)
+                })
+                .collect();
+            others.sort_by(|a, b| d.reading_order(a, b));
+            (
+                format!(
+                    "Calls in <code>{}</code>",
+                    esc(&d.mod_label(&m.info.id))
+                ),
+                format!(
+                    r#"The changed items of this module. Tap one to see what calls it and what it calls. <a data-mod="{}">Module page</a>"#,
+                    esc(&m.info.id)
+                ),
+                "Changed functions nothing else here calls",
+                ids(&others),
             )
         }
-    )
+        None => (
+            "Calls".to_string(),
+            "The call graph one item at a time: what calls it above, what it calls below. Tap an item to focus it.".to_string(),
+            "Changed functions nothing changed calls",
+            Vec::new(),
+        ),
+    };
+    let mut html = format!(
+        r#"<div class="cg-start"><h1>{title}</h1><p class="sub">{intro}</p>{}"#,
+        section_html(d, "cg-roots", top_title, "None.", &ids(&top))
+    );
+    if !rest.is_empty() {
+        html.push_str(&section_html(
+            d,
+            "cg-rest",
+            "Other changed functions",
+            "None.",
+            &ids(&rest),
+        ));
+    }
+    if !others.is_empty() {
+        html.push_str(&section_html(
+            d,
+            "cg-other",
+            "Other changed items",
+            "None.",
+            &others,
+        ));
+    }
+    html.push_str("</div>");
+    html
 }
 
 pub fn render(app: &App) {
     let d = &app.d;
     let s = &app.s.calls;
     let Some(it) = s.focus.as_deref().and_then(|f| d.item(f)) else {
-        dom::set_html("view-calls", &start_html(d));
+        dom::set_html("view-calls", &start_html(d, None));
         return;
     };
+    // A module: its changed items, to pick one from.
+    if it.info.kind == Kind::Mod {
+        dom::set_html(
+            "view-calls",
+            &(trail_html(d, s) + &start_html(d, Some(&it.info.id))),
+        );
+        return;
+    }
     let id = it.info.id.as_str();
     let mut up = callers(d, id);
     changed_first(d, &mut up);
@@ -275,7 +323,7 @@ pub fn render(app: &App) {
     };
     let card = crate::canvas::card_html_for(d, d.mod_of(it), id, s.expanded.contains(id));
     let tools = format!(
-        r#"<div class="cg-tools"><button data-open="{}" title="Place this item on the canvas">Open on canvas</button></div>"#,
+        r#"<div class="cg-tools"><button data-open-canvas="{}" title="Place this item on the canvas">Open on canvas</button></div>"#,
         esc(id)
     );
     dom::set_html(

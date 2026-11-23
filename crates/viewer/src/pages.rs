@@ -934,7 +934,7 @@ pub fn render_module_page(app: &App) {
         r#"{}<div class="crumbs">{crumbs}</div>
         <h1><span class="kind">{}</span> {} {} {}</h1>
         <div class="sub">{} · <label><input type="checkbox" id="show-unchanged" {}> show unchanged items</label> ·
-          <button id="mod-graph">Internal call graph on canvas ▸</button></div>
+          <button id="mod-graph">Internal call graph{} ▸</button></div>
         {}
         {sections}"#,
         crate::commit_filter::banner_html(d),
@@ -953,6 +953,7 @@ pub fn render_module_page(app: &App) {
         d.status_html(module),
         esc(&module.info.file),
         if show_unchanged { "checked" } else { "" },
+        if crate::narrow() { "" } else { " on canvas" },
         if module.info.docs.is_empty() && !module.changes.docs {
             String::new()
         } else {
