@@ -738,3 +738,70 @@ fn source_links_both_versions_and_marks_new_items() {
         "{html}"
     );
 }
+
+#[test]
+fn small_new_items_start_open() {
+    use model::{Item, Kind, SourceLine, Status};
+    let d = empty();
+    let item = |status: Status, kind: Kind, lines: usize| {
+        let mut it = Item {
+            status,
+            ..Default::default()
+        };
+        it.info.kind = kind;
+        let tag = if status == Status::Removed { '-' } else { '+' };
+        it.source = (0..lines)
+            .map(|i| SourceLine(tag, format!("l{i};")))
+            .collect();
+        it
+    };
+    let open = |it: &Item| {
+        let html = d.source_html(it, None, false);
+        assert!(html.contains("l0;"), "{html}");
+        html.contains("<details class=\"src \"  open>")
+    };
+    assert!(open(&item(Status::Added, Kind::Fn, 20)));
+    assert!(!open(&item(Status::Added, Kind::Fn, 21)));
+    // An impl's members are listed with their own source.
+    assert!(!open(&item(Status::Added, Kind::Impl, 5)));
+    // Removed code is there to look at, not open.
+    assert!(!open(&item(Status::Removed, Kind::Fn, 5)));
+    // The reader's choice wins.
+    let html = d.source_html(&item(Status::Added, Kind::Fn, 5), Some(false), false);
+    assert!(!html.contains("open>"), "{html}");
+}
+
+#[test]
+fn moved_lines_are_marked_with_where_they_went() {
+    use model::{Item, MovedLines, SourceLine, Status};
+    let d = empty();
+    let mut it = Item {
+        status: Status::Changed,
+        ..Default::default()
+    };
+    it.changes.body = true;
+    it.info.id = "c::f".into();
+    it.info.kind = model::Kind::Fn;
+    it.info.line = 1;
+    it.source = vec![
+        SourceLine(' ', "fn f() {".into()),
+        SourceLine('-', "    let total = compute_everything();".into()),
+        SourceLine('-', "    b();".into()),
+        SourceLine('+', "    c();".into()),
+        SourceLine(' ', "}".into()),
+    ];
+    it.moved_lines = vec![MovedLines {
+        side: '-',
+        start: 1,
+        len: 1,
+        other: "c::g".into(),
+        other_line: 7,
+    }];
+    let html = d.source_html(&it, Some(true), false);
+    assert!(html.contains(r#"class="ln del mv""#), "{html}");
+    // `c::g` is not in the data, so the note gives the line only.
+    assert!(html.contains("moved to line 7"), "{html}");
+    assert!(html.contains("(1 moved)"), "{html}");
+    // The other removed line is an ordinary one, with its words marked.
+    assert_eq!(html.matches(" mv\"").count(), 1, "{html}");
+}

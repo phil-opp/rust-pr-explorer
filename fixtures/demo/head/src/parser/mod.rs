@@ -27,16 +27,29 @@ impl Parser {
 
     fn parse_binary(&mut self, min_prec: u8) -> Result<Expr, crate::Error> {
         let mut lhs = self.parse_factor()?;
-        while let Some(Token::Op(op)) = self.peek() {
-            let op = *op;
-            if op.precedence() < min_prec {
-                break;
-            }
-            self.next();
+        while let Some(op) = self.next_op(min_prec) {
             let rhs = self.parse_binary(op.precedence() + 1)?;
-            lhs = Expr::Binary { op, lhs: Box::new(lhs), rhs: Box::new(rhs) };
+            lhs = Expr::Binary {
+                op,
+                lhs: Box::new(lhs),
+                rhs: Box::new(rhs),
+            };
         }
         Ok(lhs)
+    }
+
+    /// Takes the next token if it is an operator that binds at least as
+    /// tightly as `min_prec`.
+    fn next_op(&mut self, min_prec: u8) -> Option<Op> {
+        let Some(Token::Op(op)) = self.peek() else {
+            return None;
+        };
+        let op = *op;
+        if op.precedence() < min_prec {
+            return None;
+        }
+        self.next();
+        Some(op)
     }
 
     fn parse_factor(&mut self) -> Result<Expr, crate::Error> {

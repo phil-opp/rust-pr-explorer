@@ -312,6 +312,37 @@ impl Data {
     }
 
     /// The module an item lives in (a module's own id for modules).
+    /// The type an impl or associated item belongs to, if that type is in
+    /// the same module; otherwise the item itself.
+    pub fn type_anchor<'a>(&'a self, it: &'a Item) -> &'a Item {
+        it.info
+            .self_ty
+            .as_deref()
+            .filter(|t| *t != it.info.id)
+            .and_then(|t| self.item(t))
+            .filter(|t| t.info.module == it.info.module)
+            .unwrap_or(it)
+    }
+
+    /// Reading order within a module: by position in the source, except
+    /// that a type's impls and associated items come right after the type,
+    /// wherever they are.
+    pub fn reading_order(&self, a: &Item, b: &Item) -> std::cmp::Ordering {
+        let key = |it: &Item| {
+            let t = self.type_anchor(it);
+            (
+                t.info.file.clone(),
+                t.info.line,
+                t.info.id.clone(),
+                t.info.id != it.info.id,
+                it.info.file.clone(),
+                it.info.line,
+                it.info.id.clone(),
+            )
+        };
+        key(a).cmp(&key(b))
+    }
+
     pub fn mod_of<'a>(&self, it: &'a Item) -> &'a str {
         if it.info.kind == Kind::Mod {
             &it.info.id
@@ -550,8 +581,13 @@ impl Data {
     /// The visibility of a module. Other items show it in their signature.
     pub fn vis_html(&self, it: &Item) -> String {
         let i = &it.info;
+        let test = if i.test_only {
+            r#"<span class="st st-test" title="Compiled only for tests: marked #[test] or #[cfg(test)], or inside test-only code">test-only</span>"#
+        } else {
+            ""
+        };
         if i.kind != Kind::Mod {
-            return String::new();
+            return test.to_string();
         }
         let class = if i.vis_label == "pub" {
             "vis pub"
@@ -563,7 +599,7 @@ impl Data {
             None => "public".into(),
         };
         format!(
-            r#"<span class="{class}" title="{}">{}</span>"#,
+            r#"{test}<span class="{class}" title="{}">{}</span>"#,
             esc(&title),
             esc(&i.vis_label)
         )
@@ -614,6 +650,46 @@ impl Data {
             esc(&pr.base_ref),
             esc(&pr.base_rev),
             esc(&pr.head_rev),
+        )
+    }
+
+    /// The PR in the header: its title and number, then a small line with
+    /// the repository and the compared branches. The full details are in
+    /// the tooltip, and on the overview.
+    pub fn header_html(&self) -> String {
+        let meta = &self.out.meta;
+        let Some(pr) = &meta.pr else {
+            let sub = if meta.title.contains(&meta.base) {
+                String::new()
+            } else {
+                format!("{} → {}", meta.base, meta.head)
+            };
+            return format!(
+                r#"<div class="hd-main" title="{}"><b>{}</b></div><div class="hd-sub">{}</div>"#,
+                esc(format!("{}\n{sub}", meta.title).trim_end()),
+                esc(&meta.title),
+                esc(&sub)
+            );
+        };
+        let pr_url = format!("https://github.com/{}/pull/{}", pr.repo, pr.number);
+        let title = pr.title.as_deref().unwrap_or("");
+        let head = match (&pr.head_ref, &pr.head_owner) {
+            (Some(r), Some(o)) => format!("{o}:{r}"),
+            (Some(r), None) => r.clone(),
+            _ => "PR head".to_string(),
+        };
+        let tip = format!(
+            "{} #{}: {title}\nbase {} @ {} (merge base) ← {head} @ {}",
+            pr.repo, pr.number, pr.base_ref, pr.base_rev, pr.head_rev
+        );
+        format!(
+            r#"<div class="hd-main" title="{tip}"><b>{}</b> <a href="{pr_url}" target="_blank" rel="noopener">#{}</a></div><div class="hd-sub" title="{tip}">{} · <code>{}</code> ← <code>{}</code></div>"#,
+            esc(title),
+            pr.number,
+            esc(&pr.repo),
+            esc(&pr.base_ref),
+            esc(&head),
+            tip = esc(&tip),
         )
     }
 
@@ -817,11 +893,46 @@ impl Data {
             line: old_start + o,
             refs: old_refs,
         };
-        // Changed lines with their changed words marked.
+        // The block of moved lines (see `moved_lines`) that a removed (`-`)
+        // or added (`+`) line is in.
+        let moved = |side: char, i: usize| {
+            it.moved_lines
+                .iter()
+                .find(|m| m.side == side && (m.start..m.start + m.len).contains(&(i as u32)))
+        };
+        // What the first line of a moved block says: where it went or came
+        // from.
+        let moved_note = |side: char, i: usize| -> String {
+            let Some(m) = moved(side, i).filter(|m| m.start as usize == i) else {
+                return String::new();
+            };
+            let dir = if side == '-' {
+                "moved to"
+            } else {
+                "moved from"
+            };
+            let target = match self.item(&m.other) {
+                Some(o) if m.other != it.info.id => format!(
+                    r#"<a class="ref" data-id="{}" data-kind="{}" data-path="{}">{}</a>, line {}"#,
+                    esc(&o.info.id),
+                    o.info.kind.css(),
+                    esc(&o.info.id),
+                    esc(&self.display_name(o)),
+                    m.other_line
+                ),
+                _ => format!("line {}", m.other_line),
+            };
+            format!(r#"<span class="mv-note">{dir} {target}</span>"#)
+        };
+        // Changed lines with their changed words marked. Moved lines are
+        // shown whole.
         let mut marked_old: HashMap<usize, String> = HashMap::new();
         let mut marked_new: HashMap<usize, String> = HashMap::new();
         if it.status == Status::Changed {
             for &(o, n) in &pairs {
+                if moved('-', o).is_some() || moved('+', n).is_some() {
+                    continue;
+                }
                 let old_html = code_html(self, old[o], old_links(o));
                 let new_html = code_html(
                     self,
@@ -871,19 +982,23 @@ impl Data {
                             class: &str,
                             side: &str,
                             code: &dyn Fn(usize) -> String| match idx {
-                    Some(i) => format!(
-                        r#"<span class="no {side}">{}</span><span class="ln {}" data-t="{}">{}</span>"#,
-                        start + i,
-                        if same { "" } else { class },
-                        if same {
-                            ""
-                        } else if class.starts_with("del") {
-                            "-"
-                        } else {
-                            "+"
-                        },
-                        nonempty(code(i))
-                    ),
+                    Some(i) => {
+                        let tag = if class == "del" { '-' } else { '+' };
+                        let mv = !same && moved(tag, i).is_some();
+                        format!(
+                            r#"<span class="no {side}">{}</span><span class="ln {}{}" data-t="{}">{}{}</span>"#,
+                            start + i,
+                            if same { "" } else { class },
+                            if mv { " mv" } else { "" },
+                            if same { String::new() } else { tag.to_string() },
+                            if mv {
+                                moved_note(tag, i)
+                            } else {
+                                String::new()
+                            },
+                            nonempty(code(i))
+                        )
+                    }
                     None => {
                         format!(r#"<span class="no {side}"></span><span class="ln gap"> </span>"#)
                     }
@@ -891,18 +1006,25 @@ impl Data {
                 cell(o, old_start, "del", "o", &old_code)
                     + &cell(n, new_start, "add", "n", &new_code)
             } else {
-                let (class, tag, no, code) = match (o, n) {
-                    (_, Some(b)) if o.is_some() => ("", ' ', new_start + b, new_code(b)),
-                    (None, Some(b)) => ("add", '+', new_start + b, new_code(b)),
-                    (Some(a), _) => ("del", '-', old_start + a, old_code(a)),
+                let (class, tag, idx, no, code) = match (o, n) {
+                    (_, Some(b)) if o.is_some() => ("", ' ', b, new_start + b, new_code(b)),
+                    (None, Some(b)) => ("add", '+', b, new_start + b, new_code(b)),
+                    (Some(a), _) => ("del", '-', a, old_start + a, old_code(a)),
                     (None, None) => unreachable!(),
                 };
+                let mv = tag != ' ' && moved(tag, idx).is_some();
                 format!(
-                    r#"<span class="ln {class}" data-t="{}" data-no="{no}">{}</span>"#,
+                    r#"<span class="ln {class}{}" data-t="{}" data-no="{no}">{}{}</span>"#,
+                    if mv { " mv" } else { "" },
                     if tag == ' ' {
                         String::new()
                     } else {
                         tag.to_string()
+                    },
+                    if mv {
+                        moved_note(tag, idx)
+                    } else {
+                        String::new()
                     },
                     nonempty(code)
                 )
@@ -992,13 +1114,30 @@ impl Data {
             }
         );
         // A small change to the body or definition starts open, the rest
-        // behind the summary.
-        let small = it.status == Status::Changed
-            && it.changes.body
-            && (1..=SMALL_BODY).contains(&(added + removed));
+        // behind the summary. So does a small new item, except an impl,
+        // whose members follow it with their own source.
+        let small = match it.status {
+            Status::Changed => it.changes.body && (1..=SMALL_BODY).contains(&(added + removed)),
+            Status::Added => it.info.kind != Kind::Impl && it.source.len() <= SMALL_BODY,
+            _ => false,
+        };
         let open = open.unwrap_or(small);
+        // Changed lines that were moved, on either side.
+        let moved_count = rows
+            .iter()
+            .filter(|&&(o, n)| changed_row(&(o, n)))
+            .map(|&(o, n)| {
+                usize::from(o.is_some_and(|a| moved('-', a).is_some()))
+                    + usize::from(n.is_some_and(|b| moved('+', b).is_some()))
+            })
+            .sum::<usize>();
         let stats = format!(
-            r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>{}"#,
+            r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>{}{}"#,
+            if moved_count > 0 {
+                format!(r#" <span class="d-mv">({moved_count} moved)</span>"#)
+            } else {
+                String::new()
+            },
             if opts.ignore_ws {
                 r#" <span class="dim">(whitespace hidden)</span>"#
             } else {
@@ -1015,11 +1154,20 @@ impl Data {
                 };
                 ("m-chg", format!("<b>{what}</b> {stats} · {where_}"))
             }
-            Status::Added => ("", format!("Source · {where_} · {} lines", it.source.len())),
-            Status::Removed => (
-                "",
-                format!("Removed source · {where_} · {} lines", it.source.len()),
-            ),
+            Status::Added | Status::Removed => {
+                let moved = if moved_count > 0 {
+                    format!(r#", <span class="d-mv">{moved_count} moved</span>"#)
+                } else {
+                    String::new()
+                };
+                let what = if it.status == Status::Added {
+                    "Source"
+                } else {
+                    "Removed source"
+                };
+                let n = it.source.len();
+                ("", format!("{what} · {where_} · {n} lines{moved}"))
+            }
             _ if it.changes.cosmetic => (
                 "",
                 format!("Source {stats} (formatting, comments or imports only) · {where_}"),

@@ -152,6 +152,101 @@ fn rewritten_items_with_the_same_name_are_not_a_move() {
 }
 
 #[test]
+fn extracted_code_is_marked_as_moved() {
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "pub fn run(xs: &[u32]) -> u32 {
+    let mut total = 0;
+    for x in xs {
+        let scaled = x.saturating_mul(3);
+        total += scaled.min(1000);
+    }
+    total
+}
+",
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        "pub fn run(xs: &[u32]) -> u32 {
+    let mut total = 0;
+    for x in xs {
+        total += weight(*x);
+    }
+    total
+}
+
+fn weight(x: u32) -> u32 {
+    let scaled = x.saturating_mul(3);
+    scaled.min(1000)
+}
+",
+    )]);
+    let out = analyze_dirs(base.path(), head.path());
+    let run = &out.items["t::run"];
+    let weight = &out.items["t::weight"];
+    assert_eq!(weight.status, Status::Added);
+    // Only the line that is the same apart from indentation was moved.
+    assert_eq!(
+        run.moved_lines,
+        [model::MovedLines {
+            side: '-',
+            start: 3,
+            len: 1,
+            other: "t::weight".into(),
+            other_line: 10,
+        }]
+    );
+    assert_eq!(
+        weight.moved_lines,
+        [model::MovedLines {
+            side: '+',
+            start: 1,
+            len: 1,
+            other: "t::run".into(),
+            other_line: 4,
+        }]
+    );
+}
+
+#[test]
+fn short_or_reindented_lines_are_not_moved() {
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "pub fn a(x: u32) -> u32 {
+    let y = x + 1;
+    y
+}
+pub fn b(v: Vec<u32>) -> usize {
+    v.iter().filter(|n| **n > 10).count()
+}
+",
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        "pub fn a(x: u32) -> u32 {
+    x * 2
+}
+pub fn b(v: Vec<u32>) -> usize {
+    if v.is_empty() {
+        return 0;
+    }
+    {
+        v.iter().filter(|n| **n > 10).count()
+    }
+}
+pub fn c(x: u32) -> u32 {
+    let y = x + 1;
+    y * y
+}
+",
+    )]);
+    let out = analyze_dirs(base.path(), head.path());
+    // `let y = x + 1;` has too few letters and digits, and the line in `b`
+    // was only indented.
+    assert!(out.items.values().all(|it| it.moved_lines.is_empty()));
+}
+
+#[test]
 fn calls_and_uses() {
     let out = demo();
     let calc = &out.items["tinycalc::calc"].info;
@@ -1018,6 +1113,56 @@ fn renamed_modules_keep_their_items() {
 }
 
 #[test]
+fn test_only_code_is_items() {
+    let lib = "pub struct S;\n\nimpl S {\n    pub fn real(&self) {}\n\n    #[cfg(test)]\n    pub fn helper(&self) {}\n}\n\n#[cfg(test)]\npub fn only() {}\n\n#[cfg(test)]\nimpl S {\n    pub fn fixture() -> S {\n        S\n    }\n}\n\n#[cfg(test)]\nmod tests {\n    pub fn util() {}\n\n    #[test]\n    fn works() {\n        super::S.real();\n    }\n}\n";
+    let dir = write_crate(&[
+        ("src/lib.rs", lib),
+        (
+            "tests/it.rs",
+            "#[test]\nfn outside() {\n    t::S.real();\n}\n",
+        ),
+    ]);
+    let an = Analyzer::run(dir.path(), &crate::source::find_crates(dir.path()));
+    let item = |id: &str| {
+        an.items
+            .get(id)
+            .unwrap_or_else(|| panic!("{id} in {:?}", an.items.keys()))
+    };
+    for id in ["t::S", "t::S::real"] {
+        assert!(!item(id).info.test_only, "{id}");
+        assert!(item(id).info.public, "{id}");
+    }
+    let test_only: Vec<&str> = an
+        .items
+        .values()
+        .filter(|i| i.info.test_only)
+        .map(|i| i.info.id.as_str())
+        .collect();
+    for name in ["helper", "only", "fixture", "tests", "util", "works"] {
+        assert!(
+            test_only
+                .iter()
+                .any(|id| id.ends_with(&format!("::{name}"))),
+            "{name} in {test_only:?}"
+        );
+    }
+    // Test-only code is never public, even if it is `pub`.
+    assert!(
+        an.items
+            .values()
+            .filter(|i| i.info.test_only)
+            .all(|i| !i.info.public)
+    );
+    // In an integration test, tests are the subject, not test-only code.
+    let outside = an
+        .items
+        .values()
+        .find(|i| i.info.name == "outside")
+        .unwrap();
+    assert!(!outside.info.test_only);
+}
+
+#[test]
 fn changes_outside_items_are_counted() {
     let base = write_crate(&[(
         "src/lib.rs",
@@ -1032,8 +1177,9 @@ fn changes_outside_items_are_counted() {
     let out = crate::analyze_checkout(&checkout, false, Trust::Untrusted);
     let lib = out.files.iter().find(|f| f.path == "src/lib.rs").unwrap();
     assert!(lib.analyzed);
-    // `thread_local!`, the extern block and the test are parts of their
-    // own; no other line changed. The change in `f` is inside an item.
+    // `thread_local!` and the extern block are parts of their own; no
+    // other line changed. The changes in `f` and in the test are inside
+    // items.
     assert_eq!(lib.outside_items, 0, "{:#?}", lib.hunks);
     let parts: Vec<(&str, &str)> = lib
         .parts
@@ -1042,13 +1188,9 @@ fn changes_outside_items_are_counted() {
         .collect();
     assert_eq!(
         parts,
-        [
-            ("thread_local!", "macro call"),
-            ("extern \"C\"", "extern"),
-            ("tests::t", "test"),
-        ]
+        [("thread_local!", "macro call"), ("extern \"C\"", "extern"),]
     );
-    assert_eq!(lib.parts[2].sig, "#[test]\nfn t()");
+    assert!(out.items["t::tests::t"].info.test_only);
     // Imports spread over several lines and attributes of module
     // declarations are not code outside items.
     let base = write_crate(&[(
