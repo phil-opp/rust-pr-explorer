@@ -225,15 +225,7 @@ mod tests {
 
     fn data(items: Vec<(String, Item)>) -> Data {
         Data::new(Output {
-            meta: Meta {
-                title: String::new(),
-                base: String::new(),
-                head: String::new(),
-                url: None,
-                resolution: String::new(),
-                pr: None,
-                project: None,
-            },
+            meta: Meta::default(),
             crates: vec!["c".into()],
             items: items.into_iter().collect(),
             externals: BTreeMap::new(),
