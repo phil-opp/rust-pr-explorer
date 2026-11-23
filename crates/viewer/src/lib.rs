@@ -345,7 +345,7 @@ fn install_listeners() {
         {
             with_app(|app| {
                 let from = app.s.rv_current.clone();
-                go_next(app, from);
+                go_next(app, from, false);
             });
             return;
         }
@@ -559,7 +559,7 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
     }
     if dom::closest(el, "#rv-next").is_some() {
         let from = app.s.rv_current.clone();
-        go_next(app, from);
+        go_next(app, from, false);
         return true;
     }
     if dom::closest(el, "#rv-clear").is_some() {
@@ -603,11 +603,11 @@ fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String)
             review::set_mark(&app.d, &item, Some(note));
         }
         pages::render_sidebar(app);
-        go_next(app, Some(item));
+        go_next(app, Some(item), true);
         return;
     }
     pages::render_sidebar(app);
-    go_next(app, Some(id.to_string()));
+    go_next(app, Some(id.to_string()), true);
 }
 
 /// The dialog for writing a unit's comment.
@@ -754,8 +754,11 @@ fn show_since_review(app: &App, id: &str) {
 /// Shows the next unit that still needs a review, after unit `from`: on
 /// the overview and module pages the next one further down the page, then
 /// the next one in reading order (on its module page, or on the canvas
-/// when the canvas is open).
-fn go_next(app: &mut App, from: Option<String>) {
+/// when the canvas is open). With `stay` (after a verdict), it doesn't
+/// switch tabs: on the overview it goes on with an open unit further up
+/// the page, on a module page it skips the files, and it says so when the
+/// tab has nothing left.
+fn go_next(app: &mut App, from: Option<String>, stay: bool) {
     if matches!(app.s.view, View::Overview | View::Module)
         && let Some(sec) = dom::by_id(&format!("view-{}", app.s.view.name()))
     {
@@ -772,16 +775,34 @@ fn go_next(app: &mut App, from: Option<String>) {
                     .position(|c| dom::data(c, "rv").as_deref() == Some(f))
             })
             .map_or(0, |i| i + 1);
-        if let Some(c) = controls[start.min(controls.len())..]
+        let start = start.min(controls.len());
+        let stay = stay && app.s.view == View::Overview;
+        let (after, before) = (&controls[start..], &controls[..start]);
+        let wrap = if stay { before } else { &[] };
+        if let Some(c) = after
             .iter()
+            .chain(wrap)
             .find(|c| !c.class_list().contains("done"))
         {
             app.s.rv_current = dom::data(c, "rv");
             reveal(c);
             return;
         }
+        if stay && review::next_open(from.as_deref()).is_some() {
+            toast("Everything on the overview is reviewed. Next ▸ goes on with the rest.");
+            return;
+        }
     }
-    let Some(next) = review::next_open(from.as_deref()) else {
+    // After a verdict on a module page, files (shown on the overview)
+    // come last, so that the tab doesn't change while items are left.
+    let in_modules = stay && app.s.view == View::Module;
+    let next =
+        review::next_open_where(from.as_deref(), |u| !(in_modules && u.starts_with("file:")));
+    if next.is_none() && in_modules && review::next_open(from.as_deref()).is_some() {
+        toast("Every item is reviewed. Next ▸ goes on with the changed files.");
+        return;
+    }
+    let Some(next) = next else {
         let (_, total) = review::progress();
         toast(&if total == 0 {
             "Nothing to review.".to_string()
