@@ -565,9 +565,10 @@ pub fn load(d: &Data) {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     notes.retain(|id, _| marks.contains_key(id));
+    // On unless the reader turned it off before.
     let on = store
         .and_then(|s| s.get_item(MODE_KEY).ok().flatten())
-        .is_some_and(|v| v == "on");
+        .is_none_or(|v| v != "off");
     let (hunks, prints) = hunks_and_prints(d, &units);
     let order = call_order(d, &units);
     REVIEW.with(|r| {

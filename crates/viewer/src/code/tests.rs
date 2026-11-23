@@ -886,3 +886,52 @@ fn moved_lines_are_marked_with_where_they_went() {
     // The other removed line is an ordinary one, with its words marked.
     assert_eq!(html.matches(" mv\"").count(), 1, "{html}");
 }
+
+#[test]
+fn inline_diffs_number_old_and_new_lines() {
+    use model::{Item, SourceLine, Status};
+    let d = empty();
+    let mut it = Item {
+        status: Status::Changed,
+        ..Default::default()
+    };
+    it.changes.body = true;
+    it.info.kind = model::Kind::Fn;
+    it.old_line = Some(4);
+    it.info.line = 10;
+    it.source = vec![
+        SourceLine(' ', "fn f() {".into()),
+        SourceLine('-', "    a();".into()),
+        SourceLine('+', "    b();".into()),
+        SourceLine(' ', "}".into()),
+    ];
+    let html = d.source_html(&it, Some(true), false);
+    for want in [
+        r#"<span class="lno" data-o="4" data-n="10"></span><span class="sg" data-t="">"#,
+        r#"<span class="lno" data-o="5" data-n=""></span><span class="sg" data-t="-">"#,
+        r#"<span class="lno" data-o="" data-n="11"></span><span class="sg" data-t="+">"#,
+        r#"<span class="lno" data-o="6" data-n="12"></span>"#,
+        r#"style="--lnw: 2ch""#,
+    ] {
+        assert!(html.contains(want), "{want}\n{html}");
+    }
+    // File diffs: numbered from the hunk header on.
+    let html = crate::files::hunks_html(
+        &d,
+        &[
+            SourceLine('@', "98 120".into()),
+            SourceLine(' ', "a".into()),
+            SourceLine('-', "b".into()),
+            SourceLine('+', "c".into()),
+        ],
+        "",
+    );
+    for want in [
+        r#"<span class="lno" data-o="98" data-n="120"></span>"#,
+        r#"<span class="lno" data-o="99" data-n=""></span>"#,
+        r#"<span class="lno" data-o="" data-n="121"></span>"#,
+        r#"style="--lnw: 3ch""#,
+    ] {
+        assert!(html.contains(want), "{want}\n{html}");
+    }
+}

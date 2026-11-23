@@ -1,5 +1,8 @@
 # Rust PR Explorer (prototype)
 
+> [!WARNING]
+> This is a vibe-coded toy project, written mostly by an AI coding assistant. Expect bugs and rough edges, and use it with care. In particular, don't rely on its output as the only basis for a review.
+
 Review a Rust pull request as **changed items** (types, traits, functions, methods, impls, modules) instead of changed lines. The tool parses the base and head versions of the code and writes a single self-contained HTML page with:
 
 - an **overview** of the public API changes in rustdoc form,
@@ -39,7 +42,7 @@ In a sandboxed environment, `--trust-project-code` (or `RUST_PR_EXPLORER_TRUST_P
 
 For `git`, the path may also be a subdirectory of the repository (then only that subdirectory is analyzed and listed) or a bare repository. For `dirs`, `target/` and `node_modules/` directories are skipped.
 
-For `pr`, the repository is cloned without file contents (`--filter=blob:none`), and only the two revisions being compared are checked out. If the GitHub CLI (`gh`) is installed and logged in, `gh pr view` supplies the PR's title, description, base branch and its own branch; the page header then shows the repository, PR number and title, `base-branch @ commit ← pr-branch @ commit`, and the overview starts with the description (folded when it is longer than 20 lines). The description is rendered as Markdown like doc comments: raw HTML is shown as text, HTML comments (such as PR template instructions) are left out, and images show only their alt text, so the page loads nothing from elsewhere. Without `gh`, the title, description and PR branch are left out. Without `--base`, the base is the merge base of the PR head and the PR's base branch (without `gh`: the default branch). For a PR that was already merged with a merge commit, the base is the state just before that merge.
+For `pr`, the repository is cloned without file contents (`--filter=blob:none`), and only the two revisions being compared are checked out. If the GitHub CLI (`gh`) is installed and logged in, `gh pr view` supplies the PR's title, description, base branch and its own branch; the page header then shows the repository, PR number and title, `base-branch @ commit ← pr-branch @ commit`, and the overview starts with the description (folded when it is longer than 20 lines). The description is rendered as Markdown like doc comments: raw HTML is shown as text, HTML comments (such as PR template instructions) are left out, and images show only their alt text, so the page loads nothing from elsewhere. Without `gh`, the title, description and PR branch are left out. `gh` also supplies the PR's review threads (see [Review threads](#review-threads)). Without `--base`, the base is the merge base of the PR head and the PR's base branch (without `gh`: the default branch). For a PR that was already merged with a merge commit, the base is the state just before that merge.
 
 The demo in `fixtures/demo` is a small calculator crate. Its "PR" adds variables (a new `env` module, a changed `evaluate` signature, new error variants), moves a helper between modules, extracts a helper method from the parser's loop, re-exports `ast::Op` at the crate root and drops the root re-export of `parser::Parser`, extends one doc comment (shown as a word diff), and changes some import styles and formatting. That last part does not show up as a change.
 
@@ -65,7 +68,7 @@ jobs:
       - uses: phil-opp/diff-viewer@main
 ```
 
-The action builds the tool, runs `pr` on the pull request and uploads the page as a workflow artifact. The artifact is a single unzipped HTML file, so the link opens the page directly in the browser. The comment is posted once and updated on every push, with a one-line summary of the changed items. The link is also in the job summary.
+The action builds the tool, runs `pr` on the pull request (including its existing review threads) and uploads the page as a workflow artifact. The artifact is a single unzipped HTML file, so the link opens the page directly in the browser. The comment is posted once and updated on every push, with a one-line summary of the changed items. The link is also in the job summary.
 
 Build time: the built tool is cached under a hash of its sources, so once a run has built it, later runs skip the build (in a repository that only uses the action, that is every run after the first). The build's dependencies, mainly rust-analyzer, are cached on the default branch, the only branch whose caches every pull request can read, so the `push` trigger above keeps new pull requests from building them from scratch (about 5 minutes). On a push, the action only builds and caches the tool. The tool is built with the `action` profile (see `Cargo.toml`): dependencies optimized, the tool's own crates not, which builds faster than `--release` and analyzes as fast.
 
@@ -136,7 +139,7 @@ Every item shows what rustdoc would show: its definition or signature (private f
 
 ### Review mode
 
-**Start review** in the header turns on review mode, for going through a PR one item at a time (**Exit review**, at the end of the review bar, hides the controls again and keeps your marks):
+Review mode is on when the page opens, for going through a PR one item at a time. **Exit review**, at the end of the review bar, hides the controls again and keeps your marks, and **Start review** in the header turns them back on. The page remembers the choice:
 
 - Every added, changed or removed item (functions, methods, types, trait impls, …) and every file listed under "Other changed files" or "Dependencies and package settings" gets the three choices of a GitHub review, on the overview, the module pages and canvas cards: **✓ Approve**, **✗ Request changes** and **✎ Comment**. Approve marks the item and moves to the next one without a verdict, in call order: first a changed item that no other changed item calls, then the changed items it calls (also through unchanged functions in between), depth-first in the order its body calls them, then the next such item. Items are taken in reading order where calls don't decide, and files come last. The next item is shown where it is listed: on the same page if it is there, else on its module's page (or, on the canvas, as a new card next to its caller). The other two first ask for a comment (Markdown; Ctrl+Enter saves). **Next ▸** in the header, or the `n` key, moves on without a verdict.
 - A changed item whose source diff has several separate changes (hunks, between folded unchanged lines) can also be reviewed hunk by hunk: each hunk has its own **Approve**, **Request changes** and **Comment**, and moves on to the item's next hunk. When every hunk has a verdict, the item gets one too (changes requested if any hunk needs them, else commented if any has a comment, else approved). A hunk's mark depends only on its changed lines, so after new commits only the hunks that changed need a review again. A comment on a hunk goes on that hunk's first changed line when posted.
@@ -157,6 +160,17 @@ For a pull request or a `git` range, the **Commits** menu in the header shows on
 - Items keep their whole change from the PR's base to its head, not only the commit's part, since the page holds no other versions.
 - Some changed items have no changed line of their own, for example an item whose only change is a public path that a `pub use` elsewhere added. These are listed under **Changes no commit was found for**.
 - Merge commits are listed but not traced. Ranges with more than 250 commits get no filter (a warning says so), since each commit needs its own blame runs, which fetch old file versions on demand.
+
+### Review threads
+
+For a pull request, the page also shows the PR's review threads on GitHub as they were when the page was built (fetched with `gh api graphql`, so the action's token or your own `gh` login), open and resolved:
+
+- Each thread appears under the line it is on, in the source diff of the changed item that contains that line (the innermost one, so a method rather than its impl), and so inside the hunk it belongs to. A thread on a removed line is shown after that line. Lines with a thread are never folded away. The source summary counts the item's threads (**💬 2 review threads, 1 open**), and a source diff with an open thread starts expanded. Open threads start expanded, resolved ones folded.
+- Threads on a file outside the Rust analysis are listed on that file's card, with their lines.
+- The overview lists every thread with its state, where it is and the start of its first comment. Threads that no item or file card shows, such as outdated ones (whose line is gone) or those on unchanged items, are shown there in full.
+- Comments are rendered as Markdown the same way as the PR's description: raw HTML is shown as text and images only as their alt text, so the page still loads nothing from elsewhere. Each thread links to its conversation on GitHub.
+
+The page holds a copy of the threads, so it can be read by everyone who can open it, which for the action is the same people who can read the PR. The threads are not updated after the page was built; build the page again to see new ones.
 
 ### Canvas
 
