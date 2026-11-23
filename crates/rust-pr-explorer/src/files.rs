@@ -138,6 +138,35 @@ fn hunks(old: &str, new: &str) -> (Vec<SourceLine>, u32, u32) {
     (out, added, removed)
 }
 
+/// The line numbers of the added lines (in the new version) and of the
+/// removed lines (in the old one) of a file's hunks.
+pub fn changed_lines(hunks: &[SourceLine]) -> (Vec<u32>, Vec<u32>) {
+    let (mut added, mut removed) = (Vec::new(), Vec::new());
+    let (mut o, mut n) = (0u32, 0u32);
+    for l in hunks {
+        match l.0 {
+            '@' => {
+                let mut it = l.1.split(' ').filter_map(|x| x.parse::<u32>().ok());
+                o = it.next().unwrap_or(1);
+                n = it.next().unwrap_or(1);
+            }
+            '+' => {
+                added.push(n);
+                n += 1;
+            }
+            '-' => {
+                removed.push(o);
+                o += 1;
+            }
+            _ => {
+                o += 1;
+                n += 1;
+            }
+        }
+    }
+    (added, removed)
+}
+
 /// Text of a file, if it is text and not too large. `Err` means binary.
 /// A symlink reads as the path it points to; it is never followed.
 fn read(path: &Path) -> Result<Option<String>, ()> {
@@ -513,6 +542,8 @@ mod tests {
         // One hunk: 3 lines of context on each side.
         assert_eq!(notes.hunks[0], SourceLine('@', "7 7".into()));
         assert_eq!(notes.hunks.len(), 1 + 3 + 2 + 3);
+        // The changed line is line 10 in both versions.
+        assert_eq!(changed_lines(&notes.hunks), (vec![10], vec![10]));
         assert_eq!(files[2].generated.as_deref(), Some("vendored"));
         assert_eq!(files[2].status, Status::Added);
     }

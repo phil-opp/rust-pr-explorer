@@ -104,13 +104,19 @@ fn site_path(a: Rect, y: f64, b: Rect) -> String {
 }
 
 /// The height, in canvas coordinates, of the first visible call site of
-/// `to` in the expanded source of card `g`.
+/// `to` in the expanded source of card `g`. A call on a removed line counts
+/// only if no other line calls `to`: the connector shows the current call.
 fn call_site_y(g: &Group, to: &str, k: f64) -> Option<f64> {
     let card = card_el(g.gid)?;
     let top = card.get_bounding_client_rect().top();
-    dom::query_all_in(&card, "details.src[open] a.ref[data-id]")
+    let (removed, current): (Vec<_>, Vec<_>) =
+        dom::query_all_in(&card, "details.src[open] a.ref[data-id]")
+            .into_iter()
+            .filter(|a| dom::data(a, "id").as_deref() == Some(to))
+            .partition(|a| dom::closest(a, ".ln.del").is_some());
+    current
         .into_iter()
-        .filter(|a| dom::data(a, "id").as_deref() == Some(to))
+        .chain(removed)
         .map(|a| a.get_bounding_client_rect())
         .find(|r| r.height() > 0.0)
         .map(|r| g.y + (r.top() + r.height() / 2.0 - top) / k)

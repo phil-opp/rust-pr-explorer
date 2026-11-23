@@ -805,12 +805,21 @@ impl Data {
             Status::Removed => (it.info.line, it.info.line),
             _ => (it.old_line.unwrap_or(it.info.line), it.info.line),
         };
+        // What names in the base version's lines refer to.
+        let old_refs = match it.status {
+            Status::Removed => &it.info.source_refs,
+            _ => &it.old_source_refs,
+        };
+        let old_links = |o: usize| Links::Source {
+            line: old_start + o,
+            refs: old_refs,
+        };
         // Changed lines with their changed words marked.
         let mut marked_old: HashMap<usize, String> = HashMap::new();
         let mut marked_new: HashMap<usize, String> = HashMap::new();
         if it.status == Status::Changed {
             for &(o, n) in &pairs {
-                let old_html = code_html(self, old[o], Links::None);
+                let old_html = code_html(self, old[o], old_links(o));
                 let new_html = code_html(
                     self,
                     new[n],
@@ -829,25 +838,20 @@ impl Data {
             if let Some(html) = marked_new.get(&n) {
                 return html.clone();
             }
-            if it.status == Status::Removed {
-                // Base code: what its names referred to is not known here.
-                code_html(self, new[n], Links::None)
-            } else {
-                code_html(
-                    self,
-                    new[n],
-                    Links::Source {
-                        line: new_start + n,
-                        refs: &it.info.source_refs,
-                    },
-                )
-            }
+            code_html(
+                self,
+                new[n],
+                Links::Source {
+                    line: new_start + n,
+                    refs: &it.info.source_refs,
+                },
+            )
         };
         let old_code = |o: usize| {
             marked_old
                 .get(&o)
                 .cloned()
-                .unwrap_or_else(|| code_html(self, old[o], Links::None))
+                .unwrap_or_else(|| code_html(self, old[o], old_links(o)))
         };
         let nonempty = |s: String| if s.is_empty() { " ".to_string() } else { s };
         let changed_row = |&(o, n): &(Option<usize>, Option<usize>)| match (o, n) {
@@ -881,19 +885,12 @@ impl Data {
                         format!(r#"<span class="no {side}"></span><span class="ln gap"> </span>"#)
                     }
                 };
-                let del = if o.is_some_and(|a| marked_old.contains_key(&a)) {
-                    "del wl"
-                } else {
-                    "del"
-                };
-                cell(o, old_start, del, "o", &old_code) + &cell(n, new_start, "add", "n", &new_code)
+                cell(o, old_start, "del", "o", &old_code)
+                    + &cell(n, new_start, "add", "n", &new_code)
             } else {
                 let (class, tag, no, code) = match (o, n) {
                     (_, Some(b)) if o.is_some() => ("", ' ', new_start + b, new_code(b)),
                     (None, Some(b)) => ("add", '+', new_start + b, new_code(b)),
-                    (Some(a), _) if marked_old.contains_key(&a) => {
-                        ("del wl", '-', old_start + a, old_code(a))
-                    }
                     (Some(a), _) => ("del", '-', old_start + a, old_code(a)),
                     (None, None) => unreachable!(),
                 };
@@ -932,10 +929,24 @@ impl Data {
                 i += 1;
             }
         }
+        // In review mode, each part between folds starts with the review
+        // controls of the hunks that start in it (see `review::hunks`).
+        let hunk_head = |part: std::ops::Range<usize>| -> String {
+            let (mut olds, mut news) = (Vec::new(), Vec::new());
+            for &(o, n) in rows[part].iter().filter(|r| changed_row(r)) {
+                olds.extend(o.map(|a| old_start + a));
+                news.extend(n.map(|b| new_start + b));
+            }
+            match crate::review::hunk_controls(&it.info.id, &olds, &news) {
+                c if c.is_empty() => c,
+                c => format!(r#"<span class="hunk-rv">{c}</span>"#),
+            }
+        };
         let mut folded = 0;
         let mut body = String::new();
         let mut r = 0;
         for g in &gaps {
+            body += &hunk_head(r..g.start);
             body.extend((r..g.start).map(&row_html));
             let inner: String = g.clone().map(&row_html).collect();
             if unfolded.contains(&g.start) {
@@ -958,6 +969,7 @@ impl Data {
             }
             r = g.end;
         }
+        body += &hunk_head(r..rows.len());
         body.extend((r..rows.len()).map(&row_html));
         let code = format!(
             r#"<div class="src-code" data-item="{}">{}{}</div>"#,

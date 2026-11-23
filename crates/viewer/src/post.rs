@@ -59,6 +59,16 @@ fn numbered(hunks: &[SourceLine]) -> Vec<(char, usize, usize)> {
     out
 }
 
+/// The lines of a file that GitHub's diff shows, as `numbered` gives
+/// them. For an analyzed file, whose hunks only hold the changes outside
+/// items, also its other changed lines (without their context).
+fn diff_lines(f: &ChangedFile) -> Vec<(char, usize, usize)> {
+    let mut out = numbered(&f.hunks);
+    out.extend(f.added_lines.iter().map(|&n| ('+', 0, n as usize)));
+    out.extend(f.removed_lines.iter().map(|&o| ('-', o as usize, 0)));
+    out
+}
+
 /// The line a comment on a file outside the Rust analysis goes on: its
 /// first changed line.
 pub fn file_loc(f: &ChangedFile) -> Option<Loc> {
@@ -80,7 +90,7 @@ pub fn item_loc(files: &[ChangedFile], it: &Item) -> Option<Loc> {
         files
             .iter()
             .find(|f| f.path == path)
-            .map(|f| numbered(&f.hunks))
+            .map(diff_lines)
             .unwrap_or_default()
     };
     // The PR's version: the item's lines in its file.
@@ -113,22 +123,61 @@ pub fn item_loc(files: &[ChangedFile], it: &Item) -> Option<Loc> {
         .or_else(|| find(&head, ' '))
 }
 
+/// The line a comment on one hunk of an item goes on: its first changed
+/// line that GitHub's diff shows.
+pub fn hunk_loc(files: &[ChangedFile], it: &Item, h: &review::Hunk) -> Option<Loc> {
+    let find = |path: &str, tag: char, lines: &[usize]| {
+        let f = files.iter().find(|f| f.path == path)?;
+        diff_lines(f)
+            .into_iter()
+            .find(|&(t, o, n)| t == tag && lines.contains(if tag == '-' { &o } else { &n }))
+            .map(|(_, o, n)| Loc {
+                path: path.to_string(),
+                line: if tag == '-' { o } else { n },
+                side: if tag == '-' { "LEFT" } else { "RIGHT" },
+            })
+    };
+    let added = || find(&it.info.file, '+', &h.new);
+    let removed = || find(it.old_file.as_deref().unwrap_or(&it.info.file), '-', &h.old);
+    if h.starts_added {
+        added().or_else(removed)
+    } else {
+        removed().or_else(added)
+    }
+}
+
 /// Where a unit's comment goes, if on a line.
 pub fn loc(d: &Data, unit: &str) -> Option<Loc> {
+    if let Some(item) = review::hunk_item(unit) {
+        let h = review::hunks_of(&item).into_iter().find(|h| h.id == unit)?;
+        return hunk_loc(&d.out.files, d.item(&item)?, &h);
+    }
     match unit.strip_prefix("file:") {
         Some(path) => file_loc(d.out.files.iter().find(|f| f.path == path)?),
         None => item_loc(&d.out.files, d.item(unit)?),
     }
 }
 
-/// How a unit is named in a comment.
+/// How a unit is named in a comment; a hunk by its item.
 pub fn unit_name(d: &Data, unit: &str) -> String {
+    if let Some(item) = review::hunk_item(unit) {
+        return unit_name(d, &item);
+    }
     match unit.strip_prefix("file:") {
         Some(path) => path.to_string(),
         None => d
             .item(unit)
             .map_or_else(|| unit.to_string(), |it| d.display_name(it)),
     }
+}
+
+/// For a hunk: which part of its item it is, e.g. ", change at line 41".
+pub fn part_label(unit: &str) -> String {
+    review::hunk_item(unit)
+        .and_then(|item| review::hunks_of(&item).into_iter().find(|h| h.id == unit))
+        .map_or(String::new(), |h| {
+            format!(", change at line {}", h.first_line())
+        })
 }
 
 /// The review event GitHub takes.
@@ -144,6 +193,8 @@ pub fn event_name(v: Verdict) -> &'static str {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Comment {
     pub name: String,
+    /// For a hunk, its `part_label`.
+    pub part: String,
     pub verdict: Verdict,
     pub text: String,
     pub loc: Option<Loc>,
@@ -157,8 +208,10 @@ impl Comment {
     /// The comment's first line, with where it is (`at`) for Markdown.
     fn lead_at(&self, at: &str) -> String {
         match self.verdict {
-            Verdict::Changes => format!("**Change requested** on `{}`{at}:", self.name),
-            _ => format!("On `{}`{at}:", self.name),
+            Verdict::Changes => {
+                format!("**Change requested** on `{}`{}{at}:", self.name, self.part)
+            }
+            _ => format!("On `{}`{}{at}:", self.name, self.part),
         }
     }
 }
@@ -173,6 +226,8 @@ pub struct Summary {
     pub open: usize,
     /// Comments on units that changed since: left out.
     pub stale_comments: usize,
+    /// Some hunk needs changes, also of an item without a verdict yet.
+    pub hunk_changes: bool,
 }
 
 impl Summary {
@@ -180,7 +235,7 @@ impl Summary {
     /// changes if any unit needs them, approve if every unit is approved,
     /// else comment.
     pub fn suggested(&self) -> Verdict {
-        if self.changes > 0 {
+        if self.changes > 0 || self.hunk_changes {
             Verdict::Changes
         } else if self.open == 0 && self.commented == 0 && self.approved > 0 {
             Verdict::Approve
@@ -199,6 +254,7 @@ pub fn summary(d: &Data) -> Summary {
         commented: 0,
         open: total,
         stale_comments: 0,
+        hunk_changes: false,
     };
     for (unit, mark, Note { verdict, text }) in review::notes() {
         let has_text = !text.trim().is_empty();
@@ -206,15 +262,21 @@ pub fn summary(d: &Data) -> Summary {
             s.stale_comments += usize::from(has_text);
             continue;
         }
-        s.open -= 1;
-        match verdict {
-            Verdict::Approve => s.approved += 1,
-            Verdict::Changes => s.changes += 1,
-            Verdict::Comment => s.commented += 1,
+        // Hunks add their comments; their item counts.
+        if review::hunk_item(&unit).is_some() {
+            s.hunk_changes |= verdict == Verdict::Changes;
+        } else {
+            s.open -= 1;
+            match verdict {
+                Verdict::Approve => s.approved += 1,
+                Verdict::Changes => s.changes += 1,
+                Verdict::Comment => s.commented += 1,
+            }
         }
         if has_text {
             s.comments.push(Comment {
                 name: unit_name(d, &unit),
+                part: part_label(&unit),
                 verdict,
                 text: text.trim().to_string(),
                 loc: loc(d, &unit),
@@ -421,7 +483,7 @@ pub fn finish_html(d: &Data) -> String {
         .iter()
         .map(|c| {
             format!(
-                r#"<li><span class="rv-k {}">{}</span> <code>{}</code> <span class="dim">{}</span><div class="rv-q">{}</div></li>"#,
+                r#"<li><span class="rv-k {}">{}</span> <code>{}</code>{} <span class="dim">{}</span><div class="rv-q">{}</div></li>"#,
                 c.verdict.name(),
                 if c.verdict == Verdict::Changes {
                     "✗ change"
@@ -429,6 +491,7 @@ pub fn finish_html(d: &Data) -> String {
                     "✎ comment"
                 },
                 esc(&c.name),
+                esc(&c.part),
                 c.loc.as_ref().map_or("in the review's text".to_string(), |l| esc(
                     &format!(
                         "{} line {}{}",
@@ -641,6 +704,26 @@ mod tests {
     }
 
     #[test]
+    fn analyzed_files_list_their_changed_lines() {
+        // The hunks only hold a change outside items; the item's change is
+        // in the line lists.
+        let mut f = file("src/lib.rs", vec![sl('@', "40 40"), sl('+', "mod x;")]);
+        f.added_lines = vec![9, 40];
+        f.removed_lines = vec![9];
+        let mut it = item(Status::Changed, 8, vec![sl(' ', "fn f() {")]);
+        it.source
+            .extend([sl('-', "    a();"), sl('+', "    b();"), sl(' ', "}")]);
+        assert_eq!(
+            item_loc(std::slice::from_ref(&f), &it).map(|l| (l.line, l.side)),
+            Some((9, "RIGHT"))
+        );
+        // Without the lists, it fits on no line.
+        f.added_lines.clear();
+        f.removed_lines.clear();
+        assert_eq!(item_loc(&[f], &it), None);
+    }
+
+    #[test]
     fn items_outside_the_diff_fit_on_no_line() {
         let files = [lib()];
         // Lines 20 to 22: no hunk covers them.
@@ -667,6 +750,7 @@ mod tests {
         let comments = vec![
             Comment {
                 name: "f".into(),
+                part: String::new(),
                 verdict: Verdict::Changes,
                 text: "Please rename.".into(),
                 loc: Some(Loc {
@@ -677,6 +761,7 @@ mod tests {
             },
             Comment {
                 name: "logo.png".into(),
+                part: String::new(),
                 verdict: Verdict::Comment,
                 text: "Too large.".into(),
                 loc: None,

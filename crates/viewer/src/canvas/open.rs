@@ -106,8 +106,56 @@ fn open_at(
     settle(gid);
     if switch_view {
         reveal(gid, false);
+    } else if from.is_some() {
+        nudge_into_view(gid);
     }
     Some(gid)
+}
+
+/// After following a link from one card to another: pans only as far as
+/// needed to show the new card's width, so that the card the link was
+/// clicked in stays where it is as far as possible.
+fn nudge_into_view(gid: u32) {
+    const MARGIN: f64 = 24.0;
+    dom::raf(move || {
+        crate::with_app(|app| {
+            let c = &mut app.s.canvas;
+            let Some(gi) = c.by_gid(gid) else { return };
+            let Some(vp) = dom::by_id("viewport") else {
+                return;
+            };
+            let r = vp.get_bounding_client_rect();
+            let g = &c.groups[gi];
+            let left = g.x * c.pan.k + c.pan.x;
+            let right = left + CARD_W * c.pan.k;
+            let top = g.y * c.pan.k + c.pan.y;
+            // Right edge first, but never past the left edge.
+            let dx = if right > r.width() - MARGIN {
+                -(right - (r.width() - MARGIN)).min(left - MARGIN).max(0.0)
+            } else if left < MARGIN {
+                MARGIN - left
+            } else {
+                0.0
+            };
+            // Vertically when the card's head is out of view: pushed below
+            // other cards, or above the view when the link was far down in
+            // a long card (then by at most a third of the view, so the
+            // link stays in sight).
+            let dy = if top > r.height() - 160.0 {
+                r.height() - 160.0 - top
+            } else if top < 0.0 {
+                (MARGIN - top).min(r.height() / 3.0)
+            } else {
+                0.0
+            };
+            if dx != 0.0 || dy != 0.0 {
+                c.pan.x += dx;
+                c.pan.y += dy;
+                apply_pan(c);
+                draw_edges(app);
+            }
+        });
+    });
 }
 
 /// After a new card is rendered, moves it if its real height makes it
