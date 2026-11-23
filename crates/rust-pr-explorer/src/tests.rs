@@ -939,6 +939,24 @@ fn changes_outside_items_are_counted() {
     // `thread_local!`, the extern fn and the test assertion: 3 lines on
     // each side. The change in `f` is inside an item.
     assert_eq!(lib.outside_items, 6);
+    // Imports spread over several lines and attributes of module
+    // declarations are not code outside items.
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "use std::{\n    cell::Cell,\n};\npub fn f() {}\n",
+    )]);
+    let head = write_crate(&[
+        (
+            "src/lib.rs",
+            "use std::{\n    cell::{Cell, RefCell},\n    rc::Rc,\n};\n#[cfg(feature = \"x\")]\n#[path = \"other.rs\"]\nmod m;\npub fn f() {}\n",
+        ),
+        ("src/other.rs", "pub fn g() {}\n"),
+    ]);
+    let checkout =
+        crate::source::Checkout::from_dirs(base.path(), head.path(), Trust::Untrusted).unwrap();
+    let out = crate::analyze_checkout(&checkout, false, Trust::Untrusted);
+    let lib = out.files.iter().find(|f| f.path == "src/lib.rs").unwrap();
+    assert_eq!(lib.outside_items, 0, "{:#?}", lib.hunks);
     // The demo's changes are all inside items or imports.
     let demo =
         crate::source::Checkout::from_dirs(&fixture("base"), &fixture("head"), Trust::Untrusted)
