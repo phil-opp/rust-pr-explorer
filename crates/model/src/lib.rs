@@ -320,6 +320,11 @@ pub struct Item {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_file: Option<String>,
     pub source: Vec<SourceLine>,
+    /// Like `info.source_refs`, for the base version's lines (by their
+    /// line in the base file), when the source changed. For a removed
+    /// item, `info` is the base version and has them.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub old_source_refs: BTreeMap<String, Ref>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]

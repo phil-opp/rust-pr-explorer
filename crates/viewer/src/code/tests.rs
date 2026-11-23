@@ -581,3 +581,55 @@ fn changed_code_lines_mark_changed_tokens() {
     // A different line: no marks.
     assert_eq!(mark_changed_tokens("one two three", "four five six"), None);
 }
+
+#[test]
+fn source_links_both_versions_and_marks_new_items() {
+    use model::{Item, Kind, SourceLine, Status};
+    let item = |id: &str, status: Status| Item {
+        status,
+        info: model::ItemInfo {
+            id: id.into(),
+            kind: Kind::Fn,
+            name: id.rsplit("::").next().unwrap().into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let r = |id: &str| Ref {
+        id: Some(id.into()),
+        path: id.into(),
+    };
+    let mut it = item("c::f", Status::Changed);
+    it.changes.body = true;
+    it.info.line = 10;
+    it.old_line = Some(4);
+    it.source = vec![
+        SourceLine(' ', "fn f() {".into()),
+        SourceLine('-', "    old_helper();".into()),
+        SourceLine('+', "    new_helper();".into()),
+        SourceLine(' ', "}".into()),
+    ];
+    // Old line 5, new line 11, each at column 4.
+    it.old_source_refs.insert("5:4".into(), r("c::old_helper"));
+    it.info
+        .source_refs
+        .insert("11:4".into(), r("c::new_helper"));
+    let mut out = empty().out;
+    out.items.insert("c::f".into(), it.clone());
+    out.items.insert(
+        "c::old_helper".into(),
+        item("c::old_helper", Status::Removed),
+    );
+    out.items
+        .insert("c::new_helper".into(), item("c::new_helper", Status::Added));
+    let d = Data::new(out);
+    let html = d.source_html(&it, true, false);
+    assert!(
+        html.contains(r#"<a class="ref " data-id="c::old_helper""#),
+        "{html}"
+    );
+    assert!(
+        html.contains(r#"<a class="ref new" data-id="c::new_helper""#),
+        "{html}"
+    );
+}

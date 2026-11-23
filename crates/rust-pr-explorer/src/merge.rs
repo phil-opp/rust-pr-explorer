@@ -141,6 +141,11 @@ fn compare(b: ItemData, h: ItemData, moved_from: Option<String>) -> Item {
         old_docs: docs.then(|| b.info.docs.clone()),
         old_line: Some(b.info.line),
         old_file: (b.info.file != h.info.file).then(|| b.info.file.clone()),
+        old_source_refs: if b.source != h.source {
+            b.info.source_refs
+        } else {
+            BTreeMap::new()
+        },
         source,
         info: h.info,
         status,
