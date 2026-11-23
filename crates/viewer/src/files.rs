@@ -35,8 +35,6 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
     // YAML block scalars span lines; each side keeps its own state.
     let (mut old_yaml, mut new_yaml) = (yaml::State::default(), yaml::State::default());
     let mut body = String::new();
-    // Removed lines whose changed words are marked.
-    let mut paired = vec![false; lines.len()];
     let mut codes: Vec<String> = Vec::with_capacity(lines.len());
     for l in lines {
         if l.0 == '@' {
@@ -66,12 +64,11 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
             if let Some((a, b)) = mark_changed_tokens(&codes[o], &codes[n]) {
                 codes[o] = a;
                 codes[n] = b;
-                paired[o] = true;
             }
         }
         i += (dels + adds).max(1);
     }
-    for ((l, code), paired) in lines.iter().zip(codes).zip(paired) {
+    for (l, code) in lines.iter().zip(codes) {
         if l.0 == '@' {
             let mut it = l.1.split(' ').filter_map(|n| n.parse::<usize>().ok());
             old_line = it.next().unwrap_or(1);
@@ -83,7 +80,6 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
         }
         let (class, no) = match l.0 {
             '+' => ("add", new_line),
-            '-' if paired => ("del wl", old_line),
             '-' => ("del", old_line),
             _ => ("", new_line),
         };

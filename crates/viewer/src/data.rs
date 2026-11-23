@@ -885,19 +885,12 @@ impl Data {
                         format!(r#"<span class="no {side}"></span><span class="ln gap"> </span>"#)
                     }
                 };
-                let del = if o.is_some_and(|a| marked_old.contains_key(&a)) {
-                    "del wl"
-                } else {
-                    "del"
-                };
-                cell(o, old_start, del, "o", &old_code) + &cell(n, new_start, "add", "n", &new_code)
+                cell(o, old_start, "del", "o", &old_code)
+                    + &cell(n, new_start, "add", "n", &new_code)
             } else {
                 let (class, tag, no, code) = match (o, n) {
                     (_, Some(b)) if o.is_some() => ("", ' ', new_start + b, new_code(b)),
                     (None, Some(b)) => ("add", '+', new_start + b, new_code(b)),
-                    (Some(a), _) if marked_old.contains_key(&a) => {
-                        ("del wl", '-', old_start + a, old_code(a))
-                    }
                     (Some(a), _) => ("del", '-', old_start + a, old_code(a)),
                     (None, None) => unreachable!(),
                 };

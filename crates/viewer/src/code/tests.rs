@@ -395,7 +395,7 @@ fn source_diff_follows_the_settings() {
     );
     assert!(
         html.contains(
-            r#"<span class="no o">6</span><span class="ln del wl" data-t="-">    <span class="wc">b</span>();"#
+            r#"<span class="no o">6</span><span class="ln del" data-t="-">    <span class="wc">b</span>();"#
         ),
         "{html}"
     );
