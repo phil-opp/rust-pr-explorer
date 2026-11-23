@@ -517,10 +517,7 @@ pub fn render_overview(app: &App) {
         } else {
             format!(
                 r#"<h2>Public API changes {}</h2>{semver}{public_html}"#,
-                help_html(
-                    "Items reachable from outside the crate that were added, changed or removed, \
-                     in rustdoc form. Types appear as context when only their members changed."
-                )
+                help_html("Changed items that other crates can use.")
             )
         };
         let internal = if internal_html.is_empty() {
@@ -528,11 +525,7 @@ pub fn render_overview(app: &App) {
         } else {
             format!(
                 r#"<h2>Internal changes {}{}</h2>{internal_html}"#,
-                help_html(
-                    "Items not reachable from outside the crate (private, pub(crate), \
-                     pub(super), …), and the code of binaries, tests, examples and build \
-                     scripts. Open a module to see them and its internal call graph."
-                ),
+                help_html("Changed items that other crates can't use."),
                 if public.is_empty() {
                     r#" <span class="h-note">public API unchanged</span>"#
                 } else {
@@ -818,10 +811,7 @@ pub fn render_module_page(app: &App) {
     if !subs.is_empty() {
         sections += &format!(
             r#"<h2>Submodules {}</h2>{}"#,
-            help_html(&format!(
-                "Each submodule shows only what it makes visible to {}.",
-                d.short_path(m)
-            )),
+            help_html("Only what is visible from here."),
             subs.iter()
                 .map(|s| sub_box(d, s, m, &section))
                 .collect::<String>()

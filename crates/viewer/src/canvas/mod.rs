@@ -214,7 +214,7 @@ pub fn render(app: &mut App) {
             .join("::"),
         if hidden > 0 {
             format!(
-                r#"<span class="chip" title="Private to submodules of the current scope">{hidden} card{} hidden at this scope</span>"#,
+                r#"<span class="chip" title="Not visible from this scope">{hidden} card{} hidden at this scope</span>"#,
                 if hidden > 1 { "s" } else { "" }
             )
         } else {
