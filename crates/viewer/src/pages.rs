@@ -142,7 +142,13 @@ fn item_row(
             r#"<span class="title-name"><span class="k-{}">{}</span></span> <span class="dim">re-export of <code>{}</code></span>"#,
             it.info.kind.css(),
             esc(path.rsplit("::").next().unwrap_or(path)),
-            esc(d.short_path(&format!("{}::{}", it.info.module, it.info.name)))
+            esc(&match &it.info.reexport_of {
+                // Another crate's item: its full path says where it is from.
+                Some(target) => target.clone(),
+                None => d
+                    .short_path(&format!("{}::{}", it.info.module, it.info.name))
+                    .to_string(),
+            })
         ),
         _ => d.title_html(it, false),
     };

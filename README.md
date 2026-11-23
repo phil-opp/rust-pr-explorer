@@ -18,6 +18,9 @@ rustup target add wasm32-unknown-unknown
 rustup component add rust-src
 
 cargo build --release
+# Optional: a smaller page (about 0.35 MB less), at the cost of compiling
+# Binaryen's wasm-opt (C++) from source once, about 5 more minutes.
+cargo build --release --features wasm-opt
 
 # A GitHub pull request (public repositories; needs `git`).
 ./target/release/rust-pr-explorer pr https://github.com/rust-lang/log/pull/613
@@ -40,11 +43,37 @@ For `pr`, the repository is cloned without file contents (`--filter=blob:none`),
 
 The demo in `fixtures/demo` is a small calculator crate. Its "PR" adds variables (a new `env` module, a changed `evaluate` signature, new error variants), moves a helper between modules, re-exports `ast::Op` at the crate root and drops the root re-export of `parser::Parser`, extends one doc comment (shown as a word diff), and changes some import styles and formatting. That last part does not show up as a change.
 
+## GitHub Action
+
+The repository is also a GitHub Action that builds the page for every pull request and links it in a comment on the PR:
+
+```yaml
+# .github/workflows/pr-explorer.yml
+name: PR Explorer
+on: pull_request
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  explore:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: phil-opp/diff-viewer@main
+```
+
+The action builds the tool (cached after the first run), runs `pr` on the pull request and uploads the page as a workflow artifact. The artifact is a single unzipped HTML file, so the link opens the page directly in the browser. The comment is posted once and updated on every push, with a one-line summary of the changed items. The link is also in the job summary.
+
+Who can open the page: anyone logged in to GitHub with access to the repository, the same people who can see the workflow run. It expires with the run's artifacts (90 days unless the repository sets otherwise, or the `retention-days` input).
+
+Inputs: `comment: false` leaves out the comment, `syntax-only: true` skips rust-analyzer, and `pr` and `repository` pick another pull request (by default the one that triggered the workflow). The `page-url` output is the link.
+
+The action never builds or runs the PR's code, so it has no `--trust-project-code` input: the token is in the analysis step's environment. On a PR from a fork, the token GitHub gives the workflow is read-only, so the page is built and uploaded but the comment fails with a warning; the link is still in the job summary.
+
 ## What you see
 
 ### Overview
 
-Lists only the public items that were added, changed or removed, nested by module, with their rustdoc-style signature and docs. A type whose methods changed appears as context with the changed members below it. Items are listed where rustdoc lists them: under their shortest public path, so an item of a private module that is re-exported with `pub use` appears at the re-export, marked "re-export of …". Internal changes are summarized per module, with a link to each module's internal call graph.
+Lists only the public items that were added, changed or removed, nested by module, with their rustdoc-style signature and docs. A type whose methods changed appears as context with the changed members below it. Items are listed where rustdoc documents them: at their definition path when that is public, otherwise at a re-export, marked "re-export of …" (a `#[doc(inline)]` re-export first, a `#[doc(no_inline)]` one last). Items marked `#[doc(hidden)]`, or reachable only through hidden modules or hidden `pub use`s, are not part of the public API; an item that becomes hidden shows as "no longer public". Items of other crates that a crate re-exports (`pub use serde::Serialize;`) are part of its API too: they are listed as re-exports with the other crate's docs, so adding, removing or retargeting such a `pub use` is an API change. Internal changes are summarized per module, with a link to each module's internal call graph.
 
 The sidebar lists the modules with a status symbol and the number of changed items in each. When the PR changes no Rust item, the sidebar is hidden, except on the module pages, where it is the way to browse the modules.
 
@@ -91,7 +120,8 @@ Every item shows what rustdoc would show: its definition or signature (private f
 - Every added, changed or removed item (functions, methods, types, trait impls, …) and every file listed under "Other changed files" gets a **✓ Reviewed, next ▸** button, on the overview, the module pages and canvas cards. It marks the item as reviewed and moves to the next one that isn't: further down the page, then on the next module's page (or, on the canvas, as a new card). **Next ▸** in the header, or the `n` key, moves on without marking.
 - A reviewed item is marked **✓ Reviewed** everywhere it appears, also with review mode off, and its row is folded to one dimmed line. Clicking the mark removes it.
 - The header shows how many of the PR's items and files are reviewed; in review mode the sidebar counts what is left per module (✓ when nothing is). **Clear** removes every mark.
-- Marks are saved in the browser's local storage, per pull request (for `git`, per repository or subdirectory; for `dirs`, per pair of directories; the page holds only a hash of their paths), so they carry over to a page generated again after new commits. A mark remembers the item's diff: if the diff is different in the new page, the item shows **⚠ Changed since review** and counts as not reviewed. The page can't show what changed since the review, only the whole diff again.
+- Marks are saved in the browser's local storage, per pull request (for `git`, per repository or subdirectory; for `dirs`, per pair of directories; the page holds only a hash of their paths), so they carry over to a page generated again after new commits. A mark remembers the item's diff: if the diff is different in the new page, the item shows **⚠ Changed since review** and counts as not reviewed.
+- A mark also keeps the version that was reviewed. **Show changes** next to a stale mark compares it with the current one: a line diff of the PR's version since the review, of the base version if that changed too (after a rebase), and a list of anything else that differs (status, public paths, what the signature's names refer to). For a file outside the Rust analysis, only the parts its diff shows are kept, except for Markdown files, which are kept whole. Marks made by pages from before this was added have no saved version; the dialog says so.
 - Nothing leaves the browser: marks are not shared between browsers or people.
 
 ### Canvas
@@ -122,7 +152,7 @@ The workspace has three crates:
    - PRs are cloned with `git` and the two revisions checked out.
    - Local revisions are exported with `git archive`; directories are copied.
    - In every case the analysis works on temporary copies, with tool configuration and symlinks removed (see Safety).
-2. **Syntactic analysis** (`analyze.rs`, [`syn`](https://docs.rs/syn)): finding items and resolving names.
+2. **Syntactic analysis** (`analyze/`, [`syn`](https://docs.rs/syn)): finding items and resolving names.
    - Builds the module tree, following `mod` declarations, `mod.rs`/`name.rs` and `#[path]`.
    - Gives every item, including methods, a stable id independent of file and `impl` block, e.g. `crate::ast::Expr::<impl Display>::fmt`.
    - Resolves every path in signatures and bodies: `crate`/`self`/`super`/`Self`, imports, renames, globs, re-exports and the prelude.
@@ -131,10 +161,11 @@ The workspace has three crates:
    - It loads the workspace with all features enabled, without running build scripts and without expanding procedural macros.
    - Its type-checked answers decide the calls. Every call site the syntactic pass found is checked, including method calls and calls inside macros (with "go to definition" where the call hierarchy doesn't list them). Sites that can't be resolved are counted on the card, not guessed.
    - If loading fails, the syntactic results are used and the page says so.
-4. **Comparison** (`merge.rs`): matching items by id across base and head.
+4. **Public API** (`public_api.rs`): rust-analyzer's resolved module scopes, walked from each library's root through every name visible outside the crate, give each item's public paths. This covers glob imports, `cfg` and re-exports that macros generate, and it applies `#[doc(hidden)]`, `#[doc(inline)]` and `#[doc(no_inline)]` like rustdoc. Names that refer to other crates' items become re-export items. Without rust-analyzer, the syntactic pass computes the public paths, including `#[doc(hidden)]`.
+5. **Comparison** (`merge.rs`): matching items by id across base and head.
    - Changes are detected on normalized forms: pretty-printed tokens plus the fully qualified target of every name. Reformatting and changes in import style don't count.
    - A `use` that now points at a different item does count.
-5. **Page**:
+6. **Page**:
    - The CLI's build script compiles `crates/viewer` to WebAssembly and generates its bindings with `wasm-bindgen`.
    - The output page embeds the wasm module, the bindings and the analysis as JSON.
    - The viewer renders the views with `web-sys`, and docs with [`pulldown-cmark`](https://docs.rs/pulldown-cmark).
@@ -163,10 +194,23 @@ What that leaves out:
 - **Targets.** Besides each package's library, its binaries (`src/main.rs`, `src/bin/`, `[[bin]]`), build script, examples, integration tests and benches are analyzed, each as a crate of its own (`binary repl`, `test calc`, `build script`, …). They use the library by its name, and they are never part of the public API.
 - **`cfg`.** In libraries and binaries, items behind `#[cfg(test)]` and `#[test]` functions are skipped; in integration tests and benches they are what the target is about, so they are kept. Other `cfg` attributes are ignored by the syntactic pass, so code behind every `cfg` is shown. Two definitions at one path (`#[cfg(unix)]` and `#[cfg(windows)]` variants of a function, impls of a trait for `W<u8>` and `W<u16>`) are both kept, the later one with its `cfg` (or kind, or a number) in its id.
 - **External crates.** Their items are described (declaration and docs) only with rust-analyzer, and only when rust-analyzer's definition has the same name and crate as the path the syntactic pass resolved. Their calls and uses are not analyzed. Intra-doc links in their docs that rust-analyzer can't turn into URLs show as plain text.
-- **Re-exports.** Public paths follow `pub use` (named, renamed and glob) through public modules; a glob re-export also forwards the target module's own re-exports. Re-exports of items from other crates are not listed, and `#[doc(hidden)]` and `#[doc(inline)]` are not taken into account.
+- **Re-exports.** With rust-analyzer, the public API is the one its name resolution determines (see [How it works](#how-it-works)), with the features enabled that it loads (all). Items of other crates are listed per item, also when a glob re-export (`pub use dep::*`) brings in many; a re-export that a macro generates is listed only for items of the crate itself, since it has no place in the source. Enum variants re-exported on their own (`pub use Enum::*`) are part of their enum, not listed. Without rust-analyzer, public paths follow `pub use` (named, renamed and glob) through public modules, a glob re-export also forwards the target module's own re-exports, and `#[doc(hidden)]` is applied; re-exports of other crates' items are not listed and `#[doc(inline)]` is not taken into account.
 - **Moves.** An item counts as moved only when its code is identical: the same body (for functions, constants, macros) or the same definition (for types), and exactly one item of that kind and name disappears in one place and appears in another. Names of items that moved along with it (siblings, `Self`) may point into the new module. Anything else is shown as removed plus added.
 - **Removed configuration.** In the default (untrusted) mode, `.cargo/config(.toml)`, `rust-toolchain(.toml)` and symlinks are deleted from both checkouts before anything runs (see [Safety](#safety)). The file list is taken before that, so changes to them are listed (a symlink as the path it points to); they are just not used by the analysis.
 - **Code outside items.** Changes in code that is no item, such as macro invocations without a name (`thread_local!`, `bitflags!`), `extern` blocks and `#[cfg(test)]` code in libraries, are counted per file: such a file is also listed under "Other changed files", with a note and its line diff.
 - **Python and Markdown** are compared structurally, not semantically: renamed or moved functions show as removed plus added, and Markdown sections are matched by their heading path.
 - **PR metadata.** The title and branches come from `gh` when it is available; the PR description is not shown.
 - **Build time.** A clean release build takes a few minutes, mostly for rust-analyzer. `--no-default-features` builds without it.
+
+## Development
+
+CI runs `cargo fmt`, clippy (for the host and for wasm) and the tests, builds the demo page, and opens it in headless Chromium in the light and the dark theme (`ci/smoke.mjs`). The smoke test fails on any JavaScript error and on an empty view. The page and screenshots of every view are uploaded as the `demo-page` artifact of each run.
+
+To run the smoke test locally:
+
+```sh
+cargo run --release -- dirs fixtures/demo/base fixtures/demo/head -o demo.html
+npm install --no-save --no-package-lock playwright@1.63.0
+npx playwright install chromium
+node ci/smoke.mjs demo.html smoke
+```

@@ -132,8 +132,9 @@ impl Data {
         it.info.public || !it.changes.exports_removed.is_empty()
     }
 
-    /// The path the item is listed under in the public API: its shortest
-    /// public path (or, if it lost all, the shortest one it had).
+    /// The path the item is listed under in the public API: where rustdoc
+    /// documents it, the first public path (or, if it lost all, the first
+    /// one it had).
     pub fn public_path<'a>(&self, it: &'a Item) -> Option<&'a str> {
         it.info
             .public_paths
@@ -150,8 +151,11 @@ impl Data {
     }
 
     /// Whether the item's own definition path is not how the public API
-    /// names it (it is re-exported, perhaps renamed).
+    /// names it (it is re-exported, perhaps renamed, or another crate's).
     pub fn reexported(&self, it: &Item) -> bool {
+        if it.info.reexport_of.is_some() {
+            return true;
+        }
         let def = format!("{}::{}", it.info.module, it.info.name);
         it.info.parent.is_none()
             && it.info.kind != Kind::Mod
