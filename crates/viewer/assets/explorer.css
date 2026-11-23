@@ -216,6 +216,9 @@ details.src.src-chg > summary b { color: var(--changed); }
 .ref[data-kind="mod"] { color: var(--mod); }
 .ref[data-kind="macro"] { color: var(--macro); }
 a.ref:hover { text-decoration: underline; }
+/* In source views: names of items the PR adds. */
+.ref.new { font-weight: 700; text-decoration: underline 2px var(--added); text-underline-offset: 3px; }
+.ref.new::after { content: "new"; display: inline-block; font-family: var(--sans); font-size: 9px; font-weight: 700; line-height: 0; vertical-align: super; margin-left: 1px; color: var(--added); }
 .ref.ext { color: inherit; border-bottom: 1px dotted var(--border); cursor: help; }
 .ref.on-canvas { background: var(--highlight); box-shadow: 0 0 0 1px var(--highlight); }
 .title-name { font-family: var(--mono); font-weight: 600; }

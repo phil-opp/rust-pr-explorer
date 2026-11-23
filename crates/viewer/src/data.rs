@@ -805,12 +805,21 @@ impl Data {
             Status::Removed => (it.info.line, it.info.line),
             _ => (it.old_line.unwrap_or(it.info.line), it.info.line),
         };
+        // What names in the base version's lines refer to.
+        let old_refs = match it.status {
+            Status::Removed => &it.info.source_refs,
+            _ => &it.old_source_refs,
+        };
+        let old_links = |o: usize| Links::Source {
+            line: old_start + o,
+            refs: old_refs,
+        };
         // Changed lines with their changed words marked.
         let mut marked_old: HashMap<usize, String> = HashMap::new();
         let mut marked_new: HashMap<usize, String> = HashMap::new();
         if it.status == Status::Changed {
             for &(o, n) in &pairs {
-                let old_html = code_html(self, old[o], Links::None);
+                let old_html = code_html(self, old[o], old_links(o));
                 let new_html = code_html(
                     self,
                     new[n],
@@ -829,25 +838,20 @@ impl Data {
             if let Some(html) = marked_new.get(&n) {
                 return html.clone();
             }
-            if it.status == Status::Removed {
-                // Base code: what its names referred to is not known here.
-                code_html(self, new[n], Links::None)
-            } else {
-                code_html(
-                    self,
-                    new[n],
-                    Links::Source {
-                        line: new_start + n,
-                        refs: &it.info.source_refs,
-                    },
-                )
-            }
+            code_html(
+                self,
+                new[n],
+                Links::Source {
+                    line: new_start + n,
+                    refs: &it.info.source_refs,
+                },
+            )
         };
         let old_code = |o: usize| {
             marked_old
                 .get(&o)
                 .cloned()
-                .unwrap_or_else(|| code_html(self, old[o], Links::None))
+                .unwrap_or_else(|| code_html(self, old[o], old_links(o)))
         };
         let nonempty = |s: String| if s.is_empty() { " ".to_string() } else { s };
         let changed_row = |&(o, n): &(Option<usize>, Option<usize>)| match (o, n) {

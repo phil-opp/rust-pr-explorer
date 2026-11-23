@@ -2,7 +2,7 @@
 
 use super::esc;
 use crate::data::Data;
-use model::Ref;
+use model::{Ref, Status};
 use std::collections::BTreeMap;
 
 const KEYWORDS: &[&str] = &[
@@ -69,6 +69,15 @@ pub fn ref_html(d: &Data, text: &str, r: &Ref, extra: &str) -> String {
             esc(&r.path),
             esc(text)
         )
+    }
+}
+
+/// `new` for a reference to an item that the PR adds, so that source
+/// views can point out what is new.
+fn new_class(d: &Data, r: &Ref) -> &'static str {
+    match r.id.as_deref().and_then(|id| d.item(id)) {
+        Some(it) if it.status == Status::Added && d.external(&it.info.id).is_none() => "new",
+        _ => "",
     }
 }
 
@@ -180,7 +189,7 @@ pub fn code_html(d: &Data, text: &str, links: Links) -> String {
                 match links {
                     Links::Source { line, refs } => {
                         match refs.get(&format!("{line}:{}", start + 1)) {
-                            Some(r) => out.push_str(&ref_html(d, name, r, "")),
+                            Some(r) => out.push_str(&ref_html(d, name, r, new_class(d, r))),
                             None => out.push_str(&esc(name)),
                         }
                     }
@@ -194,7 +203,7 @@ pub fn code_html(d: &Data, text: &str, links: Links) -> String {
                         out.push_str(&path_html(d, &path, refs))
                     }
                     Links::Source { line, refs } => match refs.get(&format!("{line}:{start}")) {
-                        Some(r) => out.push_str(&ref_html(d, &path, r, "")),
+                        Some(r) => out.push_str(&ref_html(d, &path, r, new_class(d, r))),
                         None => out.push_str(&plain_path(&path)),
                     },
                     _ => out.push_str(&plain_path(&path)),
