@@ -3,6 +3,8 @@
 mod analyze;
 mod files;
 mod merge;
+#[cfg(feature = "semantic")]
+mod public_api;
 mod python;
 #[cfg(feature = "semantic")]
 mod semantic;

@@ -20,9 +20,13 @@ wasm-bindgen-cli-support = "=0.2.130"
 [workspace.lints.rust]
 unsafe_code = "forbid"
 
-[profile.release.package.viewer]
+# The viewer's wasm, built by the CLI's build script. A profile of its own,
+# so that link-time optimization doesn't slow down the CLI's release build.
+[profile.wasm-release]
+inherits = "release"
 opt-level = "s"
 codegen-units = 1
+lto = true
 
 # Used by the GitHub Action (`action.yml`), which builds the tool on every
 # run that can't reuse a cached binary. Dependencies (rust-analyzer, syn, …)

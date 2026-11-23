@@ -17,14 +17,25 @@ fn main() {
 
     let target_dir = out_dir.join("viewer-target");
     build_viewer(workspace, &target_dir);
-    let wasm = target_dir.join("wasm32-unknown-unknown/release/viewer.wasm");
+    let wasm = target_dir.join("wasm32-unknown-unknown/wasm-release/viewer.wasm");
     wasm_bindgen_cli_support::Bindgen::new()
         .input_path(&wasm)
         .web(true)
         .expect("wasm-bindgen: web target")
         .typescript(false)
+        // Function names are only needed for debugging and were more than a
+        // third of the module.
+        .remove_name_section(true)
+        .remove_producers_section(true)
         .generate(&out_dir)
         .expect("wasm-bindgen failed");
+    #[cfg(feature = "wasm-opt")]
+    {
+        let wasm = out_dir.join("viewer_bg.wasm");
+        wasm_opt::OptimizationOptions::new_optimize_for_size()
+            .run(&wasm, &wasm)
+            .expect("wasm-opt failed");
+    }
 }
 
 fn build_viewer(workspace: &Path, target_dir: &Path) {
@@ -35,7 +46,8 @@ fn build_viewer(workspace: &Path, target_dir: &Path) {
         "--package",
         "viewer",
         "--lib",
-        "--release",
+        "--profile",
+        "wasm-release",
         "--target",
         "wasm32-unknown-unknown",
         "--target-dir",
