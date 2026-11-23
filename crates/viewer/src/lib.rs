@@ -12,6 +12,7 @@ mod files;
 mod map;
 mod nav;
 mod pages;
+mod post;
 mod review;
 mod route;
 mod settings;
@@ -325,7 +326,8 @@ fn install_listeners() {
             }
         });
     });
-    dom::listen(&doc, "keydown", |ev| {
+    // Not passive: Ctrl+Enter in the comment editor prevents the newline.
+    dom::listen_with(&doc, "keydown", false, false, |ev| {
         // `n`: the next unreviewed item, in review mode, unless typing.
         if let Some(k) = ev.dyn_ref::<KeyboardEvent>()
             && k.key() == "n"
@@ -338,6 +340,18 @@ fn install_listeners() {
                 let from = app.s.rv_current.clone();
                 go_next(app, from);
             });
+            return;
+        }
+        // Ctrl+Enter in the comment editor saves with its verdict.
+        if let Some(k) = ev.dyn_ref::<KeyboardEvent>()
+            && k.key() == "Enter"
+            && (k.ctrl_key() || k.meta_key())
+            && let Some(v) = dom::query(".rv-editor")
+                .and_then(|e| dom::data(&e, "rv-verdict"))
+                .and_then(|v| review::Verdict::from_name(&v))
+        {
+            ev.prevent_default();
+            with_app(|app| save_from_editor(app, v));
             return;
         }
         if ev
@@ -471,15 +485,49 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
         let id = dom::data(&c, "rv").unwrap_or_default();
         if dom::closest(el, "[data-rv-since]").is_some() {
             show_since_review(app, &id);
-        } else if dom::closest(el, "[data-rv-done]").is_some() {
-            review::set_mark(&app.d, &id, true);
-            pages::render_sidebar(app);
-            go_next(app, Some(id));
+        } else if let Some(act) = dom::closest(el, "[data-rv-act]")
+            .and_then(|b| dom::data(&b, "rv-act"))
+            .and_then(|a| review::Verdict::from_name(&a))
+        {
+            if act == review::Verdict::Approve {
+                // Keeps a comment written earlier.
+                let text = review::note(&id).text;
+                save_verdict(app, &id, act, text);
+            } else {
+                open_editor(app, &id, act);
+            }
+        } else if dom::closest(el, "[data-rv-edit]").is_some() {
+            let v = review::note(&id).verdict;
+            open_editor(app, &id, v);
+        } else if dom::closest(el, "[data-rv-fold]").is_some() {
+            review::toggle_unfolded(&id);
         } else if dom::closest(el, "[data-rv-undo]").is_some() {
-            review::set_mark(&app.d, &id, false);
-            app.s.rv_current = Some(id);
-            pages::render_sidebar(app);
+            let text = review::note(&id).text;
+            let sure = text.trim().is_empty()
+                || dom::window()
+                    .confirm_with_message("Remove the mark and your comment?")
+                    .unwrap_or(false);
+            if sure {
+                review::set_mark(&app.d, &id, None);
+                app.s.rv_current = Some(id);
+                pages::render_sidebar(app);
+            }
         }
+        return true;
+    }
+    if let Some(b) = dom::closest(el, "[data-rv-save]") {
+        let verdict = dom::data(&b, "rv-save").and_then(|v| review::Verdict::from_name(&v));
+        if let Some(v) = verdict {
+            save_from_editor(app, v);
+        }
+        return true;
+    }
+    if let Some(b) = dom::closest(el, "[data-rv-out]") {
+        finish_output(app, &dom::data(&b, "rv-out").unwrap_or_default());
+        return true;
+    }
+    if dom::closest(el, "#rv-finish").is_some() {
+        open_modal("Finish your review", &post::finish_html(&app.d));
         return true;
     }
     if dom::closest(el, "#rv-mode").is_some() {
@@ -508,6 +556,141 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
         return true;
     }
     false
+}
+
+/// Gives a unit a verdict and moves on to the next unreviewed one.
+fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String) {
+    review::set_mark(&app.d, id, Some(review::Note { verdict, text }));
+    pages::render_sidebar(app);
+    go_next(app, Some(id.to_string()));
+}
+
+/// The dialog for writing a unit's comment.
+fn open_editor(app: &App, id: &str, verdict: review::Verdict) {
+    let title = match verdict {
+        review::Verdict::Changes => "Request changes on",
+        _ => "Comment on",
+    };
+    open_modal(
+        &format!("{title} <code>{}</code>", esc(&post::unit_name(&app.d, id))),
+        &post::editor_html(&app.d, id, verdict),
+    );
+    if let Some(t) = dom::by_id("rv-text").and_then(|t| t.dyn_into::<web_sys::HtmlElement>().ok()) {
+        let _ = t.focus();
+    }
+}
+
+fn textarea_value(id: &str) -> String {
+    dom::by_id(id)
+        .and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
+        .map(|t| t.value())
+        .unwrap_or_default()
+}
+
+/// Saves the comment in the open editor with a verdict.
+fn save_from_editor(app: &mut App, verdict: review::Verdict) {
+    let Some(id) = dom::query(".rv-editor").and_then(|e| dom::data(&e, "rv-for")) else {
+        return;
+    };
+    let text = textarea_value("rv-text");
+    if verdict != review::Verdict::Approve && text.trim().is_empty() {
+        toast("Write a comment first.");
+        return;
+    }
+    close_modal();
+    save_verdict(app, &id, verdict, text.trim().to_string());
+}
+
+/// The buttons of the "Finish review" dialog: download, or copy, the
+/// review in one form.
+fn finish_output(app: &App, what: &str) {
+    let event = dom::query(r#"input[name="rv-event"]:checked"#)
+        .and_then(|i| i.dyn_into::<web_sys::HtmlInputElement>().ok())
+        .and_then(|i| review::Verdict::from_name(&i.value()))
+        .unwrap_or(review::Verdict::Comment);
+    let own = textarea_value("rv-body");
+    let comments = post::summary(&app.d).comments;
+    let commit = app
+        .d
+        .out
+        .meta
+        .pr
+        .as_ref()
+        .map_or("", |p| p.head_commit.as_str());
+    let (text, label) = match what {
+        "md" => (
+            post::review_markdown(&comments, &own, event),
+            "The review as Markdown",
+        ),
+        "cmd" => (post::command(&app.d).unwrap_or_default(), "The command"),
+        _ => (
+            post::review_json(&comments, &own, event, commit),
+            "The review's JSON",
+        ),
+    };
+    // Also shown, selected, in case the browser doesn't allow the
+    // download or the clipboard.
+    if let Some(out) =
+        dom::by_id("rv-out").and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
+    {
+        out.set_value(&text);
+        dom::toggle_class(&out, "hidden", false);
+        out.select();
+    }
+    if what == "download" {
+        if download(&post::file_name(&app.d), &text) {
+            toast("Downloaded. Run the command to post it.");
+        } else {
+            toast("The browser didn't allow the download: save the text below as the file.");
+        }
+        return;
+    }
+    copy(&text, label);
+}
+
+/// Offers a text as a file to save.
+fn download(name: &str, text: &str) -> bool {
+    let parts = js_sys::Array::of1(&wasm_bindgen::JsValue::from_str(text));
+    let opts = web_sys::BlobPropertyBag::new();
+    opts.set_type("application/json");
+    let Ok(blob) = web_sys::Blob::new_with_str_sequence_and_options(&parts, &opts) else {
+        return false;
+    };
+    let Ok(url) = web_sys::Url::create_object_url_with_blob(&blob) else {
+        return false;
+    };
+    let Some(a) = dom::document()
+        .create_element("a")
+        .ok()
+        .and_then(|a| a.dyn_into::<web_sys::HtmlAnchorElement>().ok())
+    else {
+        return false;
+    };
+    a.set_href(&url);
+    a.set_download(name);
+    a.click();
+    dom::timeout(1000, move || {
+        let _ = web_sys::Url::revoke_object_url(&url);
+    });
+    true
+}
+
+/// Copies a text to the clipboard and says whether that worked.
+fn copy(text: &str, label: &str) {
+    use wasm_bindgen::{JsValue, closure::Closure};
+    let done = format!("{label} is copied.");
+    let ok = Closure::<dyn FnMut(JsValue)>::new(move |_| toast(&done));
+    let failed = Closure::<dyn FnMut(JsValue)>::new(|_| {
+        toast("The browser didn't allow copying: the text below is selected, press Ctrl+C.")
+    });
+    let _ = dom::window()
+        .navigator()
+        .clipboard()
+        .write_text(text)
+        .then2(&ok, &failed);
+    // One of them runs once, later; a copy is rare enough to keep both.
+    ok.forget();
+    failed.forget();
 }
 
 /// The dialog with what changed since a stale mark was made.

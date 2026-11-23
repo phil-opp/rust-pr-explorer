@@ -12,7 +12,7 @@ pub use docs_diff::{
 };
 pub use highlight::{Links, code_html};
 pub use markdown::{docs_html, first_paragraph, markdown_file_html};
-pub use sig_diff::{sig_diff_html, structured_diff_html};
+pub use sig_diff::{note_html, sig_diff_html, structured_diff_html};
 
 /// Whether a URL may be used as a link: only `http(s)`.
 pub fn web_url(url: &str) -> bool {

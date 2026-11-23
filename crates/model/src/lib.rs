@@ -320,6 +320,48 @@ pub struct Item {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub old_file: Option<String>,
     pub source: Vec<SourceLine>,
+    /// How the item's public API changed, if it is public on either side
+    /// and its API changed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub api: Option<ApiChange>,
+}
+
+/// Whether a public API change is breaking, by Cargo's SemVer rules.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct ApiChange {
+    pub level: ApiLevel,
+    /// Why, one entry per change, e.g. "variant `B` added: exhaustive
+    /// `match`es outside the crate break". Code in backticks.
+    pub reasons: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ApiLevel {
+    /// Needs a major version bump.
+    Breaking,
+    /// What the definitions show isn't enough to tell.
+    Unknown,
+    /// Needs at most a minor version bump.
+    Compatible,
+}
+
+impl ApiLevel {
+    pub fn label(self) -> &'static str {
+        match self {
+            ApiLevel::Breaking => "breaking",
+            ApiLevel::Unknown => "check by hand",
+            ApiLevel::Compatible => "non-breaking",
+        }
+    }
+
+    pub fn css(self) -> &'static str {
+        match self {
+            ApiLevel::Breaking => "breaking",
+            ApiLevel::Unknown => "unknown",
+            ApiLevel::Compatible => "compatible",
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
@@ -379,6 +421,14 @@ pub struct PrMeta {
     pub head_owner: Option<String>,
     /// The compared head commit (abbreviated).
     pub head_rev: String,
+    /// The compared head commit in full, for a review posted to GitHub.
+    /// Empty for pages from before it was recorded.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub head_commit: String,
+    /// The base was given with `--base` instead of being the merge base,
+    /// so the page's diff may not be the one GitHub shows.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub custom_base: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
