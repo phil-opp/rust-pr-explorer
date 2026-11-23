@@ -59,6 +59,16 @@ fn numbered(hunks: &[SourceLine]) -> Vec<(char, usize, usize)> {
     out
 }
 
+/// The lines of a file that GitHub's diff shows, as `numbered` gives
+/// them. For an analyzed file, whose hunks only hold the changes outside
+/// items, also its other changed lines (without their context).
+fn diff_lines(f: &ChangedFile) -> Vec<(char, usize, usize)> {
+    let mut out = numbered(&f.hunks);
+    out.extend(f.added_lines.iter().map(|&n| ('+', 0, n as usize)));
+    out.extend(f.removed_lines.iter().map(|&o| ('-', o as usize, 0)));
+    out
+}
+
 /// The line a comment on a file outside the Rust analysis goes on: its
 /// first changed line.
 pub fn file_loc(f: &ChangedFile) -> Option<Loc> {
@@ -80,7 +90,7 @@ pub fn item_loc(files: &[ChangedFile], it: &Item) -> Option<Loc> {
         files
             .iter()
             .find(|f| f.path == path)
-            .map(|f| numbered(&f.hunks))
+            .map(diff_lines)
             .unwrap_or_default()
     };
     // The PR's version: the item's lines in its file.
@@ -584,6 +594,26 @@ mod tests {
                 side: "LEFT"
             })
         );
+    }
+
+    #[test]
+    fn analyzed_files_list_their_changed_lines() {
+        // The hunks only hold a change outside items; the item's change is
+        // in the line lists.
+        let mut f = file("src/lib.rs", vec![sl('@', "40 40"), sl('+', "mod x;")]);
+        f.added_lines = vec![9, 40];
+        f.removed_lines = vec![9];
+        let mut it = item(Status::Changed, 8, vec![sl(' ', "fn f() {")]);
+        it.source
+            .extend([sl('-', "    a();"), sl('+', "    b();"), sl(' ', "}")]);
+        assert_eq!(
+            item_loc(std::slice::from_ref(&f), &it).map(|l| (l.line, l.side)),
+            Some((9, "RIGHT"))
+        );
+        // Without the lists, it fits on no line.
+        f.added_lines.clear();
+        f.removed_lines.clear();
+        assert_eq!(item_loc(&[f], &it), None);
     }
 
     #[test]
