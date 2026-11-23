@@ -384,6 +384,7 @@ pub fn render_overview(app: &App) {
         <div class="sub">{}</div>
         {}
         {}
+        {}
         {}"#,
         esc(meta
             .pr
@@ -391,11 +392,100 @@ pub fn render_overview(app: &App) {
             .and_then(|p| p.title.as_deref())
             .unwrap_or(&meta.title)),
         d.compared_html(),
+        description_html(d),
         crate::files::manifests_html(d),
         rust_html,
         crate::files::other_files_html(d),
     );
     dom::set_html("view-overview", &html);
+}
+
+/// Descriptions up to this many lines are shown open.
+const SHORT_DESCRIPTION: usize = 20;
+
+/// The PR's description, rendered as Markdown like a doc comment: raw HTML
+/// is shown as text, except HTML comments, which GitHub doesn't show
+/// either (PR templates use them for instructions). Images are left out,
+/// so the page never loads anything from elsewhere.
+fn description_html(d: &Data) -> String {
+    let Some(body) = d.out.meta.pr.as_ref().and_then(|p| p.body.as_deref()) else {
+        return String::new();
+    };
+    let text = strip_html_comments(&body.replace("\r\n", "\n"));
+    let text = text.trim();
+    if text.is_empty() {
+        return String::new();
+    }
+    let lines = text.lines().count();
+    format!(
+        r#"<details class="pr-desc"{}><summary>Description <span class="dim">{lines} line{}</span></summary><div class="docs">{}</div></details>"#,
+        if lines <= SHORT_DESCRIPTION {
+            " open"
+        } else {
+            ""
+        },
+        if lines == 1 { "" } else { "s" },
+        crate::code::markdown_file_html(d, text)
+    )
+}
+
+/// Removes `<!-- … -->` comments outside fenced code blocks; an unclosed
+/// one runs to the end, as in HTML. Lines that held only a comment are
+/// dropped.
+fn strip_html_comments(s: &str) -> String {
+    let mut out = String::new();
+    let mut fence: Option<&str> = None;
+    let mut in_comment = false;
+    for line in s.lines() {
+        let t = line.trim_start();
+        if !in_comment {
+            if let Some(f) = fence {
+                if t.starts_with(f) {
+                    fence = None;
+                }
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+            if let Some(f) = ["```", "~~~"].into_iter().find(|f| t.starts_with(f)) {
+                fence = Some(f);
+                out.push_str(line);
+                out.push('\n');
+                continue;
+            }
+        }
+        let mut kept = String::new();
+        let mut rest = line;
+        loop {
+            if in_comment {
+                match rest.find("-->") {
+                    Some(j) => {
+                        rest = &rest[j + 3..];
+                        in_comment = false;
+                    }
+                    None => break,
+                }
+            } else {
+                match rest.find("<!--") {
+                    Some(i) => {
+                        kept.push_str(&rest[..i]);
+                        rest = &rest[i + 4..];
+                        in_comment = true;
+                    }
+                    None => {
+                        kept.push_str(rest);
+                        break;
+                    }
+                }
+            }
+        }
+        if kept.trim().is_empty() && kept.len() != line.len() {
+            continue;
+        }
+        out.push_str(&kept);
+        out.push('\n');
+    }
+    out
 }
 
 /// Module page: a module as a privacy boundary.
@@ -567,4 +657,20 @@ pub fn render_module_page(app: &App) {
         },
     );
     dom::set_html("view-module", &html);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::strip_html_comments;
+
+    #[test]
+    fn html_comments_are_removed_outside_code() {
+        let md = "<!-- Describe the change -->\n## What\nFix <!-- inline --> it.\n<!--\nmulti\nline -->\n```html\n<!-- kept -->\n```\nend";
+        assert_eq!(
+            strip_html_comments(md),
+            "## What\nFix  it.\n```html\n<!-- kept -->\n```\nend\n"
+        );
+        // Unclosed: runs to the end.
+        assert_eq!(strip_html_comments("a\n<!-- b\nc"), "a\n");
+    }
 }

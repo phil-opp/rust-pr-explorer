@@ -179,5 +179,4 @@ The tool calls the `git` binary to clone, fetch pull request refs, compute merge
 
 - Opt-in rustdoc JSON in trusted mode, for an exact public API.
 - Public-API computation via rust-analyzer's `hir` (exact re-exports, `doc(hidden)`).
-- Show the PR description (`gh pr view --json body`).
 - Smaller wasm, for example by replacing `serde_json` with a more compact format, or by running `wasm-opt`.
