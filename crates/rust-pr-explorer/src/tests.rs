@@ -202,6 +202,28 @@ fn shadowing_and_name_spaces() {
 }
 
 #[test]
+fn a_local_does_not_hide_a_module_path() {
+    let dir = write_crate(&[(
+        "src/lib.rs",
+        "pub mod files { pub fn lines() {} }\n\
+         pub fn f() { let files = 1; let _ = files; files::lines(); }\n",
+    )]);
+    let out = analyze_dirs(dir.path(), dir.path());
+    let f = &out.items["t::f"].info;
+    assert!(
+        f.calls.iter().any(|c| c.to == "t::files::lines"),
+        "{:?}",
+        f.calls
+    );
+    // The call site links to the function.
+    assert!(
+        f.source_refs
+            .values()
+            .any(|r| r.id.as_deref() == Some("t::files::lines"))
+    );
+}
+
+#[test]
 fn unknown_globs_hide_the_prelude() {
     let dir = write_crate(&[(
         "src/lib.rs",

@@ -291,6 +291,10 @@ a.ref:hover { text-decoration: underline; }
 .frame rect.frame-bg { fill: var(--bg); fill-opacity: .55; stroke: none; }
 .frame rect.priv { stroke: var(--private); stroke-dasharray: 6 4; stroke-width: 1; }
 .frame text { font: 600 13px var(--mono); fill: var(--mod); }
+/* Module frames are moved by their border or their name. */
+.frame rect.frame-grip { stroke: transparent; stroke-width: 14; pointer-events: stroke; cursor: grab; }
+.frame text[data-frame] { pointer-events: auto; cursor: grab; user-select: none; }
+.card-h, .card-tabs, .card-loc { cursor: grab; }
 .frame text.priv { fill: var(--private); font-size: 11px; font-weight: 400; }
 .edge { fill: none; stroke-width: 1.6; }
 .edge.call { stroke: var(--fn); }

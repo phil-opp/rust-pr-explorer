@@ -765,7 +765,7 @@ fn go_next(app: &mut App, from: Option<String>) {
         return;
     }
     if app.s.view == View::Canvas {
-        canvas::open(app, &next, None, true);
+        canvas::open_for_review(app, &next, from.as_deref());
         return;
     }
     let Some(module) = app.d.item(&next).map(|it| app.d.mod_of(it).to_string()) else {
