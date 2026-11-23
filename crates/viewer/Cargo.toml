@@ -16,6 +16,9 @@ js-sys = "0.3"
 pulldown-cmark = { version = "0.13", default-features = false, features = ["html"] }
 web-sys = { version = "0.3", features = [
   "AddEventListenerOptions",
+  "Blob",
+  "BlobPropertyBag",
+  "Clipboard",
   "CssStyleDeclaration",
   "Document",
   "DomRect",
@@ -24,11 +27,14 @@ web-sys = { version = "0.3", features = [
   "Event",
   "EventTarget",
   "HtmlDetailsElement",
+  "HtmlAnchorElement",
   "HtmlElement",
   "HtmlInputElement",
   "HtmlSelectElement",
+  "HtmlTextAreaElement",
   "KeyboardEvent",
   "MouseEvent",
+  "Navigator",
   "Node",
   "NodeList",
   "Performance",
@@ -37,6 +43,7 @@ web-sys = { version = "0.3", features = [
   "ScrollIntoViewOptions",
   "ScrollLogicalPosition",
   "Storage",
+  "Url",
   "WheelEvent",
   "Window",
 ] }

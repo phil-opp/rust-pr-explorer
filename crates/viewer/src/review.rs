@@ -1,5 +1,8 @@
-//! Review marks: the reviewer marks items and files as reviewed, one by
-//! one, and moves on to the next unreviewed one.
+//! Review marks: the reviewer goes through the items and files one by
+//! one and gives each a verdict, as on GitHub: approve, request changes or
+//! comment, the last two with a comment. Then it moves on to the next
+//! unreviewed one. The collected review can be posted to the PR (see
+//! `post`).
 //!
 //! A mark remembers what the item looked like when it was marked (a hash
 //! of its diff). When the page is generated again for a newer revision of
@@ -18,6 +21,7 @@ use crate::dom;
 use crate::since::Snapshot;
 use model::stable_hash as hash;
 use model::{ChangedFile, Item, Kind};
+use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -30,6 +34,42 @@ pub enum Mark {
     Done,
     /// Reviewed, but its diff is different now.
     Stale,
+}
+
+/// The reviewer's verdict on a unit, like the three choices of a GitHub
+/// review.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Verdict {
+    #[default]
+    Approve,
+    Changes,
+    Comment,
+}
+
+impl Verdict {
+    pub fn name(self) -> &'static str {
+        match self {
+            Verdict::Approve => "approve",
+            Verdict::Changes => "changes",
+            Verdict::Comment => "comment",
+        }
+    }
+
+    pub fn from_name(s: &str) -> Option<Verdict> {
+        [Verdict::Approve, Verdict::Changes, Verdict::Comment]
+            .into_iter()
+            .find(|v| v.name() == s)
+    }
+}
+
+/// What the reviewer said about a marked unit.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Note {
+    #[serde(default)]
+    pub verdict: Verdict,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub text: String,
 }
 
 #[derive(Default)]
@@ -48,6 +88,11 @@ struct Review {
     /// The version each marked unit had when it was marked. Missing for
     /// marks made by pages from before versions were saved.
     versions: BTreeMap<String, Snapshot>,
+    /// Verdicts and comments of marked units. A mark without one is a
+    /// plain approval (also every mark made before verdicts existed).
+    notes: BTreeMap<String, Note>,
+    /// Reviewed units the reviewer unfolded again, for this page only.
+    unfolded: HashSet<String>,
 }
 
 thread_local! {
@@ -57,6 +102,7 @@ thread_local! {
 const MODE_KEY: &str = "rust-pr-explorer.review-mode";
 const MARKS_KEY: &str = "rust-pr-explorer.reviewed";
 const VERSIONS_KEY: &str = "rust-pr-explorer.reviewed-versions";
+const NOTES_KEY: &str = "rust-pr-explorer.review-notes";
 
 /// The unit id of a changed file.
 pub fn file_unit(path: &str) -> String {
@@ -212,6 +258,10 @@ pub fn load(d: &Data) {
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
     versions.retain(|id, _| marks.contains_key(id));
+    let mut notes: BTreeMap<String, Note> = get(NOTES_KEY)
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_default();
+    notes.retain(|id, _| marks.contains_key(id));
     let on = store
         .and_then(|s| s.get_item(MODE_KEY).ok().flatten())
         .is_some_and(|v| v == "on");
@@ -223,20 +273,27 @@ pub fn load(d: &Data) {
             units: units.into_iter().map(|(id, _)| id).collect(),
             marks,
             versions,
+            notes,
+            unfolded: HashSet::new(),
         }
     });
     apply_mode();
 }
 
 fn save() {
-    let (key, marks, versions) = REVIEW.with(|r| {
+    let (key, marks, versions, notes) = REVIEW.with(|r| {
         let r = r.borrow();
         let versions = if r.versions.is_empty() {
             String::new()
         } else {
             serde_json::to_string(&r.versions).unwrap_or_default()
         };
-        (r.key.clone(), encode(&r.marks), versions)
+        let notes = if r.notes.is_empty() {
+            String::new()
+        } else {
+            serde_json::to_string(&r.notes).unwrap_or_default()
+        };
+        (r.key.clone(), encode(&r.marks), versions, notes)
     });
     let put = |s: &web_sys::Storage, prefix: &str, text: &str| {
         let k = format!("{prefix}:{key}");
@@ -252,6 +309,11 @@ fn save() {
         );
         return;
     };
+    if !put(&store, NOTES_KEY, &notes) {
+        crate::toast(
+            "The browser's storage is full: your verdicts and comments are lost when the page is closed.",
+        );
+    }
     if !put(&store, VERSIONS_KEY, &versions) {
         crate::toast(
             "The browser's storage is full: the marks are saved, but not the reviewed versions, so a later page can't show what changed since.",
@@ -296,8 +358,31 @@ pub fn mark(id: &str) -> Option<Mark> {
     })
 }
 
-/// Marks a unit as reviewed in its current state, or removes the mark.
-pub fn set_mark(d: &Data, id: &str, done: bool) {
+/// The verdict and comment of a marked unit (a plain approval if it has
+/// none), also of a stale mark.
+pub fn note(id: &str) -> Note {
+    REVIEW.with(|r| r.borrow().notes.get(id).cloned().unwrap_or_default())
+}
+
+/// Every marked unit's mark and note, in reading order.
+pub fn notes() -> Vec<(String, Mark, Note)> {
+    let units = REVIEW.with(|r| r.borrow().units.clone());
+    units
+        .into_iter()
+        .filter_map(|u| {
+            let m = mark(&u)?;
+            (m != Mark::Open).then(|| {
+                let n = note(&u);
+                (u, m, n)
+            })
+        })
+        .collect()
+}
+
+/// Marks a unit as reviewed in its current state with a verdict, or
+/// removes the mark (`None`).
+pub fn set_mark(d: &Data, id: &str, note: Option<Note>) {
+    let done = note.is_some();
     let version = done
         .then(|| crate::since::snapshot(d, id))
         .flatten()
@@ -314,7 +399,12 @@ pub fn set_mark(d: &Data, id: &str, done: bool) {
             r.marks.insert(id.to_string(), now);
         } else {
             r.marks.remove(id);
+            r.unfolded.remove(id);
         }
+        match note.filter(|n| *n != Note::default()) {
+            Some(n) => r.notes.insert(id.to_string(), n),
+            None => r.notes.remove(id),
+        };
         match version {
             Some(v) => r.versions.insert(id.to_string(), v),
             None => r.versions.remove(id),
@@ -333,6 +423,8 @@ pub fn clear() {
         let mut r = r.borrow_mut();
         r.marks.clear();
         r.versions.clear();
+        r.notes.clear();
+        r.unfolded.clear();
     });
     save();
 }
@@ -370,6 +462,17 @@ pub fn next_open(after: Option<&str>) -> Option<String> {
         .cloned()
 }
 
+/// Shows a reviewed unit whole again, or folds it back to one line.
+pub fn toggle_unfolded(id: &str) {
+    REVIEW.with(|r| {
+        let mut r = r.borrow_mut();
+        if !r.unfolded.remove(id) {
+            r.unfolded.insert(id.to_string());
+        }
+    });
+    refresh(id);
+}
+
 /// The mark and its buttons for a unit, or nothing for things that can't
 /// be marked. Outside review mode, only an existing mark is shown.
 pub fn control_html(id: &str) -> String {
@@ -377,28 +480,74 @@ pub fn control_html(id: &str) -> String {
         return String::new();
     };
     format!(
-        r#"<span class="rvc {}" data-rv="{}">{}</span>"#,
+        r#"<span class="{}" data-rv="{}">{}</span>"#,
+        control_class(id, m),
+        esc(id),
+        control_inner(id, m)
+    )
+}
+
+fn control_class(id: &str, m: Mark) -> String {
+    let unfolded = REVIEW.with(|r| r.borrow().unfolded.contains(id));
+    format!(
+        "rvc {}{}",
         match m {
             Mark::Open => "open",
             Mark::Done => "done",
             Mark::Stale => "stale",
         },
-        esc(id),
-        control_inner(m)
+        if unfolded { " unfold" } else { "" }
     )
 }
 
-fn control_inner(m: Mark) -> &'static str {
+/// The verdict buttons, as on GitHub. Approving moves on right away; the
+/// other two ask for a comment first.
+const ACTIONS: &str = r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve this item and go to the next unreviewed one (n: next without a verdict)">✓ Approve</button><button class="rv-btn changes" data-rv-act="changes" title="Write what needs to change, then go to the next unreviewed item">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Write a comment, then go to the next unreviewed item">✎ Comment</button>"#;
+
+/// One line of a comment, shortened, for the button that edits it.
+fn snippet(text: &str) -> String {
+    let line = text.lines().find(|l| !l.trim().is_empty()).unwrap_or("");
+    let short: String = line.trim().chars().take(36).collect();
+    if short.len() < line.trim().len() || text.trim().lines().count() > 1 {
+        format!("{short}…")
+    } else {
+        short
+    }
+}
+
+fn control_inner(id: &str, m: Mark) -> String {
+    let n = note(id);
+    let text = if n.text.trim().is_empty() {
+        String::new()
+    } else {
+        format!(
+            r#"<button class="rv-note" data-rv-edit title="{}">“{}”</button>"#,
+            esc(&n.text),
+            esc(&snippet(&n.text))
+        )
+    };
     match m {
-        Mark::Open => {
-            r#"<button class="rv-btn" data-rv-done title="Mark as reviewed and go to the next unreviewed item (n: next without marking)">✓ Reviewed, next ▸</button>"#
-        }
+        Mark::Open => ACTIONS.to_string(),
         Mark::Done => {
-            r#"<button class="rv-chip" data-rv-undo title="Reviewed. Click to remove the mark">✓ Reviewed</button>"#
+            let (class, label, what) = match n.verdict {
+                Verdict::Approve => ("approved", "✓ Approved", "Approved"),
+                Verdict::Changes => ("changes", "✗ Changes requested", "You requested changes"),
+                Verdict::Comment => ("commented", "✎ Commented", "You commented"),
+            };
+            let unfolded = REVIEW.with(|r| r.borrow().unfolded.contains(id));
+            format!(
+                r#"<button class="rv-chip {class}" data-rv-undo title="{what}. Click to remove the mark">{label}</button>{text}<button class="rv-edit" data-rv-edit title="Change the verdict or the comment">Edit</button><button class="rv-fold" data-rv-fold title="{}">{}</button>"#,
+                if unfolded {
+                    "Fold the item back to one line"
+                } else {
+                    "Show the whole item again"
+                },
+                if unfolded { "▴ Fold" } else { "▾ Expand" }
+            )
         }
-        Mark::Stale => {
-            r#"<button class="rv-chip stale" data-rv-undo title="You reviewed an earlier version; the diff is different now. Click to remove the mark">⚠ Changed since review</button><button class="rv-since" data-rv-since title="Show what is different from the version you reviewed">Show changes</button><button class="rv-btn" data-rv-done title="Mark as reviewed and go to the next unreviewed item">✓ Reviewed, next ▸</button>"#
-        }
+        Mark::Stale => format!(
+            r#"<button class="rv-chip stale" data-rv-undo title="You reviewed an earlier version; the diff is different now. Click to remove the mark">⚠ Changed since review</button><button class="rv-since" data-rv-since title="Show what is different from the version you reviewed">Show changes</button>{text}{ACTIONS}"#
+        ),
     }
 }
 
@@ -408,14 +557,11 @@ fn refresh(id: &str) {
     let Some(m) = mark(id) else {
         return;
     };
+    let (class, inner) = (control_class(id, m), control_inner(id, m));
     for el in dom::query_all(".rvc") {
         if dom::data(&el, "rv").as_deref() == Some(id) {
-            el.set_class_name(match m {
-                Mark::Open => "rvc open",
-                Mark::Done => "rvc done",
-                Mark::Stale => "rvc stale",
-            });
-            el.set_inner_html(control_inner(m));
+            el.set_class_name(&class);
+            el.set_inner_html(&inner);
         }
     }
     update_progress();
@@ -427,7 +573,7 @@ pub fn update_progress() {
     let html = match (done * 100).checked_div(total) {
         None => r#"<span class="dim">Nothing to review</span>"#.to_string(),
         Some(percent) => format!(
-            r#"<span class="rv-count" title="Reviewed items and files">{done} / {total} reviewed</span><span class="rv-meter"><span style="width:{}%"></span></span><button id="rv-next" title="Go to the next unreviewed item (n)">Next ▸</button><button id="rv-clear" title="Remove every review mark of this pull request">Clear</button>"#,
+            r#"<span class="rv-count" title="Reviewed items and files">{done} / {total} reviewed</span><span class="rv-meter"><span style="width:{}%"></span></span><button id="rv-next" title="Go to the next unreviewed item (n)">Next ▸</button><button id="rv-finish" title="Sum up your verdicts and comments, to post them as a review on GitHub">Finish review…</button><button id="rv-clear" title="Remove every review mark of this pull request">Clear</button>"#,
             percent
         ),
     };
@@ -548,6 +694,8 @@ mod tests {
                 units: units.into_iter().map(|(id, _)| id).collect(),
                 marks: marks.iter().map(|(id, h)| (id.to_string(), *h)).collect(),
                 versions: BTreeMap::new(),
+                notes: BTreeMap::new(),
+                unfolded: HashSet::new(),
             }
         });
     }

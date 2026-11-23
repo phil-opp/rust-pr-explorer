@@ -393,9 +393,12 @@ pub fn manifests_html(d: &Data) -> String {
     let cards: String = list
         .iter()
         .map(|f| {
+            // The same review mark as the file's entry under "Other
+            // changed files".
             format!(
-                r#"<div class="ientry"><div class="ihead"><span class="kind">manifest</span><span class="title-name">{}</span></div>{}</div>"#,
+                r#"<div class="ientry file"><div class="irow"><div class="ihead"><span class="kind">manifest</span><span class="title-name">{}</span></div><div class="iacts">{}</div></div>{}</div>"#,
                 esc(&f.path),
+                crate::review::control_html(&crate::review::file_unit(&f.path)),
                 manifest_html(&f.manifest)
             )
         })

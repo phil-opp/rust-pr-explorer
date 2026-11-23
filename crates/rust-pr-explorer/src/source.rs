@@ -290,6 +290,8 @@ impl Checkout {
                     .and_then(|i| i.head_repository_owner["login"].as_str())
                     .map(str::to_string),
                 head_rev: short(&head_rev).to_string(),
+                head_commit: head_rev.clone(),
+                custom_base: base.is_some(),
             }),
             // The PR identifies the project.
             project: None,

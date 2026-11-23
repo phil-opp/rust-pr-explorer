@@ -370,6 +370,14 @@ pub struct PrMeta {
     pub head_owner: Option<String>,
     /// The compared head commit (abbreviated).
     pub head_rev: String,
+    /// The compared head commit in full, for a review posted to GitHub.
+    /// Empty for pages from before it was recorded.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub head_commit: String,
+    /// The base was given with `--base` instead of being the merge base,
+    /// so the page's diff may not be the one GitHub shows.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub custom_base: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
