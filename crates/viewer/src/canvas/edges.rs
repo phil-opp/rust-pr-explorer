@@ -2,8 +2,8 @@
 
 use super::{Group, card_el, visible};
 use crate::code::esc;
-use crate::{App, dom};
-use std::collections::{BTreeSet, HashMap};
+use crate::{App, dom, route};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 #[derive(Clone, Copy)]
 pub(super) struct Rect {
@@ -122,6 +122,200 @@ fn call_site_y(g: &Group, to: &str, k: f64) -> Option<f64> {
         .map(|r| g.y + (r.top() + r.height() / 2.0 - top) / k)
 }
 
+/// Cards closer than this, side by side, are connected through their tops
+/// and bottoms instead.
+const MIN_GAP: f64 = 16.0;
+/// Distance between connectors that end on one side of a card.
+const PORT_GAP: f64 = 14.0;
+/// Distance between connectors that run through one gap between cards.
+const LANE_GAP: f64 = 12.0;
+
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Side {
+    Left,
+    Right,
+    Top,
+    Bottom,
+}
+
+/// Start and end point of a connector.
+type Ends = ((f64, f64), (f64, f64));
+
+#[derive(Clone, Copy)]
+enum Route {
+    /// Leaves `a` and enters `b` at right angles, through a lane in the
+    /// gap between them: horizontal for left and right sides.
+    Ortho(Side, Side),
+    /// From a call site to the top of a card that is not beside the caller.
+    Site(f64),
+    /// The cards overlap: a plain curve between them.
+    Curve,
+}
+
+struct Conn {
+    a: (u32, Rect),
+    b: (u32, Rect),
+    class: String,
+    title: String,
+    /// Height of the call site in `a`, which the connector starts at.
+    site_y: Option<f64>,
+    route: Route,
+}
+
+fn choose_route(a: Rect, b: Rect, site_y: Option<f64>) -> Route {
+    if b.x >= a.x + a.w + MIN_GAP {
+        Route::Ortho(Side::Right, Side::Left)
+    } else if b.x + b.w <= a.x - MIN_GAP {
+        Route::Ortho(Side::Left, Side::Right)
+    } else if let Some(y) = site_y {
+        Route::Site(y)
+    } else if b.y >= a.y + a.h + MIN_GAP {
+        Route::Ortho(Side::Bottom, Side::Top)
+    } else if b.y + b.h <= a.y - MIN_GAP {
+        Route::Ortho(Side::Top, Side::Bottom)
+    } else {
+        Route::Curve
+    }
+}
+
+/// Where connectors end on the sides of the cards: spread along each side,
+/// ordered by where their other end is, so that they neither share an
+/// arrowhead nor cross next to the card. A connector that starts at a call
+/// site keeps that height. Returns the start and end point of each
+/// orthogonal connector.
+fn ports(conns: &[Conn]) -> Vec<Ends> {
+    // Per card side: (where the other end is, connector, whether it starts here).
+    type Slots = BTreeMap<(u32, Side), Vec<(f64, usize, bool)>>;
+    let mut slots: Slots = BTreeMap::new();
+    let along = |r: Rect, side: Side, fixed: Option<f64>| match side {
+        Side::Left | Side::Right => fixed.unwrap_or(r.y + r.h / 2.0),
+        Side::Top | Side::Bottom => r.x + r.w / 2.0,
+    };
+    for (i, c) in conns.iter().enumerate() {
+        let Route::Ortho(sa, sb) = c.route else {
+            continue;
+        };
+        if c.site_y.is_none() {
+            slots
+                .entry((c.a.0, sa))
+                .or_default()
+                .push((along(c.b.1, sa, None), i, true));
+        }
+        slots
+            .entry((c.b.0, sb))
+            .or_default()
+            .push((along(c.a.1, sb, c.site_y), i, false));
+    }
+    let mut out: Vec<Ends> = conns
+        .iter()
+        .map(|c| {
+            let y = c.site_y.unwrap_or(0.0);
+            let x = match c.route {
+                Route::Ortho(Side::Left, _) => c.a.1.x,
+                _ => c.a.1.x + c.a.1.w,
+            };
+            ((x, y), (0.0, 0.0))
+        })
+        .collect();
+    for ((_, side), list) in &mut slots {
+        list.sort_by(|x, y| x.0.total_cmp(&y.0));
+        let n = list.len() as f64;
+        for (k, &(_, i, from)) in list.iter().enumerate() {
+            let r = if from { conns[i].a.1 } else { conns[i].b.1 };
+            let k = k as f64;
+            let p = match side {
+                Side::Left | Side::Right => {
+                    // From the title row down, closer together on short cards.
+                    let first = 40.0_f64.min(r.h / 2.0);
+                    let gap = PORT_GAP.min((r.h - first - 12.0) / n).max(2.0);
+                    let y = r.y + first + k * gap;
+                    let x = if *side == Side::Left { r.x } else { r.x + r.w };
+                    (x, y)
+                }
+                Side::Top | Side::Bottom => {
+                    let x = (r.x + r.w / 2.0 + (k - (n - 1.0) / 2.0) * 2.0 * PORT_GAP)
+                        .clamp(r.x + 12.0, r.x + r.w - 12.0);
+                    let y = if *side == Side::Top { r.y } else { r.y + r.h };
+                    (x, y)
+                }
+            };
+            if from {
+                out[i].0 = p;
+            } else {
+                out[i].1 = p;
+            }
+        }
+    }
+    out
+}
+
+/// The lane of each orthogonal connector: the x of its vertical run, or the
+/// y of its horizontal run between a bottom and a top. Connectors through
+/// one gap get lanes of their own, ordered so that they cross as little as
+/// they can.
+fn lanes(conns: &[Conn], ends: &[Ends]) -> Vec<f64> {
+    // Per gap (whether horizontal, from, to): (order, connector).
+    type Gaps = BTreeMap<(bool, i64, i64), Vec<((bool, f64), usize)>>;
+    let mut gaps: Gaps = BTreeMap::new();
+    let mut out = vec![0.0; conns.len()];
+    for (i, c) in conns.iter().enumerate() {
+        let Route::Ortho(sa, _) = c.route else {
+            continue;
+        };
+        let horizontal = matches!(sa, Side::Left | Side::Right);
+        // In horizontal coordinates: `u` across the gap, `v` along it.
+        let (p, q) = ends[i];
+        let (p, q) = if horizontal {
+            (p, q)
+        } else {
+            ((p.1, p.0), (q.1, q.0))
+        };
+        let (near, far) = if p.0 <= q.0 { (p, q) } else { (q, p) };
+        // A connector that goes down from the near side to the far side
+        // crosses none of the others that do if those that start higher
+        // run closer to the far side; and the other way round for
+        // connectors that go up.
+        let down = near.1 <= far.1;
+        let order = if down { -near.1 } else { near.1 };
+        // Cards in between would hide a bend in the middle of a long
+        // vertical connector: it bends just below the upper card instead.
+        let far_u = if horizontal {
+            far.0
+        } else {
+            far.0.min(near.0 + 40.0)
+        };
+        gaps.entry((horizontal, near.0.round() as i64, far_u.round() as i64))
+            .or_default()
+            .push(((!down, order), i));
+    }
+    for ((_, u0, u1), mut list) in gaps {
+        list.sort_by(|x, y| x.0.0.cmp(&y.0.0).then(x.0.1.total_cmp(&y.0.1)));
+        let (u0, u1) = (u0 as f64, u1 as f64);
+        let n = list.len() as f64;
+        let gap = LANE_GAP.min((u1 - u0) / (n + 1.0));
+        for (k, &(_, i)) in list.iter().enumerate() {
+            out[i] = (u0 + u1) / 2.0 + (k as f64 - (n - 1.0) / 2.0) * gap;
+        }
+    }
+    out
+}
+
+fn conn_path(c: &Conn, ends: Ends, lane: f64) -> String {
+    match c.route {
+        Route::Ortho(sa, _) => {
+            let (p, q) = ends;
+            let points = match sa {
+                _ if p.0 == q.0 || p.1 == q.1 => vec![p, q],
+                Side::Left | Side::Right => vec![p, (lane, p.1), (lane, q.1), q],
+                Side::Top | Side::Bottom => vec![p, (p.0, lane), (q.0, lane), q],
+            };
+            route::path_d(&points)
+        }
+        Route::Site(y) => site_path(c.a.1, y, c.b.1),
+        Route::Curve => edge_path(c.a.1, c.b.1),
+    }
+}
+
 /// Draws call, use, member and link connectors between visible cards.
 pub fn draw_edges(app: &App) {
     let d = &app.d;
@@ -132,7 +326,7 @@ pub fn draw_edges(app: &App) {
         .filter_map(|g| Some((g.gid, card_rect(g)?)))
         .collect();
     let mut seen: BTreeSet<(u32, u32)> = BTreeSet::new();
-    let mut out = String::new();
+    let mut conns: Vec<Conn> = Vec::new();
     let k = c.pan.k;
     let mut add = |ga: &Group, gb: &Group, class: &str, title: String| {
         let base = class.split(' ').next().unwrap_or("");
@@ -144,20 +338,18 @@ pub fn draw_edges(app: &App) {
             return;
         };
         seen.insert((ga.gid, gb.gid));
-        let marker = if base == "call" || base == "use" {
-            format!(r#"marker-end="url(#arrow-{base})""#)
-        } else {
-            String::new()
+        let site_y = match base {
+            "call" => call_site_y(ga, &gb.active, k),
+            _ => None,
         };
-        out.push_str(&format!(
-            r#"<path class="edge {class}" d="{}" {marker}><title>{}</title></path>"#,
-            match base {
-                "call" => call_site_y(ga, &gb.active, k).map(|y| site_path(a, y, b)),
-                _ => None,
-            }
-            .unwrap_or_else(|| edge_path(a, b)),
-            esc(&title)
-        ));
+        conns.push(Conn {
+            a: (ga.gid, a),
+            b: (gb.gid, b),
+            class: class.to_string(),
+            title,
+            site_y,
+            route: choose_route(a, b, site_y),
+        });
     };
     for ga in &vis {
         let Some(a) = d.item(&ga.active) else {
@@ -225,6 +417,23 @@ pub fn draw_edges(app: &App) {
         if visible(d, c, ga) && visible(d, c, gb) {
             add(ga, gb, "link", "opened from here".into());
         }
+    }
+    let ends = ports(&conns);
+    let lanes = lanes(&conns, &ends);
+    let mut out = String::new();
+    for (i, c) in conns.iter().enumerate() {
+        let base = c.class.split(' ').next().unwrap_or("");
+        let marker = if base == "call" || base == "use" {
+            format!(r#"marker-end="url(#arrow-{base})""#)
+        } else {
+            String::new()
+        };
+        out.push_str(&format!(
+            r#"<path class="edge {}" d="{}" {marker}><title>{}</title></path>"#,
+            c.class,
+            conn_path(c, ends[i], lanes[i]),
+            esc(&c.title)
+        ));
     }
     dom::set_html(
         "edges",
@@ -349,4 +558,56 @@ fn draw_frames(app: &App, rects: &HashMap<u32, Rect>) {
     // Outer frames first so inner ones are drawn on top.
     out.reverse();
     dom::set_html("frames", &out.concat());
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(x: f64, y: f64, h: f64) -> Rect {
+        Rect { x, y, w: 580.0, h }
+    }
+
+    fn conn(a: (u32, Rect), b: (u32, Rect)) -> Conn {
+        Conn {
+            a,
+            b,
+            class: "use".into(),
+            title: String::new(),
+            site_y: None,
+            route: choose_route(a.1, b.1, None),
+        }
+    }
+
+    /// Two cards in the left column connected to one card in the right
+    /// column, like an arranged module: each connector runs in its own
+    /// lane and ends at its own point on the shared card.
+    #[test]
+    fn connectors_through_one_gap_stay_apart() {
+        let top = (1, rect(0.0, 0.0, 400.0));
+        let low = (2, rect(0.0, 1000.0, 300.0));
+        let right = (3, rect(660.0, 500.0, 300.0));
+        let conns = vec![conn(top, right), conn(low, right)];
+        let ends = ports(&conns);
+        let lanes = lanes(&conns, &ends);
+        assert_ne!(ends[0].1, ends[1].1);
+        assert_ne!(lanes[0], lanes[1]);
+        for l in &lanes {
+            assert!(*l > 580.0 && *l < 660.0, "lane {l} outside the gap");
+        }
+        // The lower connector enters the right card lower down.
+        assert!(ends[0].1.1 < ends[1].1.1);
+    }
+
+    /// A connector between cards of one column that skips a card bends
+    /// just below the upper card, not behind the card in between.
+    #[test]
+    fn vertical_connector_bends_next_to_a_card() {
+        let top = (1, rect(0.0, 0.0, 400.0));
+        let low = (2, rect(0.0, 1000.0, 300.0));
+        let conns = vec![conn(low, top), conn((3, rect(0.0, 440.0, 520.0)), top)];
+        let ends = ports(&conns);
+        let lanes = lanes(&conns, &ends);
+        assert!(lanes[0] > 400.0 && lanes[0] < 440.0, "lane {}", lanes[0]);
+    }
 }
