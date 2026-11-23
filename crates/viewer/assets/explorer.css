@@ -590,6 +590,16 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 #rv-bar { display: none; align-items: center; gap: 8px; font-size: 13px; white-space: nowrap; }
 .reviewing #rv-bar { display: flex; }
 #rv-bar button { font-size: 12px; padding: 2px 8px; }
+/* Count and meter as one unit, stacked. */
+.rv-progress { display: inline-flex; flex-direction: column; gap: 3px; min-width: 90px; }
+.rv-progress .rv-count { font-size: 12px; line-height: 1.1; }
+.rv-progress.all .rv-count { color: var(--reviewed); font-weight: 600; }
+.rv-progress .rv-meter { width: 100%; }
+#rv-bar #rv-next { border-color: var(--link); color: var(--link); }
+#rv-bar #rv-finish.primary { background: var(--reviewed); border-color: var(--reviewed); color: var(--bg); font-weight: 600; }
+/* Removes every mark: kept apart from the other actions, and quiet. */
+#rv-bar #rv-clear { margin-left: 6px; border-color: transparent; background: none; color: var(--muted); }
+#rv-bar #rv-clear:hover { color: var(--removed); border-color: var(--removed); }
 .rv-meter { width: 70px; height: 6px; border-radius: 3px; background: var(--bg-alt); border: 1px solid var(--border); overflow: hidden; }
 .rv-meter span { display: block; height: 100%; background: var(--reviewed); }
 .rvc { display: inline-flex; gap: 4px; align-items: center; }

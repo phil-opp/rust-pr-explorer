@@ -567,15 +567,32 @@ fn refresh(id: &str) {
     update_progress();
 }
 
-/// The progress and the "next" button in the header.
+/// The progress and the review actions in the header: "Next" while
+/// something is left, then "Finish review…" as the main action. "Clear"
+/// sits apart, since it removes every mark.
 pub fn update_progress() {
     let (done, total) = progress();
     let html = match (done * 100).checked_div(total) {
         None => r#"<span class="dim">Nothing to review</span>"#.to_string(),
-        Some(percent) => format!(
-            r#"<span class="rv-count" title="Reviewed items and files">{done} / {total} reviewed</span><span class="rv-meter"><span style="width:{}%"></span></span><button id="rv-next" title="Go to the next unreviewed item (n)">Next ▸</button><button id="rv-finish" title="Sum up your verdicts and comments, to post them as a review on GitHub">Finish review…</button><button id="rv-clear" title="Remove every review mark of this pull request">Clear</button>"#,
-            percent
-        ),
+        Some(percent) => {
+            let all = done == total;
+            let count = if all {
+                format!("✓ All {total} reviewed")
+            } else {
+                format!("{done} / {total} reviewed")
+            };
+            let next = if all {
+                String::new()
+            } else {
+                r#"<button id="rv-next" title="Go to the next unreviewed item (n)">Next ▸</button>"#
+                    .to_string()
+            };
+            format!(
+                r#"<span class="rv-progress{}" title="Reviewed items and files"><span class="rv-count">{count}</span><span class="rv-meter"><span style="width:{percent}%"></span></span></span>{next}<button id="rv-finish" class="{}" title="Sum up your verdicts and comments, to post them as a review on GitHub">Finish review…</button><button id="rv-clear" title="Remove every review mark of this pull request">Clear marks</button>"#,
+                if all { " all" } else { "" },
+                if all { "primary" } else { "" },
+            )
+        }
     };
     dom::set_html("rv-bar", &html);
 }
