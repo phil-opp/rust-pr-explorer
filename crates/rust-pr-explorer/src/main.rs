@@ -5,7 +5,9 @@ mod commits;
 mod css;
 mod files;
 mod javascript;
+mod lockfile;
 mod merge;
+mod moved;
 mod parts;
 #[cfg(feature = "semantic")]
 mod public_api;
