@@ -728,6 +728,25 @@ pub struct ChangedFile {
     pub old_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_text: Option<String>,
+    /// Hashes of the file's whole content in the base and in the head
+    /// (see [`content_hash`]), empty for a side without the file. They
+    /// identify a version of the file across pages that compare it with
+    /// different revisions, for sharing review marks between them.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub old_hash: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub new_hash: String,
+}
+
+/// Hash of a file's content, as hex: FNV-1a like [`stable_hash`], over the
+/// raw bytes.
+pub fn content_hash(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{h:016x}")
 }
 
 /// One entry of a `Cargo.toml` that changed.
