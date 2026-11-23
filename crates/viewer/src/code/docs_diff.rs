@@ -164,8 +164,12 @@ fn html_tokens(s: &str) -> Vec<&str> {
     while let Some(c) = rest.chars().next() {
         let len = match c {
             '<' => rest.find('>').map_or(1, |i| i + 1),
-            '&' => rest[..rest.len().min(12)]
-                .find(';')
+            // Bytes, not a string slice: the 12th byte can be inside a
+            // multibyte character.
+            '&' => rest
+                .bytes()
+                .take(12)
+                .position(|b| b == b';')
                 .filter(|&i| rest[1..i].chars().all(|c| c.is_alphanumeric() || c == '#'))
                 .map_or(1, |i| i + 1),
             c if c.is_whitespace() => rest
