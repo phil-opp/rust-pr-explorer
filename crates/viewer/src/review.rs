@@ -350,7 +350,12 @@ fn file_print(f: &ChangedFile) -> u64 {
 fn identity(d: &Data) -> String {
     let meta = &d.out.meta;
     match (&meta.pr, &meta.project) {
-        (Some(pr), _) => format!("{}#{}", pr.repo, pr.number),
+        // A page of the changes since an earlier commit has diffs of its
+        // own, so its marks are kept apart from the whole PR's.
+        (Some(pr), _) => match &pr.since {
+            Some(since) => format!("{}#{} since {since}", pr.repo, pr.number),
+            None => format!("{}#{}", pr.repo, pr.number),
+        },
         (None, Some(project)) => format!("local:{project}"),
         // Pages from before projects were identified.
         (None, None) => meta.url.clone().unwrap_or_else(|| meta.title.clone()),

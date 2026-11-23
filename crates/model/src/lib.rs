@@ -530,6 +530,12 @@ pub struct PrMeta {
     /// so the page's diff may not be the one GitHub shows.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub custom_base: bool,
+    /// The page shows only what changed since this earlier commit of the
+    /// PR (in full), e.g. the one an earlier explorer page showed, leaving
+    /// out what the base branch changed in between. `base_rev` is then
+    /// that commit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<String>,
     /// The PR's review threads on GitHub when the page was built, open and
     /// resolved, in the order GitHub lists them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

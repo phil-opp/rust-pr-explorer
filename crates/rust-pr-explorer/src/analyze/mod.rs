@@ -86,6 +86,7 @@ pub struct ItemData {
     pub ext_sites: BTreeMap<String, LineCol>,
 }
 
+#[derive(Clone)]
 pub struct Analysis {
     pub items: BTreeMap<String, ItemData>,
     /// Items outside the analyzed crates that the code names, as
