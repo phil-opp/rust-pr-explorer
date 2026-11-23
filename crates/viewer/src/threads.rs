@@ -394,6 +394,7 @@ mod tests {
             files: Vec::new(),
             externals: Default::default(),
             warnings: Vec::new(),
+            semver_checks: None,
         };
         Data::new(out)
     }
