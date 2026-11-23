@@ -22,6 +22,8 @@
   --removed-bg: #fdecea;
   --changed: #9a6700;
   --changed-bg: #fff5d6;
+  --moved: #5b4ec2;
+  --moved-bg: #eeebfa;
   --private: #595959;
   --highlight: #ffe48a;
   --reviewed: #0b7285;
@@ -58,6 +60,8 @@
     --removed-bg: #3a1c1b;
     --changed: #e3b341;
     --changed-bg: #3a3116;
+    --moved: #ada2ff;
+    --moved-bg: #29253f;
     --private: #b4b4bc;
     --highlight: #6b5a12;
     --reviewed: #4fc3d6;
@@ -469,6 +473,13 @@ a.card-badge[data-drill]:hover { border-style: solid; }
 .sbs .ln.del { background: var(--removed-bg); }
 .sbs .ln.gap { background: repeating-linear-gradient(135deg, transparent 0 4px, var(--border) 4px 5px); opacity: .5; }
 .card:has(details.src[open] .sbs) { width: 1080px; }
+/* Moved lines (code that went to or came from another place, e.g. an
+   extracted helper) keep their "-" or "+" but get their own color and a
+   rule on the left, so that they read as moved, not as new code. */
+.ln.mv { background: var(--moved-bg) !important; box-shadow: inset 2px 0 0 var(--moved); }
+.ln.mv::before, .ln.mv .sg { color: var(--moved) !important; }
+.mv-note { float: right; margin-left: 16px; font: 12px var(--sans); color: var(--moved); }
+.d-mv { color: var(--moved); }
 /* Removed lines are marked by their background and "-" alone. A changed
    line paired with its new version also has its changed words marked. */
 .ln.del .wc { background: color-mix(in srgb, var(--removed) 28%, transparent); text-decoration: line-through 1.5px var(--removed); border-radius: 2px; }
