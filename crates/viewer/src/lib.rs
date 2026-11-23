@@ -255,7 +255,16 @@ fn install_listeners() {
     // Not passive: clicks on cross links prevent the default navigation.
     dom::listen_with(&doc, "click", false, false, |ev| {
         if let Some(el) = dom::target_element(&ev) {
-            with_app(|app| on_click(app, &el, &ev));
+            with_app(|app| {
+                // A touch that moved the view isn't a tap.
+                if dom::closest(&el, "#viewport").is_some() && canvas::swallow_click(app) {
+                    ev.prevent_default();
+                    return;
+                }
+                canvas::before_change(app);
+                on_click(app, &el, &ev);
+                canvas::after_change(app);
+            });
         }
     });
     // Not passive: starting a card drag prevents text selection.
@@ -270,8 +279,11 @@ fn install_listeners() {
                 pick_search(app, i);
                 return;
             }
-            let _ =
-                canvas::on_pointer_down(app, &el, &pev) || space::on_pointer_down(app, &el, &pev);
+            if canvas::on_pointer_down(app, &el, &pev) {
+                canvas::before_change(app);
+            } else {
+                let _ = space::on_pointer_down(app, &el, &pev);
+            }
         });
     });
     dom::listen(&doc, "pointermove", |ev| {
@@ -292,6 +304,7 @@ fn install_listeners() {
             };
             with_app(|app| {
                 canvas::on_pointer_up(app, &pev);
+                canvas::after_change(app);
                 space::on_pointer_up(app);
             });
         });
@@ -371,26 +384,17 @@ fn install_listeners() {
     });
     // Not passive: Ctrl+Enter in the comment editor prevents the newline.
     dom::listen_with(&doc, "keydown", false, false, |ev| {
-        // Review keys (`n`, `a`, `j`, `?`, …), unless typing.
+        // Review keys (`n`, `a`, `j`, `?`, …), unless typing, and Ctrl+Z
+        // on the canvas.
         if let Some(k) = ev.dyn_ref::<KeyboardEvent>()
-            && with_app(|app| keys::on_key(app, k)) == Some(true)
+            && with_app(|app| {
+                canvas::before_change(app);
+                let done = keys::on_key(app, k);
+                canvas::after_change(app);
+                done
+            }) == Some(true)
         {
             ev.prevent_default();
-            return;
-        }
-        // Ctrl+Z on the canvas closes what the last "calls" or "callers"
-        // click opened, unless typing (where it undoes the text).
-        if let Some(k) = ev.dyn_ref::<KeyboardEvent>()
-            && k.key().eq_ignore_ascii_case("z")
-            && (k.ctrl_key() || k.meta_key())
-            && !k.shift_key()
-            && !dom::target_element(&ev)
-                .is_some_and(|t| matches!(t.tag_name().as_str(), "INPUT" | "TEXTAREA" | "SELECT"))
-        {
-            let undone = with_app(|app| app.s.view == View::Canvas && canvas::undo_expansion(app));
-            if undone == Some(true) {
-                ev.prevent_default();
-            }
             return;
         }
         // Ctrl+Enter in the comment editor saves with its verdict.

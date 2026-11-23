@@ -321,7 +321,7 @@ pub(crate) fn expand(app: &mut App, id: &str, kind: Related) {
     let mut notes = Vec::new();
     if opened > 0 {
         notes.push(format!(
-            "Opened {opened} {} (click again or press Ctrl+Z to close them)",
+            "Opened {opened} {} (click again or press Undo to close them)",
             kind.noun(opened)
         ));
     }
@@ -353,24 +353,6 @@ impl Related {
             (Related::UsedBy, _) => "items that use it",
         }
     }
-}
-
-/// Ctrl+Z on the canvas: closes what the last "calls", "callers" or "used
-/// by" click opened. `false` if there is nothing to undo.
-pub fn undo_expansion(app: &mut App) -> bool {
-    let c = &mut app.s.canvas;
-    let Some(i) = (0..c.expansions.len())
-        .rev()
-        .find(|&i| c.expansion_live(&c.expansions[i]))
-    else {
-        return false;
-    };
-    c.expansions.truncate(i + 1);
-    let kind = c.expansions[i].kind;
-    let n = c.collapse(i);
-    render(app);
-    toast(&format!("Closed {n} {}", kind.noun(n)));
-    true
 }
 
 /// Opens all members of a type in one tabbed card.

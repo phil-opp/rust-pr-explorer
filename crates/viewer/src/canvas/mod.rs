@@ -13,14 +13,16 @@ mod events;
 mod layout;
 mod open;
 mod reflow;
+mod undo;
 
 pub use edges::draw_edges;
 pub use events::{
     active_item_of_card, highlight_card_of, on_click, on_details_toggle, on_pointer_down,
-    on_pointer_move, on_pointer_up, on_unfold, on_wheel,
+    on_pointer_move, on_pointer_up, on_unfold, on_wheel, swallow_click,
 };
 pub use layout::{show_impact, show_module_graph};
-pub use open::{open, open_for_review, undo_expansion};
+pub use open::{open, open_for_review};
+pub use undo::{after_change, before_change, undo};
 
 use card::card_html;
 
@@ -28,6 +30,7 @@ const CARD_W: f64 = 580.0;
 /// At most this many cards are opened by one "calls"/"callers" click.
 const EXPAND_LIMIT: usize = 10;
 
+#[derive(Clone)]
 pub struct Group {
     pub gid: u32,
     pub tabs: Vec<String>,
@@ -96,11 +99,26 @@ pub struct Canvas {
     /// The last rendered height of each card, to tell how much it changed.
     heights: HashMap<u32, f64>,
     /// What each "calls", "callers" and "used by" click opened, oldest
-    /// first, so that a second click or Ctrl+Z can close it again.
+    /// first, so that a second click can close it again.
     expansions: Vec<Expansion>,
+    /// Earlier layouts, oldest first, for Undo.
+    history: Vec<undo::Snapshot>,
+    /// The layout before the current click, key press or drag.
+    before: Option<undo::Snapshot>,
+    /// A finger resting on a card's header (or a module frame) that lifts
+    /// the card when it stays put long enough.
+    hold: Option<events::Hold>,
+    /// Whether the last touch moved the view, so that lifting the finger
+    /// doesn't also click what it started on.
+    panned: bool,
+    /// For a touch that started on code wider than its card: the code's
+    /// box, its scroll position then, and once the finger moved, whether
+    /// it moves sideways (scrolling the code) or not (panning the view).
+    sideways: Option<(Element, f64, Option<bool>)>,
 }
 
 /// The cards and connectors one expansion of an item added.
+#[derive(Clone)]
 struct Expansion {
     item: String,
     kind: open::Related,
@@ -127,6 +145,11 @@ impl Canvas {
             touches: Vec::new(),
             heights: HashMap::new(),
             expansions: Vec::new(),
+            history: Vec::new(),
+            before: None,
+            hold: None,
+            panned: false,
+            sideways: None,
         }
     }
 
@@ -277,7 +300,7 @@ pub fn render(app: &mut App) {
     let chain = d.mod_chain(&c.scope);
     let hidden = c.groups.iter().filter(|g| !visible(&d, c, g)).count();
     let bar = format!(
-        r#"<span>Viewing from</span><span class="scope">{}</span>{}
+        r#"<button id="cv-undo" title="Undo the last change to the cards (Ctrl+Z)"{undo}>↶ Undo</button><span>Viewing from</span><span class="scope">{}</span>{}
         <span class="sep"></span>
         <button id="cv-arrange" title="Lay cards out inside their modules">Arrange by module</button>
         <button id="cv-frames" class="{}" title="Draw module boundaries">Module frames</button>
@@ -302,6 +325,11 @@ pub fn render(app: &mut App) {
             String::new()
         },
         if c.frames { "on" } else { "" },
+        undo = if c.history.is_empty() {
+            " disabled"
+        } else {
+            ""
+        },
     );
     dom::set_html("canvas-bar", &bar);
     let cards: String = c
