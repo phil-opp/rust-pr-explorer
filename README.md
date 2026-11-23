@@ -1,5 +1,8 @@
 # Rust PR Explorer (prototype)
 
+> [!WARNING]
+> This is a vibe-coded toy project, written mostly by an AI coding assistant. Expect bugs and rough edges, and use it with care. In particular, don't rely on its output as the only basis for a review.
+
 Review a Rust pull request as **changed items** (types, traits, functions, methods, impls, modules) instead of changed lines. The tool parses the base and head versions of the code and writes a single self-contained HTML page with:
 
 - an **overview** of the public API changes in rustdoc form,
