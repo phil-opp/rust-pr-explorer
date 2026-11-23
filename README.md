@@ -84,7 +84,9 @@ Who can open the page: anyone logged in to GitHub with access to the repository,
 
 Inputs: `comment: false` leaves out the comment, `syntax-only: true` skips rust-analyzer, and `pr` and `repository` pick another pull request (by default the one that triggered the workflow). The `page-url` output is the link.
 
-The action never builds or runs the PR's code, so it has no `--trust-project-code` input: the token is in the analysis step's environment. On a PR from a fork, the token GitHub gives the workflow is read-only, so the page is built and uploaded but the comment fails with a warning; the link is still in the job summary.
+By default the action never builds or runs the PR's code. `trust-project-code: true` passes `--trust-project-code`, so calls into code that build scripts and proc macros generate resolve too. That runs the PR's code with the job's token, as a CI job that runs the PR's tests does. Under `pull_request` that is no new risk: a PR from a fork gets a read-only token and no secrets, and a PR from a branch of the repository can change the workflow itself anyway. Under `pull_request_target`, whose token can write and which has the repository's secrets also on PRs from forks, the action refuses it. In trusted mode the analysis' cargo target directory is cached too, keyed by the toolchain and the checked out `Cargo.lock` files and saved like the dependencies' cache; on a push to the default branch the action fills it by analyzing the checked out repository. This repository's workflow also sets `RUST_PR_EXPLORER_STUB_VIEWER=1`, so its build script skips the viewer's wasm build during the analysis (see `build.rs`). With that, a trusted run here takes about 75 s with the cache and 6 minutes without it, against 48 s untrusted, and the cache is about 1.8 GB of the repository's 10 GB.
+
+On a PR from a fork, the token GitHub gives the workflow is read-only, so the page is built and uploaded but the comment fails with a warning; the link is still in the job summary.
 
 ## What you see
 

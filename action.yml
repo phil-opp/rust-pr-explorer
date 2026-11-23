@@ -34,6 +34,17 @@ inputs:
   syntax-only:
     description: Skip rust-analyzer (faster, but method calls stay unresolved).
     default: "false"
+  trust-project-code:
+    description: >-
+      Let rust-analyzer run the PR's build scripts and procedural macros, so
+      that calls into generated code resolve too. This runs the PR's code
+      with the job's token, like a CI job that runs the PR's tests does.
+      Refused under `pull_request_target`, whose token can write also on
+      PRs from forks (see the README). The cargo target directory of the
+      analysis is cached like the build's dependencies (see `cache` and
+      `save-cache`); on a push without a PR, the action fills it from the
+      checked out repository.
+    default: "false"
   cache:
     description: >-
       Use the Actions cache: for the built tool (about 12 MB) and, with
@@ -67,6 +78,18 @@ outputs:
 runs:
   using: composite
   steps:
+    - name: Check the inputs
+      if: inputs.trust-project-code == 'true'
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+      run: |
+        # `pull_request_target` gives the job secrets and a token that can
+        # write, also on PRs from forks: the PR's code must not run there.
+        if [ "$EVENT" = "pull_request_target" ]; then
+          echo "::error::trust-project-code runs the PR's code, so it is refused under pull_request_target."
+          exit 1
+        fi
     # rust-analyzer needs cargo and the standard library's source, also when
     # the tool itself comes from the cache.
     - uses: dtolnay/rust-toolchain@stable
@@ -84,6 +107,10 @@ runs:
         hash=$(find Cargo.toml Cargo.lock crates -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-20)
         echo "key=rust-pr-explorer-bin-$RUNNER_OS-$RUNNER_ARCH-$hash" >> "$GITHUB_OUTPUT"
         echo "dir=$RUNNER_TEMP/rust-pr-explorer-bin" >> "$GITHUB_OUTPUT"
+        # The analysis' target directory (trusted mode) only fits the
+        # toolchain that built it.
+        echo "rustc=$(rustc -V | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+        echo "target=$RUNNER_TEMP/rust-pr-explorer-target" >> "$GITHUB_OUTPUT"
     - name: Restore the built tool
       id: bin
       if: inputs.cache == 'true'
@@ -111,6 +138,9 @@ runs:
       env:
         DIR: ${{ steps.key.outputs.dir }}
       run: |
+        # Only for the analysis of this repository (see build.rs): the tool
+        # itself needs its viewer.
+        unset RUST_PR_EXPLORER_STUB_VIEWER
         # See `[profile.action]` in Cargo.toml.
         cargo build --profile action --locked -p rust-pr-explorer
         mkdir -p "$DIR"
@@ -121,6 +151,19 @@ runs:
       with:
         path: ${{ steps.key.outputs.dir }}
         key: ${{ steps.key.outputs.key }}
+    # In trusted mode, cargo builds the dependencies' build scripts and
+    # proc macros for the analysis: most of a trusted run's time when they
+    # aren't cached. Keyed by the checked out repository's lockfiles; a
+    # PR whose dependencies differ starts from the default branch's
+    # directory.
+    - name: Restore the analysis' target directory
+      id: target
+      if: inputs.trust-project-code == 'true' && inputs.cache == 'true'
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.key.outputs.target }}
+        key: rust-pr-explorer-target-${{ runner.os }}-${{ runner.arch }}-${{ steps.key.outputs.rustc }}-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: rust-pr-explorer-target-${{ runner.os }}-${{ runner.arch }}-${{ steps.key.outputs.rustc }}-
     - name: Analyze the pull request
       id: run
       shell: bash
@@ -130,12 +173,24 @@ runs:
         REPO: ${{ inputs.repository }}
         COMMENT: ${{ inputs.comment }}
         SYNTAX_ONLY: ${{ inputs.syntax-only }}
+        TRUST: ${{ inputs.trust-project-code }}
+        TARGET: ${{ steps.key.outputs.target }}
+        FILL_TARGET: ${{ inputs.cache == 'true' && inputs.save-cache == 'true' && steps.target.outputs.cache-hit != 'true' }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         TOOL: ${{ steps.key.outputs.dir }}/rust-pr-explorer
       run: |
+        trusted=()
+        if [ "$TRUST" = "true" ]; then trusted=(--trust-project-code --target-dir "$TARGET"); fi
         if [ -z "$PR" ]; then
           # E.g. a push to the default branch, run to fill the caches.
-          echo "::notice::No pull request: the tool is built and cached, nothing else to do."
+          if [ "$TRUST" = "true" ] && [ "$FILL_TARGET" = "true" ]; then
+            # Analyzing the checked out repository builds what a PR's
+            # analysis needs.
+            echo "::notice::No pull request: filling the analysis' target directory from the checked out repository."
+            "$TOOL" dirs "$GITHUB_WORKSPACE" "$GITHUB_WORKSPACE" -o "$RUNNER_TEMP/warm-up.html" "${trusted[@]}"
+          else
+            echo "::notice::No pull request: the tool is built and cached, nothing else to do."
+          fi
           exit 0
         fi
         dir="$RUNNER_TEMP/rust-pr-explorer"
@@ -188,9 +243,8 @@ runs:
         args=()
         if [ "$SYNTAX_ONLY" = "true" ]; then args+=(--syntax-only); fi
         if [ -n "$prev" ] && [ "$prev" != "$HEAD_SHA" ]; then args+=(--since "$prev"); fi
-        # The PR's code is never built or run (no --trust-project-code):
-        # the token is in this step's environment.
-        "$TOOL" pr "$REPO#$PR" -o "$page" --json "$dir/analysis.json" "${args[@]}" > "$dir/stdout"
+        # Without trust-project-code, the PR's code is never built or run.
+        "$TOOL" pr "$REPO#$PR" -o "$page" --json "$dir/analysis.json" "${args[@]}" "${trusted[@]}" > "$dir/stdout"
         since=$(sed -n 's/^since: //p' "$dir/stdout" | tail -n1)
 
         # A one-line summary for the comment: changed items (not modules),
@@ -224,6 +278,12 @@ runs:
             echo "previous-state=$(cat "$dir/previous.json")"
           fi
         } >> "$GITHUB_OUTPUT"
+    - name: Cache the analysis' target directory
+      if: inputs.trust-project-code == 'true' && inputs.cache == 'true' && inputs.save-cache == 'true' && steps.target.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ steps.key.outputs.target }}
+        key: ${{ steps.target.outputs.cache-primary-key }}
     - name: Upload the page
       id: upload
       if: steps.run.outputs.page != ''
