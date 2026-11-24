@@ -229,18 +229,24 @@ fn span_of(rows: &[Row], path: &str, tag: char, lines: &[usize]) -> Option<Loc> 
     })
 }
 
-/// The line a comment on a file outside the Rust analysis goes on: its
-/// first changed line.
+/// The line a comment on a file outside the Rust analysis goes on: the
+/// first added line of its first change, else that change's first removed
+/// line. The PR's lines come first, as for a hunk (see `hunk_loc`), so
+/// that a comment on a changed line is on its new version.
 pub fn file_loc(f: &ChangedFile) -> Option<Loc> {
-    numbered(&f.hunks)
-        .into_iter()
-        .find(|l| l.tag != ' ')
-        .map(|r| Loc {
-            path: f.path.clone(),
-            line: r.num(),
-            start_line: None,
-            side: side_of(r.tag),
-        })
+    let rows = numbered(&f.hunks);
+    let start = rows.iter().position(|r| r.tag != ' ')?;
+    let change: Vec<&Row> = rows[start..]
+        .iter()
+        .take_while(|r| r.tag != ' ' && r.hunk == rows[start].hunk)
+        .collect();
+    let r = change.iter().find(|r| r.tag == '+').unwrap_or(&change[0]);
+    Some(Loc {
+        path: f.path.clone(),
+        line: r.num(),
+        start_line: None,
+        side: side_of(r.tag),
+    })
 }
 
 /// The lines an item has in the PR's version (`' '` and `'+'`) and in
@@ -406,7 +412,12 @@ pub fn place_link(d: &Data, unit: &str, l: Option<&Loc>) -> Option<String> {
         format!("[`{path}` {label}]({})", blob_url(pr, path, side, lines))
     };
     if let Some(l) = l {
-        return Some(link(&l.path, l.side, Some((l.first(), l.line)), l.lines()));
+        let label = if l.side == "LEFT" {
+            format!("{} (base)", l.lines())
+        } else {
+            l.lines()
+        };
+        return Some(link(&l.path, l.side, Some((l.first(), l.line)), label));
     }
     if let Some(path) = unit.strip_prefix("file:") {
         let removed = d
@@ -673,7 +684,9 @@ pub fn review_markdown(comments: &[Comment], own: &str, event: Verdict) -> Strin
             ),
             (None, None) => String::new(),
         };
-        out.push_str(&format!("\n{}\n\n{}\n", c.lead_at(&at), c.text));
+        // A rule between comments, with blank lines around it: right
+        // after a line of text, `---` would make that line a heading.
+        out.push_str(&format!("\n---\n\n{}\n\n{}\n", c.lead_at(&at), c.text));
     }
     out
 }
@@ -905,6 +918,25 @@ pub fn finish_html(d: &Data) -> String {
         ),
         None => r#"<p class="sub">This page doesn't show a GitHub pull request, so the review can only be copied as Markdown.</p>"#.to_string(),
     };
+    // Without a terminal, as on a phone: copy the Markdown and go to the
+    // PR to paste it. A link, so that the browser opens it as part of the
+    // tap (a page opened later from script can be blocked as a pop-up).
+    let (open_link, open_note) = match &d.out.meta.pr {
+        Some(pr) => {
+            let url = format!("https://github.com/{}/pull/{}", pr.repo, pr.number);
+            (
+                format!(
+                    r#"<a class="rv-btn" data-rv-out="md" href="{}" target="_blank" rel="noopener">Copy and open the PR</a>"#,
+                    esc(&url)
+                ),
+                format!(
+                    r#"<p class="sub">Paste it into the comment box at the end of the PR's conversation. A comment can't approve or request changes: for that, paste it into the review of the <a href="{}/files" target="_blank" rel="noopener">Files changed</a> tab instead. GitHub can't fill in a comment from a link, so it has to be pasted.</p>"#,
+                    esc(&url)
+                ),
+            )
+        }
+        None => (String::new(), String::new()),
+    };
     format!(
         r#"<div class="rv-finish">
 <p>{facts}.</p>{notes}
@@ -915,9 +947,11 @@ pub fn finish_html(d: &Data) -> String {
 {comments}
 {post}
 <h4>Or copy it as a comment</h4>
-<div class="rv-row"><button data-rv-out="md">Copy as Markdown</button></div>
+<div class="rv-row"><button data-rv-out="md">Copy as Markdown</button>{open}</div>{open_note}
 <textarea id="rv-out" class="hidden" rows="8" readonly></textarea>
 </div>"#,
+        open = open_link,
+        open_note = open_note,
         facts = facts.join(", "),
         notes = notes
             .iter()
@@ -1258,8 +1292,38 @@ mod tests {
             "README.md",
             vec![sl('@', "3 3"), sl(' ', "x"), sl('-', "old"), sl('+', "new")],
         );
+        // A changed line: its new version.
+        assert_eq!(file_loc(&f), at("README.md", None, 4, "RIGHT"));
+        // Only removed lines: the first of them.
+        let f = file(
+            "README.md",
+            vec![sl('@', "3 3"), sl(' ', "x"), sl('-', "old"), sl(' ', "y")],
+        );
         assert_eq!(file_loc(&f), at("README.md", None, 4, "LEFT"));
+        // An added line of a later change doesn't count.
+        let f = file(
+            "README.md",
+            vec![sl('@', "3 3"), sl('-', "old"), sl(' ', "x"), sl('+', "new")],
+        );
+        assert_eq!(file_loc(&f), at("README.md", None, 3, "LEFT"));
         assert_eq!(file_loc(&file("logo.png", Vec::new())), None);
+    }
+
+    #[test]
+    fn markdown_has_rules_between_comments() {
+        let plain = |text: &str| Comment {
+            link: None,
+            ..comment(text, None)
+        };
+        let md = review_markdown(
+            &[plain("First"), plain("Second\n\n- a list")],
+            "Summary",
+            Verdict::Comment,
+        );
+        assert_eq!(
+            md,
+            "**Review: Comments**\n\nSummary\n\n---\n\nOn `f`:\n\nFirst\n\n---\n\nOn `f`:\n\nSecond\n\n- a list\n"
+        );
     }
 
     fn comment(text: &str, loc: Option<Loc>) -> Comment {
@@ -1391,6 +1455,10 @@ mod tests {
         assert_eq!(
             place_link(&d, "x", at("a.rs", Some(2), 4, "RIGHT").as_ref()).unwrap(),
             "[`a.rs` lines 2–4](https://github.com/o/r/blob/head1full/a.rs#L2-L4)"
+        );
+        assert_eq!(
+            place_link(&d, "x", at("a.rs", None, 7, "LEFT").as_ref()).unwrap(),
+            "[`a.rs` line 7 (base)](https://github.com/o/r/blob/base1full/a.rs#L7)"
         );
     }
 
