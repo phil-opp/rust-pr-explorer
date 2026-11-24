@@ -476,6 +476,12 @@ fn load(dir: &Path, trust: Trust, target_dir: Option<&Path>) -> Result<(Analysis
         // The syntactic analysis sees code behind every `cfg(feature)`;
         // enable all features so that rust-analyzer does too.
         features: CargoFeatures::All,
+        // `cfg(test)` for the analyzed crates, as the rust-analyzer
+        // language server sets it. rust-analyzer expands `#[test]` to
+        // `#[cfg(test)]`: without it, test functions and `#[cfg(test)]`
+        // modules have no body to infer types in. Code behind
+        // `cfg(not(test))` is then inactive and keeps the syntactic results.
+        set_test: true,
         // Where `cargo check` builds the build scripts and proc macros.
         target_dir_config,
         ..Default::default()
