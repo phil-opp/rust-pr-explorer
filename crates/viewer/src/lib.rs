@@ -7,6 +7,7 @@
 mod bump;
 mod calls;
 mod canvas;
+mod carry;
 mod code;
 mod commit_filter;
 mod css;
@@ -82,6 +83,9 @@ pub struct State {
     /// The item last opened on the canvas from outside it, for the history
     /// entry (see [`nav`]).
     pub canvas_focus: Option<String>,
+    /// Where on the overview or module page a link last jumped to, for the
+    /// history entry (see [`nav`]).
+    pub anchor: Option<nav::PageAnchor>,
     /// The call view.
     pub calls: calls::Calls,
     pub space: space::Space,
@@ -149,6 +153,7 @@ pub fn start() {
             side_all: false,
             canvas: canvas::Canvas::new(root),
             canvas_focus: None,
+            anchor: None,
             calls: calls::Calls::default(),
             space: space::Space::new(),
             search: Vec::new(),
@@ -169,8 +174,23 @@ pub fn start() {
 }
 
 /// Shows a view, and adds a history entry for it if it differs from the
-/// current one.
+/// current one. Showing the page that is shown again keeps its anchor.
 pub fn set_view(app: &mut App, view: View) {
+    let same_page = |a: &nav::PageAnchor| {
+        a.view == view && app.s.view == view && (view != View::Module || a.module == app.s.module)
+    };
+    let anchor = app.s.anchor.take().filter(same_page).map(|a| a.to);
+    set_view_at(app, view, anchor);
+}
+
+/// Shows a view, the overview or a module page with what a link jumped
+/// to on it, if any, and adds a history entry for that.
+pub fn set_view_at(app: &mut App, view: View, anchor: Option<nav::Anchor>) {
+    app.s.anchor = anchor.map(|to| nav::PageAnchor {
+        view,
+        module: app.s.module.clone(),
+        to,
+    });
     if view != View::Canvas {
         app.s.canvas_focus = None;
     }
@@ -266,6 +286,22 @@ pub fn hide_tooltip() {
     }
 }
 
+thread_local! {
+    /// Whether the last pointer was a finger. A tap fires `mouseover`
+    /// too, but no `mouseout` follows, so a hover preview it opened would
+    /// stay on top of the page.
+    static TOUCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn note_pointer(ev: &PointerEvent) {
+    let touch = ev.pointer_type() == "touch";
+    if touch && !TOUCH.replace(true) {
+        hide_tooltip();
+    } else if ev.pointer_type() == "mouse" {
+        TOUCH.set(false);
+    }
+}
+
 fn install_listeners() {
     let doc: web_sys::EventTarget = dom::document().into();
     if let Some(overview) = dom::by_id("view-overview") {
@@ -294,6 +330,7 @@ fn install_listeners() {
         let (Some(el), Ok(pev)) = (dom::target_element(&ev), ev.dyn_into::<PointerEvent>()) else {
             return;
         };
+        note_pointer(&pev);
         with_app(|app| {
             // Search results are picked on press, before the input's blur hides them.
             if let Some(r) = dom::closest(&el, "#search-results [data-i]") {
@@ -312,6 +349,7 @@ fn install_listeners() {
         let Ok(pev) = ev.dyn_into::<PointerEvent>() else {
             return;
         };
+        note_pointer(&pev);
         with_app(|app| {
             canvas::on_pointer_move(app, &pev);
             space::on_pointer_move(app, &pev);
@@ -476,6 +514,8 @@ fn install_listeners() {
     dom::listen(&dom::window().into(), "hashchange", |_| {
         with_app(nav::on_hash_change);
     });
+    // `scroll` does not bubble; listen in the capture phase.
+    dom::listen_with(&doc, "scroll", true, true, |ev| nav::on_scroll(&ev));
     dom::listen(&dom::window().into(), "resize", |_| {
         with_app(|app| match app.s.view {
             View::Canvas => canvas::draw_edges(app),
@@ -567,7 +607,16 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
             // On a page: jump to the item if the page shows it, else open
             // it on the canvas.
             None => match row_on_page(&a, &id) {
-                Some(row) => reveal(&row),
+                Some(row) => {
+                    // A history entry, so that Back returns to the link.
+                    app.s.anchor = Some(nav::PageAnchor {
+                        view: app.s.view,
+                        module: app.s.module.clone(),
+                        to: nav::Anchor::Item(id),
+                    });
+                    reveal(&row);
+                    nav::record(app);
+                }
                 None => open_item(app, &id),
             },
         }
@@ -610,11 +659,9 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
     }
     if let Some(f) = dom::closest(el, "[data-goto-file]") {
         let path = dom::data(&f, "goto-file").unwrap_or_default();
-        set_view(app, View::Overview);
-        if let Some(card) = dom::query_all("#view-overview .ientry.file[data-file]")
-            .into_iter()
-            .find(|c| dom::data(c, "file").as_deref() == Some(path.as_str()))
-        {
+        let anchor = nav::Anchor::File(path);
+        set_view_at(app, View::Overview, Some(anchor.clone()));
+        if let Some(card) = anchor_el(View::Overview, &anchor) {
             reveal(&card);
         }
         return;
@@ -744,11 +791,63 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
         if sure {
             review::clear();
             app.s.rv_current = None;
+            close_modal();
             set_view(app, app.s.view);
         }
         return true;
     }
+    if dom::closest(el, "#rv-marks").is_some() {
+        open_modal("Your review marks", &carry::dialog_html());
+        return true;
+    }
+    if dom::closest(el, "#rv-load").is_some() {
+        match review::saved_marks().as_slice() {
+            [one] => load_marks(app, carry::import_saved(&one.data)),
+            _ => open_modal("Your review marks", &carry::dialog_html()),
+        }
+        return true;
+    }
+    if let Some(b) = dom::closest(el, "[data-rv-load]") {
+        let i: usize = dom::data(&b, "rv-load")
+            .and_then(|i| i.parse().ok())
+            .unwrap_or(usize::MAX);
+        if let Some(m) = review::saved_marks().get(i) {
+            load_marks(app, carry::import_saved(&m.data));
+        }
+        return true;
+    }
+    if dom::closest(el, "#rv-paste-load").is_some() {
+        load_marks(app, carry::import_text(&textarea_value("rv-paste")));
+        return true;
+    }
+    if dom::closest(el, "#rv-copy-marks").is_some() {
+        if let Some(text) = carry::copy_text() {
+            if let Some(out) =
+                dom::by_id("rv-out").and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
+            {
+                out.set_value(&text);
+                dom::toggle_class(&out, "hidden", false);
+                out.select();
+            }
+            copy(&text, "Your marks");
+        }
+        return true;
+    }
     false
+}
+
+/// Loads marks (see `carry`) and shows them.
+fn load_marks(app: &mut App, loaded: Result<String, String>) {
+    match loaded {
+        Ok(msg) => {
+            close_modal();
+            review::load(&app.d);
+            set_view(app, app.s.view);
+            pages::render_sidebar(app);
+            toast(&msg);
+        }
+        Err(e) => toast(&e),
+    }
 }
 
 /// Gives a unit a verdict and moves on to the next unreviewed one.
@@ -859,11 +958,11 @@ fn finish_output(app: &App, what: &str) {
             "The review as Markdown",
         ),
         "cmd" => (
-            post::command(&app.d, &comments, &own, event).unwrap_or_default(),
+            post::command(&app.d, &comments, &own, event, &carry::for_review()).unwrap_or_default(),
             "The command",
         ),
         _ => (
-            post::review_json(&comments, &own, event, commit),
+            post::review_json(&comments, &own, event, commit, &carry::for_review()),
             "The review's JSON",
         ),
     };
@@ -986,6 +1085,10 @@ fn go_next(app: &mut App, from: Option<String>, stay: bool) {
 /// file on the overview), or as a card next to `from` when the canvas is
 /// open.
 fn show_unit(app: &mut App, unit: &str, from: Option<&str>) {
+    nav::step(|| show_unit_now(app, unit, from));
+}
+
+fn show_unit_now(app: &mut App, unit: &str, from: Option<&str>) {
     app.s.rv_current = Some(unit.to_string());
     app.s.rv_hunk = None;
     if matches!(app.s.view, View::Overview | View::Module)
@@ -1046,9 +1149,24 @@ fn reveal_unit(section: &str, unit: &str) -> bool {
 /// the item.
 fn row_on_page(link: &Element, id: &str) -> Option<Element> {
     let view = dom::closest(link, "[id^='view-']")?;
-    dom::query_all_in(&view.into(), ".irow[data-id], .impl-line[data-id]")
+    item_row_in(&view, id)
+}
+
+fn item_row_in(view: &Element, id: &str) -> Option<Element> {
+    dom::query_all_in(&view.clone().into(), ".irow[data-id], .impl-line[data-id]")
         .into_iter()
         .find(|row| dom::data(row, "id").as_deref() == Some(id))
+}
+
+/// The element on a page that an anchor of its history entry names.
+fn anchor_el(view: View, anchor: &nav::Anchor) -> Option<Element> {
+    let sec = dom::by_id(&format!("view-{}", view.name()))?;
+    match anchor {
+        nav::Anchor::Item(id) => item_row_in(&sec, id),
+        nav::Anchor::File(path) => dom::query_all_in(&sec.into(), ".ientry.file[data-file]")
+            .into_iter()
+            .find(|c| dom::data(c, "file").as_deref() == Some(path.as_str())),
+    }
 }
 
 /// Outlines the current review unit once the views have drawn what a
@@ -1063,16 +1181,7 @@ fn mark_current_later() {
 
 /// Scrolls the row of a review control into view and highlights it.
 fn reveal(control: &Element) {
-    // Inside a closed group (generated files, for example): open it.
-    let mut up = control.parent_element();
-    while let Some(el) = up {
-        if let Some(det) = el.dyn_ref::<web_sys::HtmlDetailsElement>()
-            && !det.open()
-        {
-            det.set_open(true);
-        }
-        up = el.parent_element();
-    }
+    open_groups_around(control);
     let row = keys::row_of(control);
     let opts = web_sys::ScrollIntoViewOptions::new();
     opts.set_block(web_sys::ScrollLogicalPosition::Start);
@@ -1082,6 +1191,19 @@ fn reveal(control: &Element) {
     dom::raf(move || {
         dom::toggle_class(&row, "rv-flash", true);
     });
+}
+
+/// Opens the closed groups (generated files, for example) that `el` is in.
+fn open_groups_around(el: &Element) {
+    let mut up = el.parent_element();
+    while let Some(el) = up {
+        if let Some(det) = el.dyn_ref::<web_sys::HtmlDetailsElement>()
+            && !det.open()
+        {
+            det.set_open(true);
+        }
+        up = el.parent_element();
+    }
 }
 
 /// Tooltip with the fully qualified path of a hovered name.
@@ -1128,7 +1250,8 @@ fn on_mouse_over(app: &mut App, el: &Element) {
             dom::toggle_class(&c, "hover-target", false);
         }
     }
-    let Some(r) = dom::closest(el, ".ref") else {
+    // No hover previews for taps: the tap opens the item anyway.
+    let Some(r) = dom::closest(el, ".ref").filter(|_| !TOUCH.get()) else {
         hide_tooltip();
         return;
     };
