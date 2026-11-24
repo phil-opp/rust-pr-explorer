@@ -888,10 +888,12 @@ fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String)
             };
             review::set_mark(&app.d, &item, Some(note));
         }
+        review::mark_same_change(&app.d, &item, review::note(&item).verdict);
         pages::render_sidebar(app);
         go_next(app, Some(item), true);
         return;
     }
+    review::mark_same_change(&app.d, id, verdict);
     pages::render_sidebar(app);
     go_next(app, Some(id.to_string()), true);
 }
