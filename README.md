@@ -19,7 +19,7 @@ name: Rust Semantic Review
 on:
   pull_request:
   push:
-    branches: [main] # optional: fills the build cache that PRs start from
+    branches: [main] # optional: caches the built tool for all PRs
 permissions:
   contents: read
   pull-requests: write
@@ -36,7 +36,9 @@ jobs:
 | `syntax-only` | `false` | Skip rust-analyzer: faster, but method calls stay unresolved. |
 | `trust-project-code` | `auto` | Run the PR's build scripts and proc macros, so calls into generated code resolve. `auto`: on under `pull_request`, off when another event analyzes a PR. Refused under `pull_request_target`. |
 | `semver-checks` | `false` | Also run cargo-semver-checks. Builds the PR's code; refused under `pull_request_target`. |
-| `cache` / `save-cache` | `true` / on the default branch | Cache the built tool / also its dependencies. |
+| `cache` | `true` | Cache the built tool (about 12 MB), so it is built once per version. |
+| `cache-dependencies` | `false` | Also cache the tool's build dependencies (about 200 MB), for faster builds of new versions. |
+| `save-cache` | on the default branch | Where the dependencies' and target directory's caches are saved. |
 | `cache-target` | `false` | In trusted mode, also cache the analysis' target directory: much faster, but can take several GB. |
 | `retention-days` | repository setting | How long the page is kept. |
 | `pr`, `repository` | the triggering PR | Analyze another pull request. |

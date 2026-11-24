@@ -42,3 +42,5 @@ jobs:
         with:
           # Trusted mode is on by default under pull_request.
           cache-target: true
+          # Most PRs here change the tool, so it is built on most runs.
+          cache-dependencies: true

@@ -69,24 +69,35 @@ inputs:
     default: auto
   cache-target:
     description: >-
-      In trusted mode, also cache the analysis' cargo target directory like
-      the build's dependencies (see `save-cache`); on a push without a PR,
-      the action fills it from the checked out repository. Makes trusted
+      In trusted mode, also cache the analysis' cargo target directory,
+      saved where `save-cache` says; on a push without a PR, the action
+      fills it from the checked out repository. Makes trusted
       runs much faster, but the cache can be several GB for a large
       workspace, out of the repository's 10 GB of cache storage.
     default: "false"
   cache:
     description: >-
-      Use the Actions cache: for the built tool (about 12 MB) and, with
-      `save-cache`, for the build's dependencies (about 200 MB). With
-      `false`, nothing is read from or written to the cache, and every run
-      builds the tool from scratch (about 7 minutes).
+      Use the Actions cache for the built tool (about 12 MB), keyed by the
+      tool's sources, so the tool is only built once per version (about 7
+      minutes). With `false`, nothing is read from or written to the cache,
+      and every run builds the tool from scratch.
     default: "true"
+  cache-dependencies:
+    description: >-
+      Also cache the build's dependencies (about 200 MB, when `cache` is
+      on), so that a new version of the tool builds only its own crates
+      (the dependencies, mainly rust-analyzer, take about 5 minutes). Off
+      by default: the tool is built rarely, and the cache takes a share
+      of the repository's 10 GB of cache storage. Saved where `save-cache`
+      says.
+    default: "false"
   save-cache:
     description: >-
-      Save the cache of the build's dependencies (when `cache` is on). By
-      default only on the default branch, where every pull request can read
-      it. With `false`, only the built tool is cached.
+      Where to save the caches of the build's dependencies (with
+      `cache-dependencies`) and of the analysis' target directory (with
+      `cache-target`). By default only on the default branch, where every
+      pull request can read them. The built tool is cached on every branch
+      that builds it.
     default: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
   retention-days:
     description: Days to keep the page. Empty uses the repository's setting (90 days by default).
@@ -157,13 +168,17 @@ runs:
         components: rust-src
     # The built tool is cached under a hash of its sources, so a run whose
     # tool sources are unchanged (every run in a repository that only uses
-    # the action) skips the build.
+    # the action) skips the build. The key holds the runner's OS and
+    # architecture (the binary's target) and `rust-toolchain.toml` (the
+    # toolchain it is built with). It leaves out the exact version of
+    # `stable`: a binary built with an older one works the same, and
+    # every new release would rebuild the tool.
     - name: Hash the tool's sources
       id: key
       shell: bash
       working-directory: ${{ github.action_path }}
       run: |
-        hash=$(find Cargo.toml Cargo.lock crates -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-20)
+        hash=$(find Cargo.toml Cargo.lock rust-toolchain.toml crates -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -c1-20)
         echo "key=rust-semantic-review-bin-$RUNNER_OS-$RUNNER_ARCH-$hash" >> "$GITHUB_OUTPUT"
         echo "dir=$RUNNER_TEMP/rust-semantic-review-bin" >> "$GITHUB_OUTPUT"
         # The analysis' target directory (trusted mode) only fits the
@@ -178,12 +193,13 @@ runs:
       with:
         path: ${{ steps.key.outputs.dir }}
         key: ${{ steps.key.outputs.key }}
-    # Otherwise build it. Dependencies come from rust-cache. Caches are
-    # scoped to a branch, and a pull request can read those of its base
-    # branch, so they are only saved there (see `save-cache`): one cache
-    # that every PR starts from, instead of one per PR evicting the others.
+    # Otherwise build it. With `cache-dependencies`, dependencies come from
+    # rust-cache. Caches are scoped to a branch, and a pull request can read
+    # those of its base branch, so they are only saved there (see
+    # `save-cache`): one cache that every PR starts from, instead of one per
+    # PR evicting the others.
     - uses: Swatinem/rust-cache@v2
-      if: inputs.cache == 'true' && steps.bin.outputs.cache-hit != 'true'
+      if: inputs.cache == 'true' && inputs.cache-dependencies == 'true' && steps.bin.outputs.cache-hit != 'true'
       with:
         workspaces: ${{ github.action_path }} -> target
         shared-key: rust-semantic-review
