@@ -101,11 +101,12 @@ runs:
           echo "::error::trust-project-code and semver-checks run the PR's code, so they are refused under pull_request_target."
           exit 1
         fi
-    # rust-analyzer needs cargo and the standard library's source, also when
-    # the tool itself comes from the cache.
+    # The toolchain for the analysis: rust-analyzer needs cargo and the
+    # standard library's source, also when the tool itself comes from the
+    # cache. Building the tool uses this repository's `rust-toolchain.toml`,
+    # which adds the wasm target.
     - uses: dtolnay/rust-toolchain@stable
       with:
-        targets: wasm32-unknown-unknown
         components: rust-src
     # The built tool is cached under a hash of its sources, so a run whose
     # tool sources are unchanged (every run in a repository that only uses
@@ -119,8 +120,9 @@ runs:
         echo "key=rust-semantic-review-bin-$RUNNER_OS-$RUNNER_ARCH-$hash" >> "$GITHUB_OUTPUT"
         echo "dir=$RUNNER_TEMP/rust-semantic-review-bin" >> "$GITHUB_OUTPUT"
         # The analysis' target directory (trusted mode) only fits the
-        # toolchain that built it.
-        echo "rustc=$(rustc -V | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
+        # toolchain that built it: the one of the analyzed checkout, not the
+        # one this directory's `rust-toolchain.toml` names.
+        echo "rustc=$(cd "$GITHUB_WORKSPACE" && rustc -V | sha256sum | cut -c1-12)" >> "$GITHUB_OUTPUT"
         echo "target=$RUNNER_TEMP/rust-semantic-review-target" >> "$GITHUB_OUTPUT"
     - name: Restore the built tool
       id: bin
