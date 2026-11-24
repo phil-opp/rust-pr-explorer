@@ -7,66 +7,226 @@
 //! the reviewer posts it with their own GitHub CLI login. The review can
 //! also be copied as Markdown, to paste as an ordinary comment.
 //!
-//! A comment on an item goes on a line of the item that GitHub's diff
-//! shows: its first added line, else its first removed line, else a line
-//! of context. GitHub rejects the whole review if a comment is on a line
-//! its diff doesn't show, so the lines come from the file's own diff (the
-//! changed lines with 3 lines of context, as GitHub shows them). Comments
-//! that fit on no line go into the review's text.
+//! A comment goes on lines of its item that GitHub's diff shows: on a
+//! hunk, or an item with one change, from that change's first added
+//! line to its last one in the same hunk of GitHub's diff (else its
+//! removed lines); on other items, their first added line, else their
+//! first removed line, else a line of context. GitHub rejects the whole
+//! review if a comment is on a line its diff doesn't show, so the lines
+//! come from the file's own diff (the changed lines with 3 lines of
+//! context, as GitHub shows them). Comments that fit on no line go into
+//! the review's text, and the command falls back to putting all of them
+//! there if GitHub rejects the review anyway.
 
 use crate::code::esc;
 use crate::data::Data;
 use crate::review::{self, Mark, Note, Verdict};
-use model::{ChangedFile, Item, SourceLine, Status};
+use model::{ChangedFile, Item, PrMeta, SourceLine, Status};
 use serde_json::{Value, json};
 
-/// Where a comment goes in GitHub's diff.
+/// Where a comment goes in GitHub's diff: one line, or the lines from
+/// `start_line` to `line`, all on one side.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Loc {
     pub path: String,
     pub line: usize,
+    /// The first line of a comment on several lines.
+    pub start_line: Option<usize>,
     /// `RIGHT` for the PR's version of a line, `LEFT` for the base's.
     pub side: &'static str,
 }
 
-/// Every line of a file's diff: its tag, and its line number in the base
-/// and in the PR (only one of them counts for `+` and `-` lines).
-fn numbered(hunks: &[SourceLine]) -> Vec<(char, usize, usize)> {
+impl Loc {
+    /// The first line it covers.
+    pub fn first(&self) -> usize {
+        self.start_line.unwrap_or(self.line)
+    }
+
+    /// "line 10" or "lines 10–14".
+    pub fn lines(&self) -> String {
+        match self.start_line {
+            Some(s) => format!("lines {s}–{}", self.line),
+            None => format!("line {}", self.line),
+        }
+    }
+}
+
+/// A line of a file's diff as GitHub shows it: its tag, its line number
+/// in the base and in the PR (only one of them counts for `+` and `-`
+/// lines), and which hunk of the diff it is in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Row {
+    tag: char,
+    old: usize,
+    new: usize,
+    hunk: usize,
+}
+
+impl Row {
+    /// Its line number on the side its tag is on (the PR's for context).
+    fn num(&self) -> usize {
+        if self.tag == '-' { self.old } else { self.new }
+    }
+}
+
+/// Lines of context around a change, as GitHub shows them.
+const CONTEXT: usize = 3;
+
+/// The rows of a diff with its `@` lines.
+fn numbered(hunks: &[SourceLine]) -> Vec<Row> {
     let (mut o, mut n) = (0, 0);
+    let mut hunk = 0;
     let mut out = Vec::new();
     for l in hunks {
-        match l.0 {
+        let tag = match l.0 {
             '@' => {
                 let mut it = l.1.split(' ').filter_map(|x| x.parse::<usize>().ok());
                 o = it.next().unwrap_or(1);
                 n = it.next().unwrap_or(1);
+                hunk += usize::from(!out.is_empty());
+                continue;
             }
-            '+' => {
-                out.push(('+', o, n));
-                n += 1;
-            }
-            '-' => {
-                out.push(('-', o, n));
-                o += 1;
-            }
-            _ => {
-                out.push((' ', o, n));
-                o += 1;
-                n += 1;
-            }
+            '+' | '-' => l.0,
+            _ => ' ',
+        };
+        out.push(Row {
+            tag,
+            old: o,
+            new: n,
+            hunk,
+        });
+        o += usize::from(tag != '+');
+        n += usize::from(tag != '-');
+    }
+    out
+}
+
+/// The rows of a diff from the numbers of its added lines (in the PR) and
+/// removed lines (in the base): the unchanged lines between follow from
+/// them, and get cut into hunks as GitHub does, with `CONTEXT` lines
+/// around each change. Changes with up to twice that between them share
+/// a hunk.
+fn rows_of_lines(added: &[u32], removed: &[u32]) -> Vec<Row> {
+    let (mut a, mut r) = (added.to_vec(), removed.to_vec());
+    a.sort_unstable();
+    r.sort_unstable();
+    let (a, r) = (&a[..], &r[..]);
+    let (mut i, mut j) = (0, 0);
+    let (mut o, mut n) = (1, 1);
+    let mut hunk = 0;
+    let mut seen = false;
+    let mut out = Vec::new();
+    let push = |out: &mut Vec<Row>, tag, o, n, hunk| {
+        out.push(Row {
+            tag,
+            old: o,
+            new: n,
+            hunk,
+        })
+    };
+    loop {
+        // Skip numbers out of order (only in broken data).
+        while i < r.len() && (r[i] as usize) < o {
+            i += 1;
+        }
+        while j < a.len() && (a[j] as usize) < n {
+            j += 1;
+        }
+        // Removed lines first, as in a unified diff.
+        if i < r.len() && r[i] as usize == o {
+            push(&mut out, '-', o, n, hunk);
+            (o, i, seen) = (o + 1, i + 1, true);
+            continue;
+        }
+        if j < a.len() && a[j] as usize == n {
+            push(&mut out, '+', o, n, hunk);
+            (n, j, seen) = (n + 1, j + 1, true);
+            continue;
+        }
+        // Unchanged lines up to the next change.
+        let to_r = r.get(i).map_or(usize::MAX, |&x| x as usize - o);
+        let to_a = a.get(j).map_or(usize::MAX, |&x| x as usize - n);
+        let k = to_r.min(to_a);
+        let before = if seen { k.min(CONTEXT) } else { 0 };
+        for _ in 0..before {
+            push(&mut out, ' ', o, n, hunk);
+            (o, n) = (o + 1, n + 1);
+        }
+        if k == usize::MAX {
+            break;
+        }
+        let after = (k - before).min(CONTEXT);
+        let skipped = k - before - after;
+        if skipped > 0 && seen {
+            hunk += 1;
+        }
+        (o, n) = (o + skipped, n + skipped);
+        for _ in 0..after {
+            push(&mut out, ' ', o, n, hunk);
+            (o, n) = (o + 1, n + 1);
         }
     }
     out
 }
 
-/// The lines of a file that GitHub's diff shows, as `numbered` gives
-/// them. For an analyzed file, whose hunks only hold the changes outside
-/// items, also its other changed lines (without their context).
-fn diff_lines(f: &ChangedFile) -> Vec<(char, usize, usize)> {
-    let mut out = numbered(&f.hunks);
-    out.extend(f.added_lines.iter().map(|&n| ('+', 0, n as usize)));
-    out.extend(f.removed_lines.iter().map(|&o| ('-', o as usize, 0)));
-    out
+/// The lines of a file that GitHub's diff shows. For an analyzed file,
+/// whose hunks only hold the changes outside items, they follow from the
+/// numbers of all its changed lines.
+fn diff_rows(f: &ChangedFile) -> Vec<Row> {
+    if f.added_lines.is_empty() && f.removed_lines.is_empty() {
+        numbered(&f.hunks)
+    } else {
+        rows_of_lines(&f.added_lines, &f.removed_lines)
+    }
+}
+
+/// The rows of the diff of `path`.
+fn rows_of(files: &[ChangedFile], path: &str) -> Vec<Row> {
+    files
+        .iter()
+        .find(|f| f.path == path)
+        .map(diff_rows)
+        .unwrap_or_default()
+}
+
+fn side_of(tag: char) -> &'static str {
+    if tag == '-' { "LEFT" } else { "RIGHT" }
+}
+
+/// The first of `lines` (sorted) with the tag `tag` that the diff shows.
+fn first_of(rows: &[Row], path: &str, tag: char, lines: &[usize]) -> Option<Loc> {
+    rows.iter()
+        .filter(|r| r.tag == tag && lines.binary_search(&r.num()).is_ok())
+        .min_by_key(|r| r.num())
+        .map(|r| Loc {
+            path: path.to_string(),
+            line: r.num(),
+            start_line: None,
+            side: side_of(tag),
+        })
+}
+
+/// The lines `lines` (sorted) with the tag `tag` cover, from the first
+/// one the diff shows to the last one in the same hunk of the diff:
+/// GitHub takes a comment on several lines only within one hunk.
+fn span_of(rows: &[Row], path: &str, tag: char, lines: &[usize]) -> Option<Loc> {
+    let shown: Vec<&Row> = rows
+        .iter()
+        .filter(|r| r.tag == tag && lines.binary_search(&r.num()).is_ok())
+        .collect();
+    let first = shown.iter().min_by_key(|r| r.num())?;
+    let last = shown
+        .iter()
+        .filter(|r| r.hunk == first.hunk)
+        .map(|r| r.num())
+        .max()
+        .unwrap_or(first.num());
+    Some(Loc {
+        path: path.to_string(),
+        line: last,
+        start_line: (last > first.num()).then_some(first.num()),
+        side: side_of(tag),
+    })
 }
 
 /// The line a comment on a file outside the Rust analysis goes on: its
@@ -74,76 +234,69 @@ fn diff_lines(f: &ChangedFile) -> Vec<(char, usize, usize)> {
 pub fn file_loc(f: &ChangedFile) -> Option<Loc> {
     numbered(&f.hunks)
         .into_iter()
-        .find(|l| l.0 != ' ')
-        .map(|(tag, o, n)| Loc {
+        .find(|l| l.tag != ' ')
+        .map(|r| Loc {
             path: f.path.clone(),
-            line: if tag == '+' { n } else { o },
-            side: if tag == '+' { "RIGHT" } else { "LEFT" },
+            line: r.num(),
+            start_line: None,
+            side: side_of(r.tag),
         })
 }
 
-/// The line a comment on an item goes on, from the diffs of its files.
-pub fn item_loc(files: &[ChangedFile], it: &Item) -> Option<Loc> {
-    let count = |tags: &[char]| it.source.iter().filter(|l| tags.contains(&l.0)).count();
-    let span = |start: usize, n: usize| start..=start + n.saturating_sub(1);
-    let diff = |path: &str| {
-        files
-            .iter()
-            .find(|f| f.path == path)
-            .map(diff_lines)
-            .unwrap_or_default()
-    };
-    // The PR's version: the item's lines in its file.
-    let head = (it.status != Status::Removed).then(|| {
-        (
-            it.info.file.as_str(),
-            span(it.info.line, count(&[' ', '+'])),
-        )
-    });
-    // The base's version, maybe in another file (a moved item).
-    let base = (it.status != Status::Added).then(|| {
-        (
-            it.old_file.as_deref().unwrap_or(&it.info.file),
-            span(it.old_line.unwrap_or(it.info.line), count(&[' ', '-'])),
-        )
-    });
-    let find = |side: &Option<(&str, std::ops::RangeInclusive<usize>)>, tag: char| {
-        let (path, range) = side.as_ref()?;
-        diff(path)
-            .into_iter()
-            .find(|&(t, o, n)| t == tag && range.contains(if tag == '-' { &o } else { &n }))
-            .map(|(_, o, n)| Loc {
-                path: path.to_string(),
-                line: if tag == '-' { o } else { n },
-                side: if tag == '-' { "LEFT" } else { "RIGHT" },
-            })
-    };
-    find(&head, '+')
-        .or_else(|| find(&base, '-'))
-        .or_else(|| find(&head, ' '))
+/// The lines an item has in the PR's version (`' '` and `'+'`) and in
+/// the base (`' '` and `'-'`), by tag.
+fn item_lines(it: &Item, tags: &[char]) -> Vec<usize> {
+    let (mut o, mut n) = (it.old_line.unwrap_or(it.info.line), it.info.line);
+    let mut out = Vec::new();
+    for l in &it.source {
+        let tag = if l.0 == '+' || l.0 == '-' { l.0 } else { ' ' };
+        if tags.contains(&tag) {
+            out.push(if tag == '-' { o } else { n });
+        }
+        o += usize::from(tag != '+');
+        n += usize::from(tag != '-');
+    }
+    out
 }
 
-/// The line a comment on one hunk of an item goes on: its first changed
-/// line that GitHub's diff shows.
-pub fn hunk_loc(files: &[ChangedFile], it: &Item, h: &review::Hunk) -> Option<Loc> {
-    let find = |path: &str, tag: char, lines: &[usize]| {
-        let f = files.iter().find(|f| f.path == path)?;
-        diff_lines(f)
-            .into_iter()
-            .find(|&(t, o, n)| t == tag && lines.contains(if tag == '-' { &o } else { &n }))
-            .map(|(_, o, n)| Loc {
-                path: path.to_string(),
-                line: if tag == '-' { o } else { n },
-                side: if tag == '-' { "LEFT" } else { "RIGHT" },
-            })
-    };
-    let added = || find(&it.info.file, '+', &h.new);
-    let removed = || find(it.old_file.as_deref().unwrap_or(&it.info.file), '-', &h.old);
-    if h.starts_added {
-        added().or_else(removed)
-    } else {
-        removed().or_else(added)
+/// Where a comment on an item goes, from the diffs of its files. An item
+/// with one change (not counting reformatting) gets it on that change's
+/// lines: its added lines, or if it has none its removed lines. Others
+/// get it on their first added line, else their first removed line, else
+/// a line of context: an added or removed item at its start, and one
+/// with several changes not on the first of them, since the comment is
+/// on all of them.
+pub fn item_loc(files: &[ChangedFile], it: &Item) -> Option<Loc> {
+    let head = it.info.file.as_str();
+    let base = it.old_file.as_deref().unwrap_or(head);
+    if let [one] = &review::changes(it)[..]
+        && let Some(l) = span_of(&rows_of(files, head), head, '+', &one.new)
+            .or_else(|| span_of(&rows_of(files, base), base, '-', &one.old))
+    {
+        return Some(l);
     }
+    let added = || first_of(&rows_of(files, head), head, '+', &item_lines(it, &['+']));
+    let removed = || first_of(&rows_of(files, base), base, '-', &item_lines(it, &['-']));
+    let context = || {
+        (it.status != Status::Removed)
+            .then(|| first_of(&rows_of(files, head), head, ' ', &item_lines(it, &[' '])))
+            .flatten()
+    };
+    match it.status {
+        Status::Removed => removed(),
+        _ => added().or_else(removed).or_else(context),
+    }
+}
+
+/// Where a comment on one hunk of an item goes: on its added lines that
+/// GitHub's diff shows, as far as one hunk of that diff holds them, else
+/// on its removed lines. The PR's lines come first since the comment is
+/// on what the PR has (and GitHub only offers suggestions there).
+pub fn hunk_loc(files: &[ChangedFile], it: &Item, h: &review::Hunk) -> Option<Loc> {
+    let head = it.info.file.as_str();
+    let base = it.old_file.as_deref().unwrap_or(head);
+    span_of(&rows_of(files, head), head, '+', &h.new)
+        .or_else(|| span_of(&rows_of(files, base), base, '-', &h.old))
 }
 
 /// The address of a line in the pull request's "Files changed" view on
@@ -157,7 +310,7 @@ pub fn github_url(d: &Data, l: &Loc) -> Option<String> {
         pr.number,
         crate::sha256::hex(l.path.as_bytes()),
         if l.side == "LEFT" { 'L' } else { 'R' },
-        l.line
+        l.first()
     ))
 }
 
@@ -168,10 +321,10 @@ pub fn github_link(d: &Data, l: Option<Loc>, class: &str, label: &str, what: &st
         return String::new();
     };
     format!(
-        r#"<a class="{class}" href="{}" target="_blank" rel="noopener" title="Open {what} on GitHub ({} line {})">{label}</a>"#,
+        r#"<a class="{class}" href="{}" target="_blank" rel="noopener" title="Open {what} on GitHub ({} {})">{label}</a>"#,
         esc(&url),
         esc(&l.path),
-        l.line
+        l.lines()
     )
 }
 
@@ -209,6 +362,87 @@ pub fn part_label(unit: &str) -> String {
         })
 }
 
+/// The address of lines of a file on GitHub, in the compared version:
+/// the PR's commit for `RIGHT`, the base's for `LEFT`. No lines for the
+/// whole file.
+fn blob_url(pr: &PrMeta, path: &str, side: &str, lines: Option<(usize, usize)>) -> String {
+    let rev = if side == "LEFT" {
+        if pr.base_commit.is_empty() {
+            &pr.base_rev
+        } else {
+            &pr.base_commit
+        }
+    } else if pr.head_commit.is_empty() {
+        &pr.head_rev
+    } else {
+        &pr.head_commit
+    };
+    let anchor = match lines {
+        Some((a, b)) if b > a => format!("#L{a}-L{b}"),
+        Some((a, _)) => format!("#L{a}"),
+        None => String::new(),
+    };
+    // Spaces and the like in the path.
+    let path: String = path
+        .chars()
+        .map(|c| match c {
+            ' ' => "%20".to_string(),
+            '#' => "%23".to_string(),
+            '?' => "%3F".to_string(),
+            '%' => "%25".to_string(),
+            c => c.to_string(),
+        })
+        .collect();
+    format!("https://github.com/{}/blob/{rev}/{path}{anchor}", pr.repo)
+}
+
+/// Where a unit is, as a Markdown link to its lines on GitHub, for a
+/// comment in the review's text: the lines its comment goes on, else all
+/// of an item's lines, else the whole file. `None` if the page isn't for
+/// a pull request.
+pub fn place_link(d: &Data, unit: &str, l: Option<&Loc>) -> Option<String> {
+    let pr = d.out.meta.pr.as_ref()?;
+    let link = |path: &str, side: &str, lines: Option<(usize, usize)>, label: String| {
+        format!("[`{path}` {label}]({})", blob_url(pr, path, side, lines))
+    };
+    if let Some(l) = l {
+        return Some(link(&l.path, l.side, Some((l.first(), l.line)), l.lines()));
+    }
+    if let Some(path) = unit.strip_prefix("file:") {
+        let removed = d
+            .out
+            .files
+            .iter()
+            .any(|f| f.path == path && f.status == Status::Removed);
+        let side = if removed { "LEFT" } else { "RIGHT" };
+        return Some(format!("[`{path}`]({})", blob_url(pr, path, side, None)));
+    }
+    let it = d.item(&review::hunk_item(unit).unwrap_or_else(|| unit.to_string()))?;
+    let (path, side, start, tags) = if it.status == Status::Removed {
+        (
+            it.old_file.as_deref().unwrap_or(&it.info.file),
+            "LEFT",
+            it.old_line.unwrap_or(it.info.line),
+            [' ', '-'],
+        )
+    } else {
+        (it.info.file.as_str(), "RIGHT", it.info.line, [' ', '+'])
+    };
+    let n = it
+        .source
+        .iter()
+        .filter(|l| tags.contains(&l.0))
+        .count()
+        .max(1);
+    let end = start + n - 1;
+    let label = if end > start {
+        format!("lines {start}–{end}")
+    } else {
+        format!("line {start}")
+    };
+    Some(link(path, side, Some((start, end)), label))
+}
+
 /// The review event GitHub takes.
 pub fn event_name(v: Verdict) -> &'static str {
     match v {
@@ -227,11 +461,26 @@ pub struct Comment {
     pub verdict: Verdict,
     pub text: String,
     pub loc: Option<Loc>,
+    /// Where it is, as a Markdown link to the lines on GitHub, for the
+    /// review's text.
+    pub link: Option<String>,
 }
 
 impl Comment {
+    /// The first line of an inline comment.
     fn lead(&self) -> String {
         self.lead_at("")
+    }
+
+    /// The first line of the comment in the review's text: with where it
+    /// is, since it's on no line there.
+    fn lead_in_text(&self) -> String {
+        self.lead_at(
+            &self
+                .link
+                .as_ref()
+                .map_or(String::new(), |l| format!(" ({l})")),
+        )
     }
 
     /// The comment's first line, with where it is (`at`) for Markdown.
@@ -303,12 +552,14 @@ pub fn summary(d: &Data) -> Summary {
             }
         }
         if has_text {
+            let loc = loc(d, &unit);
             s.comments.push(Comment {
                 name: unit_name(d, &unit),
                 part: part_label(&unit),
                 verdict,
                 text: text.trim().to_string(),
-                loc: loc(d, &unit),
+                link: place_link(d, &unit, loc.as_ref()),
+                loc,
             });
         }
     }
@@ -316,14 +567,15 @@ pub fn summary(d: &Data) -> Summary {
 }
 
 /// The review's text: the reviewer's own, then the comments that fit on
-/// no line. GitHub requires a text for anything but an approval.
-fn body(comments: &[Comment], own: &str, event: Verdict) -> String {
+/// no line (all of them unless `inline`). GitHub requires a text for
+/// anything but an approval.
+fn body(comments: &[Comment], own: &str, event: Verdict, inline: bool) -> String {
     let mut parts: Vec<String> = Vec::new();
     if !own.trim().is_empty() {
         parts.push(own.trim().to_string());
     }
-    for c in comments.iter().filter(|c| c.loc.is_none()) {
-        parts.push(format!("{}\n\n{}", c.lead(), c.text));
+    for c in comments.iter().filter(|c| !inline || c.loc.is_none()) {
+        parts.push(format!("{}\n\n{}", c.lead_in_text(), c.text));
     }
     if parts.is_empty() && event != Verdict::Approve {
         parts.push(if comments.is_empty() {
@@ -337,23 +589,38 @@ fn body(comments: &[Comment], own: &str, event: Verdict) -> String {
 
 /// The request body for GitHub's "create a review" API.
 pub fn review_json(comments: &[Comment], own: &str, event: Verdict, commit: &str) -> String {
-    serde_json::to_string_pretty(&review_value(comments, own, event, commit)).unwrap_or_default()
+    serde_json::to_string_pretty(&review_value(comments, own, event, commit, true))
+        .unwrap_or_default()
 }
 
-fn review_value(comments: &[Comment], own: &str, event: Verdict, commit: &str) -> Value {
+/// The review as GitHub's API takes it; with `inline`, comments that fit
+/// on a line go there, else all go into the review's text.
+fn review_value(
+    comments: &[Comment],
+    own: &str,
+    event: Verdict,
+    commit: &str,
+    inline: bool,
+) -> Value {
     let mut v = json!({
         "event": event_name(event),
-        "body": body(comments, own, event),
+        "body": body(comments, own, event, inline),
         "comments": comments
             .iter()
+            .filter(|_| inline)
             .filter_map(|c| {
                 let l = c.loc.as_ref()?;
-                Some(json!({
+                let mut o = json!({
                     "path": l.path,
                     "line": l.line,
                     "side": l.side,
                     "body": format!("{}\n\n{}", c.lead(), c.text),
-                }))
+                });
+                if let Some(start) = l.start_line {
+                    o["start_line"] = json!(start);
+                    o["start_side"] = json!(l.side);
+                }
+                Some(o)
             })
             .collect::<Vec<Value>>(),
     });
@@ -381,14 +648,16 @@ pub fn review_markdown(comments: &[Comment], own: &str, event: Verdict) -> Strin
         out.push_str(&format!("\n{}\n", own.trim()));
     }
     for c in comments {
-        let at = c.loc.as_ref().map_or(String::new(), |l| {
-            format!(
-                " (`{}` line {}{})",
+        let at = match (&c.link, &c.loc) {
+            (Some(link), _) => format!(" ({link})"),
+            (None, Some(l)) => format!(
+                " (`{}` {}{})",
                 l.path,
-                l.line,
+                l.lines(),
                 if l.side == "LEFT" { ", before" } else { "" }
-            )
-        });
+            ),
+            (None, None) => String::new(),
+        };
         out.push_str(&format!("\n{}\n\n{}\n", c.lead_at(&at), c.text));
     }
     out
@@ -423,10 +692,16 @@ fn shell_safe_json(v: &Value) -> String {
 /// piped in, so nothing needs to be saved first; `printf` because zsh's
 /// `echo` would turn `\n` into line breaks.
 ///
-/// GitHub refuses an approval of one's own PR. So an approval falls back
-/// (`||`, which bash, zsh and fish all have) to a comment review whose
-/// text starts with "Approved.": any other error would make that fail
-/// too, and the page can't know who runs the command.
+/// Each attempt runs only if the one before failed (`||`, which bash, zsh
+/// and fish all have), and GitHub creates a review whole or not at all.
+/// GitHub refuses the whole review if one comment is on a line its diff
+/// doesn't show, which can happen where its diff differs from the page's
+/// (a renamed file, another base, a tie the two diff algorithms break
+/// differently). So the review is tried again with every comment in its
+/// text, with a link to its lines. And GitHub refuses an approval of
+/// one's own PR, so an approval is tried again as a comment review whose
+/// text starts with "Approved.", before giving up the inline comments.
+/// The page can't tell these errors apart, or know who runs the command.
 pub fn command(d: &Data, comments: &[Comment], own: &str, event: Verdict) -> Option<String> {
     let pr = d.out.meta.pr.as_ref()?;
     let post = |v: &Value| {
@@ -437,11 +712,29 @@ pub fn command(d: &Data, comments: &[Comment], own: &str, event: Verdict) -> Opt
             pr.number,
         )
     };
-    let v = review_value(comments, own, event, &pr.head_commit);
-    if event != Verdict::Approve {
-        return Some(post(&v));
+    let tries = attempts(comments, own, event, &pr.head_commit);
+    Some(tries.iter().map(post).collect::<Vec<_>>().join(" || "))
+}
+
+/// The reviews `command` tries to post, in order.
+fn attempts(comments: &[Comment], own: &str, event: Verdict, commit: &str) -> Vec<Value> {
+    let v = |inline| review_value(comments, own, event, commit, inline);
+    let mut tries = vec![v(true)];
+    if event == Verdict::Approve {
+        tries.push(approved_comment(v(true)));
     }
-    Some(format!("{} || {}", post(&v), post(&approved_comment(v))))
+    tries.push(v(false));
+    if event == Verdict::Approve {
+        tries.push(approved_comment(v(false)));
+    }
+    // Without inline comments, the second half is the first again.
+    let mut out: Vec<Value> = Vec::new();
+    for t in tries {
+        if !out.contains(&t) {
+            out.push(t);
+        }
+    }
+    out
 }
 
 /// An approval as a comment review, for the author's own PR.
@@ -488,7 +781,12 @@ pub fn posts_html(comments: &[Comment], own: &str, event: Verdict) -> String {
     } else {
         ""
     };
-    format!("The command posts {list}.{own_pr}")
+    let fallback = if placed > 0 {
+        " If GitHub refuses a comment's line, it posts the review again with every comment in its text, linked to its lines."
+    } else {
+        ""
+    };
+    format!("The command posts {list}.{own_pr}{fallback}")
 }
 
 /// The dialog that sums up the review and offers ways to post it.
@@ -550,9 +848,9 @@ pub fn finish_html(d: &Data) -> String {
                 esc(&c.part),
                 c.loc.as_ref().map_or("in the review's text".to_string(), |l| esc(
                     &format!(
-                        "{} line {}{}",
+                        "{} {}{}",
                         l.path,
-                        l.line,
+                        l.lines(),
                         if l.side == "LEFT" { " (base)" } else { "" }
                     )
                 )),
@@ -570,9 +868,9 @@ pub fn finish_html(d: &Data) -> String {
             what = posts_html(&s.comments, "", suggested),
             rev = esc(&pr.head_rev),
             custom = if pr.since.is_some() {
-                " This page compares with an earlier commit of the PR, not with its base branch, so comments on removed lines may not fit GitHub's diff; GitHub then rejects the review."
+                " This page compares with an earlier commit of the PR, not with its base branch, so some comments may not fit GitHub's diff; they then go into the review's text."
             } else if pr.custom_base {
-                " This page compares against a base given with <code>--base</code>, so its diff may differ from GitHub's; GitHub then rejects the review."
+                " This page compares against a base given with <code>--base</code>, so its diff may differ from GitHub's; comments that don't fit it then go into the review's text."
             } else {
                 ""
             },
@@ -625,8 +923,8 @@ pub fn editor_html(d: &Data, unit: &str, verdict: Verdict) -> String {
     let at = if d.out.meta.pr.is_some() {
         match loc(d, unit) {
             Some(l) => format!(
-                "Posted to GitHub, it goes on line {} of <code>{}</code>{}.",
-                l.line,
+                "Posted to GitHub, it goes on {} of <code>{}</code>{}.",
+                l.lines(),
                 esc(&l.path),
                 if l.side == "LEFT" {
                     " (the base version)"
@@ -673,7 +971,7 @@ pub fn editor_html(d: &Data, unit: &str, verdict: Verdict) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use model::Kind;
+    use model::{Kind, Output};
 
     fn sl(tag: char, text: &str) -> SourceLine {
         SourceLine(tag, text.into())
@@ -702,6 +1000,15 @@ mod tests {
         it
     }
 
+    fn at(path: &str, start: Option<usize>, line: usize, side: &'static str) -> Option<Loc> {
+        Some(Loc {
+            path: path.into(),
+            line,
+            start_line: start,
+            side,
+        })
+    }
+
     /// `src/lib.rs`: line 10 of the base became lines 10 and 11 of the
     /// PR; a hunk further down removed line 40 of the base (38 in the PR).
     fn lib() -> ChangedFile {
@@ -724,9 +1031,9 @@ mod tests {
     }
 
     #[test]
-    fn comments_go_on_the_first_changed_line() {
+    fn comments_go_on_the_change() {
         let files = [lib()];
-        // fn f at line 8 in both versions.
+        // fn f at line 8 in both versions: on its added lines.
         let src = vec![
             sl(' ', "fn f() {"),
             sl(' ', "    a();"),
@@ -738,11 +1045,7 @@ mod tests {
         let f = item(Status::Changed, 8, src);
         assert_eq!(
             item_loc(&files, &f),
-            Some(Loc {
-                path: "src/lib.rs".into(),
-                line: 10,
-                side: "RIGHT"
-            })
+            at("src/lib.rs", Some(10), 11, "RIGHT")
         );
         // Only a removed line: on the base side.
         let mut g = item(
@@ -751,14 +1054,27 @@ mod tests {
             vec![sl(' ', "fn g() {"), sl('-', "    old();"), sl(' ', "}")],
         );
         g.old_line = Some(38);
-        assert_eq!(
-            item_loc(&files, &g),
-            Some(Loc {
-                path: "src/lib.rs".into(),
-                line: 39,
-                side: "LEFT"
-            })
+        assert_eq!(item_loc(&files, &g), at("src/lib.rs", None, 39, "LEFT"));
+    }
+
+    #[test]
+    fn added_items_take_their_first_line() {
+        let f = file(
+            "src/lib.rs",
+            vec![
+                sl('@', "4 4"),
+                sl(' ', "}"),
+                sl('+', "fn n() {"),
+                sl('+', "    x();"),
+                sl('+', "}"),
+            ],
         );
+        let n = item(
+            Status::Added,
+            5,
+            vec![sl('+', "fn n() {"), sl('+', "    x();"), sl('+', "}")],
+        );
+        assert_eq!(item_loc(&[f], &n), at("src/lib.rs", None, 5, "RIGHT"));
     }
 
     #[test]
@@ -772,13 +1088,128 @@ mod tests {
         it.source
             .extend([sl('-', "    a();"), sl('+', "    b();"), sl(' ', "}")]);
         assert_eq!(
-            item_loc(std::slice::from_ref(&f), &it).map(|l| (l.line, l.side)),
-            Some((9, "RIGHT"))
+            item_loc(std::slice::from_ref(&f), &it),
+            at("src/lib.rs", None, 9, "RIGHT")
         );
         // Without the lists, it fits on no line.
         f.added_lines.clear();
         f.removed_lines.clear();
         assert_eq!(item_loc(&[f], &it), None);
+    }
+
+    #[test]
+    fn rows_follow_from_the_changed_lines() {
+        // Base line 5 became PR lines 5 and 6, and a line was added after
+        // base line 15 (PR line 17): 10 unchanged lines apart, so two
+        // hunks, with 3 lines of context each.
+        let rows = rows_of_lines(&[5, 6, 17], &[5]);
+        let r = |tag, old, new, hunk| Row {
+            tag,
+            old,
+            new,
+            hunk,
+        };
+        assert_eq!(
+            rows,
+            vec![
+                r(' ', 2, 2, 0),
+                r(' ', 3, 3, 0),
+                r(' ', 4, 4, 0),
+                r('-', 5, 5, 0),
+                r('+', 6, 5, 0),
+                r('+', 6, 6, 0),
+                r(' ', 6, 7, 0),
+                r(' ', 7, 8, 0),
+                r(' ', 8, 9, 0),
+                r(' ', 13, 14, 1),
+                r(' ', 14, 15, 1),
+                r(' ', 15, 16, 1),
+                r('+', 16, 17, 1),
+                r(' ', 16, 18, 1),
+                r(' ', 17, 19, 1),
+                r(' ', 18, 20, 1),
+            ]
+        );
+        // The same as the diff with its context lines gives.
+        let hunks = vec![
+            sl('@', "2 2"),
+            sl(' ', "2"),
+            sl(' ', "3"),
+            sl(' ', "4"),
+            sl('-', "5"),
+            sl('+', "5a"),
+            sl('+', "5b"),
+            sl(' ', "6"),
+            sl(' ', "7"),
+            sl(' ', "8"),
+            sl('@', "13 14"),
+            sl(' ', "13"),
+            sl(' ', "14"),
+            sl(' ', "15"),
+            sl('+', "new"),
+            sl(' ', "16"),
+            sl(' ', "17"),
+            sl(' ', "18"),
+        ];
+        assert_eq!(numbered(&hunks), rows);
+        // Six unchanged lines apart: one hunk.
+        let rows = rows_of_lines(&[1, 8], &[]);
+        assert!(rows.iter().all(|r| r.hunk == 0));
+        assert_eq!(rows.len(), 11);
+    }
+
+    #[test]
+    fn ranges_stay_in_one_hunk_of_the_diff() {
+        let hunk = |new: Vec<usize>| review::Hunk {
+            id: "c::f#1".into(),
+            new,
+            old: Vec::new(),
+            starts_added: true,
+        };
+        let mut f = file("src/lib.rs", Vec::new());
+        let it = item(Status::Changed, 1, Vec::new());
+        // Lines 10 and 18 added, 7 unchanged lines apart: GitHub shows
+        // them in two hunks, so the comment goes on the first.
+        f.added_lines = vec![10, 18];
+        let files = [f.clone()];
+        assert_eq!(
+            hunk_loc(&files, &it, &hunk(vec![10, 18])),
+            at("src/lib.rs", None, 10, "RIGHT")
+        );
+        // 6 apart: one hunk, one range over both.
+        f.added_lines = vec![10, 17];
+        assert_eq!(
+            hunk_loc(&[f], &it, &hunk(vec![10, 17])),
+            at("src/lib.rs", Some(10), 17, "RIGHT")
+        );
+    }
+
+    #[test]
+    fn hunks_prefer_their_added_lines() {
+        // A change that starts with its removed line still goes on the
+        // added ones: the PR's code.
+        let h = review::Hunk {
+            id: "c::f#1".into(),
+            new: vec![10, 11],
+            old: vec![10],
+            starts_added: false,
+        };
+        let it = item(Status::Changed, 8, Vec::new());
+        assert_eq!(
+            hunk_loc(&[lib()], &it, &h),
+            at("src/lib.rs", Some(10), 11, "RIGHT")
+        );
+        // Only removed lines: the base side.
+        let h = review::Hunk {
+            id: "c::f#2".into(),
+            new: Vec::new(),
+            old: vec![39],
+            starts_added: false,
+        };
+        assert_eq!(
+            hunk_loc(&[lib()], &it, &h),
+            at("src/lib.rs", None, 39, "LEFT")
+        );
     }
 
     #[test]
@@ -799,42 +1230,48 @@ mod tests {
             "README.md",
             vec![sl('@', "3 3"), sl(' ', "x"), sl('-', "old"), sl('+', "new")],
         );
-        assert_eq!(file_loc(&f).map(|l| (l.line, l.side)), Some((4, "LEFT")));
+        assert_eq!(file_loc(&f), at("README.md", None, 4, "LEFT"));
         assert_eq!(file_loc(&file("logo.png", Vec::new())), None);
+    }
+
+    fn comment(text: &str, loc: Option<Loc>) -> Comment {
+        Comment {
+            name: "f".into(),
+            part: String::new(),
+            verdict: Verdict::Comment,
+            text: text.into(),
+            link: Some(format!("[{text}](url)")),
+            loc,
+        }
     }
 
     #[test]
     fn json_has_the_api_fields() {
         let comments = vec![
             Comment {
-                name: "f".into(),
-                part: String::new(),
                 verdict: Verdict::Changes,
-                text: "Please rename.".into(),
-                loc: Some(Loc {
-                    path: "src/lib.rs".into(),
-                    line: 10,
-                    side: "RIGHT",
-                }),
+                ..comment("Please rename.", at("src/lib.rs", None, 10, "RIGHT"))
             },
-            Comment {
-                name: "logo.png".into(),
-                part: String::new(),
-                verdict: Verdict::Comment,
-                text: "Too large.".into(),
-                loc: None,
-            },
+            comment("Split this.", at("src/lib.rs", Some(20), 24, "LEFT")),
+            comment("Too large.", None),
         ];
         let v: Value =
             serde_json::from_str(&review_json(&comments, "", Verdict::Changes, "abc123")).unwrap();
         assert_eq!(v["event"], "REQUEST_CHANGES");
         assert_eq!(v["commit_id"], "abc123");
-        assert_eq!(v["comments"].as_array().unwrap().len(), 1);
-        assert_eq!(v["comments"][0]["line"], 10);
-        assert_eq!(v["comments"][0]["side"], "RIGHT");
-        assert_eq!(v["comments"][0]["path"], "src/lib.rs");
-        // The comment that fits on no line is in the text.
-        assert!(v["body"].as_str().unwrap().contains("Too large."));
+        let c = v["comments"].as_array().unwrap();
+        assert_eq!(c.len(), 2);
+        assert_eq!(c[0]["line"], 10);
+        assert_eq!(c[0]["side"], "RIGHT");
+        assert_eq!(c[0]["path"], "src/lib.rs");
+        assert!(c[0].get("start_line").is_none());
+        assert_eq!(c[1]["start_line"], 20);
+        assert_eq!(c[1]["start_side"], "LEFT");
+        assert_eq!(c[1]["line"], 24);
+        // The comment that fits on no line is in the text, with its link.
+        let body = v["body"].as_str().unwrap();
+        assert!(body.contains("On `f` ([Too large.](url)):\n\nToo large."));
+        assert!(!body.contains("Split this."));
 
         // A comment review needs a text even without any.
         let v: Value = serde_json::from_str(&review_json(&[], "", Verdict::Comment, "")).unwrap();
@@ -843,6 +1280,87 @@ mod tests {
         // An approval doesn't.
         let v: Value = serde_json::from_str(&review_json(&[], "", Verdict::Approve, "")).unwrap();
         assert!(v.get("body").is_none());
+    }
+
+    #[test]
+    fn falls_back_to_comments_in_the_text() {
+        let comments = vec![
+            comment("a", at("src/lib.rs", None, 10, "RIGHT")),
+            comment("b", None),
+        ];
+        let t = attempts(&comments, "", Verdict::Comment, "abc");
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[0]["comments"].as_array().unwrap().len(), 1);
+        assert_eq!(t[1]["comments"].as_array().unwrap().len(), 0);
+        let body = t[1]["body"].as_str().unwrap();
+        assert!(body.contains("([a](url))") && body.contains("([b](url))"));
+        assert_eq!(t[1]["commit_id"], "abc");
+
+        // An approval: as an approval, then as a comment review, each with
+        // inline comments first.
+        let t = attempts(&comments, "", Verdict::Approve, "abc");
+        let ev: Vec<_> = t
+            .iter()
+            .map(|v| (v["event"].clone(), v["comments"].as_array().unwrap().len()))
+            .collect();
+        assert_eq!(
+            ev,
+            [
+                (json!("APPROVE"), 1),
+                (json!("COMMENT"), 1),
+                (json!("APPROVE"), 0),
+                (json!("COMMENT"), 0)
+            ]
+        );
+        // Without inline comments, nothing to fall back to.
+        assert_eq!(
+            attempts(&[comment("b", None)], "", Verdict::Comment, "").len(),
+            1
+        );
+        assert_eq!(attempts(&[], "", Verdict::Approve, "").len(), 2);
+    }
+
+    #[test]
+    fn links_to_lines() {
+        let pr = PrMeta {
+            repo: "o/r".into(),
+            base_rev: "base1".into(),
+            base_commit: "base1full".into(),
+            head_rev: "head1".into(),
+            head_commit: "head1full".into(),
+            ..Default::default()
+        };
+        assert_eq!(
+            blob_url(&pr, "src/a b.rs", "RIGHT", Some((3, 5))),
+            "https://github.com/o/r/blob/head1full/src/a%20b.rs#L3-L5"
+        );
+        assert_eq!(
+            blob_url(&pr, "x.rs", "LEFT", Some((7, 7))),
+            "https://github.com/o/r/blob/base1full/x.rs#L7"
+        );
+        let d = Data::new(Output {
+            meta: model::Meta {
+                pr: Some(pr),
+                ..Default::default()
+            },
+            crates: Vec::new(),
+            items: Default::default(),
+            files: vec![ChangedFile {
+                status: Status::Removed,
+                ..file("old.png", Vec::new())
+            }],
+            externals: Default::default(),
+            warnings: Vec::new(),
+            semver_checks: None,
+        });
+        assert_eq!(
+            place_link(&d, "file:old.png", None).unwrap(),
+            "[`old.png`](https://github.com/o/r/blob/base1full/old.png)"
+        );
+        assert_eq!(
+            place_link(&d, "x", at("a.rs", Some(2), 4, "RIGHT").as_ref()).unwrap(),
+            "[`a.rs` lines 2–4](https://github.com/o/r/blob/head1full/a.rs#L2-L4)"
+        );
     }
 
     #[test]
@@ -857,35 +1375,25 @@ mod tests {
 
     #[test]
     fn posts() {
-        let c = |loc: bool| Comment {
-            name: "f".into(),
-            part: String::new(),
-            verdict: Verdict::Comment,
-            text: "x".into(),
-            loc: loc.then(|| Loc {
-                path: "a.rs".into(),
-                line: 1,
-                side: "RIGHT",
-            }),
-        };
+        let c = |loc: bool| comment("x", loc.then(|| at("a.rs", None, 1, "RIGHT")).flatten());
         assert!(
             posts_html(&[], "", Verdict::Approve)
                 .starts_with("The command posts an <b>approval</b>. On your own PR")
         );
         assert_eq!(
             posts_html(&[c(true), c(true), c(false)], "Nice", Verdict::Changes),
-            "The command posts a <b>request for changes</b>, your summary, 2 inline comments and 1 comment in the review's text."
+            "The command posts a <b>request for changes</b>, your summary, 2 inline comments and 1 comment in the review's text. If GitHub refuses a comment's line, it posts the review again with every comment in its text, linked to its lines."
         );
     }
 
     #[test]
     fn own_pr_approval() {
         // Without a text, an approval has no body; the fallback has one.
-        let v = approved_comment(review_value(&[], "", Verdict::Approve, "abc"));
+        let v = approved_comment(review_value(&[], "", Verdict::Approve, "abc", true));
         assert_eq!(v["event"], "COMMENT");
         assert_eq!(v["body"], "Approved.");
         assert_eq!(v["commit_id"], "abc");
-        let v = approved_comment(review_value(&[], "Looks good", Verdict::Approve, ""));
+        let v = approved_comment(review_value(&[], "Looks good", Verdict::Approve, "", true));
         assert_eq!(v["body"], "Approved.\n\nLooks good");
     }
 }

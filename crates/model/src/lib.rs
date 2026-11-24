@@ -567,6 +567,10 @@ pub struct PrMeta {
     /// The compared base commit (abbreviated): the merge base of the PR
     /// with `base_ref`, unless another base was given.
     pub base_rev: String,
+    /// The compared base commit in full, for links to its lines. Empty for
+    /// pages from before it was recorded.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub base_commit: String,
     /// The PR's branch, e.g. `fix-parser`, if known (only the GitHub CLI
     /// knows it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
