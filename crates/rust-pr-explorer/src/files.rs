@@ -276,7 +276,7 @@ pub fn changed_files(base: &Path, head: &Path, skip: &[&str]) -> Vec<ChangedFile
                     file.manifest = manifest_changes(old, new);
                 }
                 if crate::lockfile::is_lock(path) {
-                    file.lock = crate::lockfile::compare(old, new);
+                    file.lock = crate::lockfile::compare(path, old, new);
                 }
             }
             _ => file.too_large = !binary,

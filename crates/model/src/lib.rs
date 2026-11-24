@@ -785,6 +785,54 @@ pub struct LockChange {
     /// another checksum: the published package itself differs.
     #[serde(default)]
     pub checksum_changed: bool,
+    /// For `Cargo.lock`: how the package is used, in the head (in the
+    /// base for a removed package).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dep: Option<DepKind>,
+    /// For `Cargo.lock`: the packages that depend on it, in the head (in
+    /// the base for a removed package).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependents: Vec<String>,
+    /// The package comes from crates.io (in the head, or in the base for a
+    /// removed package), so diff.rs, docs.rs and crates.io have it.
+    #[serde(default)]
+    pub crates_io: bool,
+    /// What its manifest says, from the package's sources that Cargo
+    /// downloaded for the analysis. Absent when they aren't there (e.g.
+    /// with `--syntax-only`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info: Option<CrateInfo>,
+}
+
+/// How a locked package is used.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DepKind {
+    /// A package of the workspace, or a path dependency.
+    Local,
+    /// A dependency of a local package.
+    Direct,
+    /// Only a dependency of other dependencies.
+    Transitive,
+}
+
+/// A crate's metadata, from the manifest of its newest locked version.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CrateInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The `repository` URL of its manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    /// The changelog file in the published package, e.g. `CHANGELOG.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changelog: Option<String>,
+    /// It has a build script, which runs at build time.
+    #[serde(default)]
+    pub build_script: bool,
+    /// It is a procedural macro, which runs at build time.
+    #[serde(default)]
+    pub proc_macro: bool,
 }
 
 /// A selector of a stylesheet whose properties changed. Its properties

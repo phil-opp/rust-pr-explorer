@@ -687,6 +687,12 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 .lock .note { font-size: 12px; }
 .lock .lk-warn { color: var(--changed); }
 .lock-all { margin-top: 8px; }
+.lk-dep { font-size: 11px; color: var(--muted); margin-left: 4px; white-space: nowrap; }
+.lk-dep.lk-direct { color: var(--text); font-weight: 600; }
+.lock .lk-desc { color: var(--muted); max-width: 46em; }
+.lk-summary { font-size: 13px; margin-top: 8px; }
+.lk-summary .lk-warn { color: var(--changed); font-weight: 600; }
+.lock .lk-links a { white-space: nowrap; }
 .lock-all > summary { cursor: pointer; }
 .md-h { font-weight: 600; font-size: 15px; margin: 4px 0; }
 .md-removed .md-h { text-decoration: line-through; text-decoration-color: var(--removed); color: var(--muted); }

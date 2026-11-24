@@ -12,7 +12,9 @@ use crate::css;
 use crate::data::Data;
 use crate::js;
 use crate::yaml;
-use model::{ChangedFile, Kind, LockChange, ManifestChange, PartChange, SourceLine, Status};
+use model::{
+    ChangedFile, DepKind, Kind, LockChange, ManifestChange, PartChange, SourceLine, Status,
+};
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Changes up to this many lines are shown directly, larger ones folded.
@@ -627,6 +629,173 @@ fn bump(old: &str, new: &str, cargo: bool) -> (&'static str, &'static str) {
     }
 }
 
+/// A link that opens in a new tab.
+fn ext_link(url: &str, label: &str, title: &str) -> String {
+    format!(
+        r#"<a href="{}" target="_blank" rel="noopener" title="{}">{label}</a>"#,
+        esc(url),
+        esc(title)
+    )
+}
+
+/// A `Cargo.lock` package's role: workspace crate, direct or transitive
+/// dependency.
+fn dep_tag(c: &LockChange) -> &'static str {
+    match c.dep {
+        Some(DepKind::Local) => {
+            r#" <span class="lk-dep" title="A crate of the workspace, or a path dependency">workspace</span>"#
+        }
+        Some(DepKind::Direct) => {
+            r#" <span class="lk-dep lk-direct" title="A dependency of a crate of the workspace">direct</span>"#
+        }
+        Some(DepKind::Transitive) => {
+            r#" <span class="lk-dep" title="Only a dependency of other dependencies">transitive</span>"#
+        }
+        None => "",
+    }
+}
+
+/// "required by `a`, `b` and 3 more", for packages that aren't direct
+/// dependencies of an updated version (`was` for removed packages).
+fn dependents_note(c: &LockChange, was: bool) -> String {
+    if c.dependents.is_empty() {
+        return String::new();
+    }
+    const SHOWN: usize = 3;
+    let mut names: Vec<String> = c
+        .dependents
+        .iter()
+        .take(SHOWN)
+        .map(|d| format!("<code>{}</code>", esc(d)))
+        .collect();
+    if c.dependents.len() > SHOWN {
+        names.push(format!("{} more", c.dependents.len() - SHOWN));
+    }
+    let list = match names.split_last() {
+        Some((last, [])) => last.clone(),
+        Some((last, rest)) => format!("{} and {last}", rest.join(", ")),
+        None => String::new(),
+    };
+    let what = if was {
+        "was required by"
+    } else {
+        "required by"
+    };
+    format!(r#"<div class="note">{what} {list}</div>"#)
+}
+
+/// What an added crate does at build time, and its description.
+fn crate_notes(c: &LockChange) -> String {
+    let Some(info) = &c.info else {
+        return String::new();
+    };
+    let mut out = String::new();
+    if let Some(d) = &info.description {
+        out.push_str(&format!(r#"<div class="note lk-desc">{}</div>"#, esc(d)));
+    }
+    let runs: Vec<&str> = [
+        (info.build_script, "a build script"),
+        (info.proc_macro, "a procedural macro"),
+    ]
+    .iter()
+    .filter(|(on, _)| *on)
+    .map(|(_, what)| *what)
+    .collect();
+    if !runs.is_empty() {
+        out.push_str(&format!(
+            r#"<div class="note lk-warn">runs code at build time: {}</div>"#,
+            runs.join(" and ")
+        ));
+    }
+    out
+}
+
+/// Links to review a crates.io package's update (`from` the old version)
+/// or new version: the published code's diff or source on diff.rs, its
+/// changelog on docs.rs or else its repository, and crates.io.
+fn crate_links(c: &LockChange, from: Option<&str>, to: &str) -> String {
+    if !c.crates_io {
+        return String::new();
+    }
+    let name = &c.name;
+    let mut links = Vec::new();
+    match from {
+        Some(from) => links.push(ext_link(
+            &format!("https://diff.rs/{name}/{from}/{to}"),
+            "diff",
+            &format!("The published code of {name} {from} and {to} compared, on diff.rs"),
+        )),
+        None => links.push(ext_link(
+            &format!("https://diff.rs/browse/{name}/{to}"),
+            "source",
+            &format!("The published code of {name} {to}, on diff.rs"),
+        )),
+    }
+    let info = c.info.clone().unwrap_or_default();
+    match (&info.changelog, &info.repository) {
+        (Some(file), _) => links.push(ext_link(
+            &format!("https://docs.rs/crate/{name}/{to}/source/{file}"),
+            "changelog",
+            &format!("{file} of {name} {to}, on docs.rs"),
+        )),
+        (None, Some(repo)) => links.push(ext_link(repo, "repository", repo)),
+        (None, None) => {}
+    }
+    if from.is_none() {
+        links.push(ext_link(
+            &format!("https://crates.io/crates/{name}/{to}"),
+            "crates.io",
+            &format!("{name} {to} on crates.io"),
+        ));
+    }
+    format!(r#"<div class="note lk-links">{}</div>"#, links.join(" · "))
+}
+
+/// How many dependencies were added and removed, direct and transitive,
+/// for a `Cargo.lock`.
+fn lock_summary(list: &[LockChange]) -> String {
+    let count = |added: bool, kind: DepKind| {
+        list.iter()
+            .filter(|c| c.dep == Some(kind) && (if added { &c.old } else { &c.new }).is_empty())
+            .count()
+    };
+    let part = |added: bool| {
+        let (d, t) = (
+            count(added, DepKind::Direct),
+            count(added, DepKind::Transitive),
+        );
+        let mut out = Vec::new();
+        if d > 0 {
+            out.push(format!("{d} direct"));
+        }
+        if t > 0 {
+            let s = format!("{t} transitive");
+            // New code nobody asked for by name.
+            out.push(if added {
+                format!(r#"<span class="lk-warn">{s}</span>"#)
+            } else {
+                s
+            });
+        }
+        out.join(", ")
+    };
+    let (added, removed) = (part(true), part(false));
+    let mut parts = Vec::new();
+    if !added.is_empty() {
+        parts.push(format!("New dependencies: {added}"));
+    }
+    if !removed.is_empty() {
+        parts.push(format!("removed: {removed}"));
+    }
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!(
+        r#"<div class="note lk-summary">{}</div>"#,
+        parts.join(" · ")
+    )
+}
+
 /// A lock file's changed packages, grouped: updated, added, removed, and
 /// those whose version stayed but whose source or checksum changed.
 fn lock_html(path: &str, list: &[LockChange]) -> String {
@@ -680,22 +849,34 @@ fn lock_html(path: &str, list: &[LockChange]) -> String {
             .filter(|v| !c.old.contains(v))
             .cloned()
             .collect();
-        let name = format!(r#"<td class="mf-name"><code>{}</code></td>"#, esc(&c.name));
+        let name = format!(
+            r#"<td class="mf-name"><code>{}</code>{}</td>"#,
+            esc(&c.name),
+            dep_tag(c)
+        );
         let notes = format!("{}{}", source_note(c), checksum(c));
+        let transitive = c.dep == Some(DepKind::Transitive);
         let (group, row) = if c.old.is_empty() {
             (
                 1,
                 format!(
-                    r#"<tr class="m-add">{name}<td class="mf-old"></td><td class="mf-new">{}</td><td>{notes}</td></tr>"#,
-                    code(&c.new)
+                    r#"<tr class="m-add">{name}<td class="mf-old"></td><td class="mf-new">{}</td><td>{}{notes}{}{}</td></tr>"#,
+                    code(&c.new),
+                    crate_notes(c),
+                    dependents_note(c, false),
+                    c.new
+                        .last()
+                        .map(|v| crate_links(c, None, v))
+                        .unwrap_or_default(),
                 ),
             )
         } else if c.new.is_empty() {
             (
                 2,
                 format!(
-                    r#"<tr class="m-del">{name}<td class="mf-old"><del>{}</del></td><td class="mf-new"></td><td>{notes}</td></tr>"#,
-                    code(&c.old)
+                    r#"<tr class="m-del">{name}<td class="mf-old"><del>{}</del></td><td class="mf-new"></td><td>{notes}{}</td></tr>"#,
+                    code(&c.old),
+                    dependents_note(c, true),
                 ),
             )
         } else if gone.is_empty() && came.is_empty() {
@@ -707,27 +888,45 @@ fn lock_html(path: &str, list: &[LockChange]) -> String {
                 ),
             )
         } else {
-            let what = match (gone.as_slice(), came.as_slice()) {
+            let (what, links) = match (gone.as_slice(), came.as_slice()) {
                 ([o], [n]) => {
                     let (class, label) = bump(o, n, cargo);
-                    format!(r#"<span class="lk-bump {class}">{label}</span>"#)
+                    (
+                        format!(r#"<span class="lk-bump {class}">{label}</span>"#),
+                        crate_links(c, Some(o), n),
+                    )
                 }
                 // From several versions to one: compared with the newest.
                 ([.., o], [n]) => {
                     let (class, label) = bump(o, n, cargo);
-                    format!(
-                        r#"<span class="lk-bump {class}">{label}</span><div class="note">from {} versions to one</div>"#,
-                        gone.len()
+                    (
+                        format!(
+                            r#"<span class="lk-bump {class}">{label}</span><div class="note">from {} versions to one</div>"#,
+                            gone.len()
+                        ),
+                        crate_links(c, Some(o), n),
                     )
                 }
-                ([], _) => "another version added".to_string(),
-                (_, []) => "a version dropped".to_string(),
-                _ => String::new(),
+                ([], [.., n]) => (
+                    r#"<span class="lk-bump">another version added</span>"#.to_string(),
+                    crate_links(c, None, n),
+                ),
+                (_, []) => (
+                    r#"<span class="lk-bump">a version dropped</span>"#.to_string(),
+                    String::new(),
+                ),
+                _ => (String::new(), String::new()),
+            };
+            // Why a transitive dependency is there.
+            let why = if transitive {
+                dependents_note(c, false)
+            } else {
+                String::new()
             };
             (
                 0,
                 format!(
-                    r#"<tr class="m-chg">{name}<td class="mf-old"><del>{}</del></td><td class="mf-new">{}</td><td>{what}{notes}</td></tr>"#,
+                    r#"<tr class="m-chg">{name}<td class="mf-old"><del>{}</del></td><td class="mf-new">{}</td><td>{what}{notes}{why}{links}</td></tr>"#,
                     code(&c.old),
                     code(&c.new)
                 ),
@@ -752,15 +951,20 @@ fn lock_html(path: &str, list: &[LockChange]) -> String {
         ));
     }
     table.push_str("</table>");
+    let summary = if cargo {
+        lock_summary(list)
+    } else {
+        String::new()
+    };
     // Long lists (a `cargo update`) are folded.
     if list.len() > 25 {
         format!(
-            r#"<details class="lock-all"><summary>{} packages changed: {}</summary>{table}</details>"#,
+            r#"{summary}<details class="lock-all"><summary>{} packages changed: {}</summary>{table}</details>"#,
             list.len(),
             counts.join(", ")
         )
     } else {
-        table
+        format!("{summary}{table}")
     }
 }
 
