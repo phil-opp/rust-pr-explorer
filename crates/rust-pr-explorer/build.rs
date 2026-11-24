@@ -1,8 +1,8 @@
 //! Compiles the viewer crate to WebAssembly and generates its JavaScript
 //! bindings, so that `main.rs` can embed both in the explorer page.
 //!
-//! Requires the `wasm32-unknown-unknown` target:
-//! `rustup target add wasm32-unknown-unknown`.
+//! Requires the `wasm32-unknown-unknown` target, which rustup installs from
+//! the workspace's `rust-toolchain.toml`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
