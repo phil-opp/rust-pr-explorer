@@ -38,6 +38,11 @@ pub struct CrateSrc {
     /// Whether the package may be published (no `publish = false` or
     /// `publish = []`).
     pub publish: bool,
+    /// The package allows breaking changes without a major version bump:
+    /// `allow-breaking-changes = true` under
+    /// `[package.metadata.rust-semantic-review]`, for crates that don't follow
+    /// SemVer on purpose (internal crates).
+    pub allow_breaking: bool,
 }
 
 /// Where the two trees of a checkout come from in a git repository.
@@ -1072,6 +1077,12 @@ pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
             Some(toml::Value::Array(registries)) => !registries.is_empty(),
             _ => true,
         };
+        let allow_breaking = package
+            .get("metadata")
+            .and_then(|m| m.get("rust-semantic-review"))
+            .and_then(|m| m.get("allow-breaking-changes"))
+            .and_then(|v| v.as_bool())
+            == Some(true);
         let lib_name = lib_name.replace('-', "_");
         if has_lib {
             crates.push(CrateSrc {
@@ -1082,6 +1093,7 @@ pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
                 edition,
                 version: version.clone(),
                 publish,
+                allow_breaking,
             });
             // The other targets use the library by its name.
             deps.push(lib_name.clone());
@@ -1105,6 +1117,7 @@ pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
                 edition,
                 version: version.clone(),
                 publish,
+                allow_breaking,
             });
         }
     }
@@ -1121,12 +1134,15 @@ pub fn crate_versions(base: &Path, head: &Path) -> BTreeMap<String, model::Crate
     };
     let mut versions: BTreeMap<String, model::CrateVersion> = BTreeMap::new();
     for c in libs(base) {
-        versions.entry(c.name).or_default().base = c.version;
+        let v = versions.entry(c.name).or_default();
+        v.base = c.version;
+        v.allow_breaking = c.allow_breaking;
     }
     for c in libs(head) {
         let v = versions.entry(c.name).or_default();
         v.head = c.version;
         v.publish = c.publish;
+        v.allow_breaking_head = c.allow_breaking;
     }
     versions
 }
