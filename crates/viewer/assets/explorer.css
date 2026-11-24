@@ -485,6 +485,15 @@ a.card-badge[data-drill]:hover { border-style: solid; }
 /* Lines that were only rewrapped count as unchanged; a dotted rule on the
    left still shows where the formatting differs. */
 .ln.rf { background: linear-gradient(var(--muted) 50%, transparent 50%) 1px 0 / 1px 4px repeat-y; }
+/* Rewrapped lines that also gained or lost a few tokens, as a call that
+   got an argument and was then split by rustfmt: the tokens are marked
+   (removed ones struck out where they were), the line gets a "~", and a
+   line that is all new (the argument's own line) is an added line. */
+.ln.add.rfa { background: linear-gradient(var(--muted) 50%, transparent 50%) 1px 0 / 1px 4px repeat-y, var(--added-bg); }
+.ln.del.rfa { background: linear-gradient(var(--muted) 50%, transparent 50%) 1px 0 / 1px 4px repeat-y, var(--removed-bg); }
+.ln.rf::before, .ln.rf .sg { color: var(--changed); }
+.ln .wc.ti { background: color-mix(in srgb, var(--added) 28%, transparent); border-radius: 2px; }
+.ln .wc.td { background: color-mix(in srgb, var(--removed) 28%, transparent); text-decoration: line-through 1.5px var(--removed); border-radius: 2px; }
 /* Moved lines (code that went to or came from another place, e.g. an
    extracted helper) keep their "-" or "+" but get their own color and a
    rule on the left, so that they read as moved, not as new code. */
