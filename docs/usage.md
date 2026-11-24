@@ -66,6 +66,7 @@ Under `pull_request`, a PR from a fork can change the first workflow and the act
 - accepts the commits only as full hashes and the counts only as numbers, and writes the summaries itself from those numbers;
 - links the pages by the IDs of the artifacts of that run, found by their names, never by a URL from the artifact;
 - finds the previous comment itself, the same way the action does (only Rust Semantic Review comments by the bot or by people with write access), and uses the page of the changes since then only if the analysis started from the same commit;
+- names the analysis run in the comment by the id from the `workflow_run` event, not from the artifact, so that the next run only takes a saved analysis from that run (see `reuse-analysis`);
 - keeps only letters, digits and a few punctuation characters of the reason why the changes since the previous comment couldn't be shown, so that it can't add links, mentions or markup.
 
 Updating the previous comment on a push that only merged the base branch, and hiding the previous comment when a new one is posted, work as with `comment: true`. Both need the workflow's bot to have posted the earlier comments, so switching to this setup keeps working with the comments posted before. Give the second workflow a `concurrency` group per PR branch (as this repository's `.github/workflows/rust-semantic-review-comment.yml` does), so that two runs don't both post a new comment after the same previous one. A `workflow_run` workflow only runs once it is on the default branch, so the PR that adds it gets no comment.
