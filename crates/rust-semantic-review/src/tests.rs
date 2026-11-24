@@ -1602,6 +1602,35 @@ fn crate_versions_follow_the_workspace_and_publish() {
     assert_eq!(versions.len(), 2, "{versions:?}");
 }
 
+/// Two packages whose libraries have the same name (as dora's `dora-cli`
+/// and its PyO3 twin `dora-cli-api-python`): the one whose package has the
+/// name keeps it, even if it is found second, and the other is named after
+/// its package instead of being left out.
+#[test]
+fn libraries_with_the_same_name_are_both_analyzed() {
+    let dir = write_crate(&[
+        ("src/lib.rs", ""),
+        ("bin/cli/src/lib.rs", "pub fn run() {}\n"),
+        (
+            "bin/cli/Cargo.toml",
+            "[package]\nname = \"dora-cli\"\nversion = \"1.0.0\"\n",
+        ),
+        ("py/src/lib.rs", "pub fn start() { dora_cli::run() }\n"),
+        (
+            "py/Cargo.toml",
+            "[package]\nname = \"dora-cli-api-python\"\nversion = \"1.0.0\"\npublish = false\n[lib]\nname = \"dora_cli\"\n[dependencies]\ndora-cli = { path = \"../bin/cli\" }\n",
+        ),
+    ]);
+    let versions = crate::source::crate_versions(dir.path(), dir.path());
+    assert!(versions["dora_cli"].publish);
+    assert!(!versions["dora_cli_api_python"].publish);
+    let out = analyze_dirs(dir.path(), dir.path());
+    assert!(out.items.contains_key("dora_cli::run"));
+    let start = &out.items["dora_cli_api_python::start"].info;
+    assert!(start.calls.iter().any(|c| c.to == "dora_cli::run"));
+    assert!(out.warnings.is_empty(), "{:?}", out.warnings);
+}
+
 #[test]
 fn breaking_changes_can_be_allowed_per_crate() {
     let tree = |allowed: bool| {
