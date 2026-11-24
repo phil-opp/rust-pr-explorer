@@ -7,7 +7,7 @@ use model::{PartChange, SourceLine, Status};
 use proc_macro2::{Delimiter, LineColumn, TokenStream, TokenTree};
 use quote::ToTokens;
 use similar::{ChangeTag, TextDiff};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use syn::spanned::Spanned;
 
 /// A part with its extent.
@@ -67,17 +67,64 @@ fn diff_lines(old: &str, new: &str) -> Vec<SourceLine> {
         .collect()
 }
 
+/// For each thing of the old version, the next one after it that the new
+/// version still has (`kept`). Things that only the old version has sort
+/// right before that one, so they show where they were among their old
+/// siblings instead of after everything else. Since parts come parent
+/// first, a removed part never lands among the new children of a part it
+/// didn't belong to.
+pub fn next_kept<T>(old: &[T], kept: impl Fn(&T) -> bool) -> Vec<Option<&T>> {
+    let mut out = vec![None; old.len()];
+    let mut next = None;
+    for (i, x) in old.iter().enumerate().rev() {
+        out[i] = next;
+        if kept(x) {
+            next = Some(x);
+        }
+    }
+    out
+}
+
 /// Compares the parts of two versions of a file, matched by key. Returns
-/// those that changed, in the order of the head version (removed ones
-/// last).
+/// those that changed, in the order of the head version, with removed ones
+/// where they were (see [`next_kept`]).
 pub fn compare_defs(a: &[Def], b: &[Def], old: &str, new: &str) -> Vec<PartChange> {
     let (old_lines, new_lines): (Vec<&str>, Vec<&str>) =
         (old.split('\n').collect(), new.split('\n').collect());
-    let by_key: BTreeMap<&str, &Def> = a.iter().map(|d| (d.key.as_str(), d)).collect();
+    let old_by_key: BTreeMap<&str, &Def> = a.iter().map(|d| (d.key.as_str(), d)).collect();
+    let new_by_key: BTreeMap<&str, &Def> = b.iter().map(|d| (d.key.as_str(), d)).collect();
+    // Parts by their first line, removed ones right before the part that
+    // followed them; the sort keeps each version's order among its own.
+    let kept = |o: &Def| new_by_key.contains_key(o.key.as_str());
+    let mut order: Vec<(usize, bool, &str)> = a
+        .iter()
+        .zip(next_kept(a, kept))
+        .filter(|(o, _)| !kept(o))
+        .map(|(o, next)| {
+            let at = next.map_or(usize::MAX, |n| new_by_key[n.key.as_str()].first);
+            (at, false, o.key.as_str())
+        })
+        .chain(b.iter().map(|d| (d.first, true, d.key.as_str())))
+        .collect();
+    order.sort_by_key(|&(line, kept, _)| (line, kept));
     let mut out = Vec::new();
-    for d in b {
+    for (_, kept, key) in order {
+        if !kept {
+            let o = old_by_key[key];
+            out.push(PartChange {
+                name: o.name.clone(),
+                kind: o.kind.clone(),
+                status: Status::Removed,
+                sig: o.sig.clone(),
+                line: o.first + 1,
+                lines: diff_lines(&own_lines(&old_lines, o), ""),
+                ..Default::default()
+            });
+            continue;
+        }
+        let d = new_by_key[key];
         let src = own_lines(&new_lines, d);
-        match by_key.get(d.key.as_str()) {
+        match old_by_key.get(key) {
             None => out.push(PartChange {
                 name: d.name.clone(),
                 kind: d.kind.clone(),
@@ -122,18 +169,6 @@ pub fn compare_defs(a: &[Def], b: &[Def], old: &str, new: &str) -> Vec<PartChang
                 });
             }
         }
-    }
-    let new_keys: BTreeSet<&str> = b.iter().map(|d| d.key.as_str()).collect();
-    for o in a.iter().filter(|o| !new_keys.contains(o.key.as_str())) {
-        out.push(PartChange {
-            name: o.name.clone(),
-            kind: o.kind.clone(),
-            status: Status::Removed,
-            sig: o.sig.clone(),
-            line: o.first + 1,
-            lines: diff_lines(&own_lines(&old_lines, o), ""),
-            ..Default::default()
-        });
     }
     out
 }
@@ -611,8 +646,9 @@ mod tests {
                 ("tests::adds", "test", Status::Changed),
                 ("tests::keeps", "test", Status::Changed),
                 ("tests::waits", "test", Status::Added),
-                ("extern \"C\"", "extern", Status::Changed),
+                // Where it was: at the end of `tests`, not of the file.
                 ("tests::helper", "fn", Status::Removed),
+                ("extern \"C\"", "extern", Status::Changed),
             ]
         );
         assert!(c[0].body_changed && !c[0].doc_changed);
@@ -665,5 +701,41 @@ mod tests {
         );
         assert!(c[1].cosmetic);
         assert_eq!(c[2].sig, "- name: Build");
+    }
+
+    #[test]
+    fn removed_parts_stay_among_their_siblings() {
+        let push = format!(
+            "name: CI\non:\n  push:\n    branches:\n{}",
+            "      - main\n".repeat(8)
+        );
+        let old = push.clone()
+            + "  pull_request_target:\n    types: [opened]\n  workflow_dispatch:\n\npermissions:\n  contents: read\n  pull-requests: write\n  issues: write\n\njobs:\n  check:\n    runs-on: ubuntu\n";
+        let new = push
+            + "  pull_request:\n    types: [opened]\n  schedule:\n    - cron: '17 * * * *'\n  workflow_dispatch:\n\npermissions:\n  contents: read\n  pull-requests: write\n  issues: write\n\njobs:\n  check:\n    runs-on: macos\n";
+        let c = compare_defs(&yaml_outline(&old), &yaml_outline(&new), &old, &new);
+        assert_eq!(
+            names(&c),
+            [
+                ("on.pull_request", "key", Status::Added),
+                ("on.schedule", "key", Status::Added),
+                ("on.pull_request_target", "key", Status::Removed),
+                ("jobs", "key", Status::Changed),
+            ]
+        );
+        // The last child of a part goes after that part's new children,
+        // not before them, and a removed part at the end stays there.
+        let old = "fn a() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n\n    fn helper() {}\n}\n\nthread_local! { static N: u8 = 0; }\n\nmacro_rules! m { () => {} }\n";
+        let new = "fn a() {}\n\n#[cfg(test)]\nmod tests {\n    #[test]\n    fn t() {}\n\n    #[test]\n    fn u() {}\n}\n\nthread_local! { static N: u8 = 0; }\n";
+        let ((a, _), (b, _)) = (rust_outline(old), rust_outline(new));
+        let c = compare_defs(&a, &b, old, new);
+        assert_eq!(
+            names(&c),
+            [
+                ("tests::u", "test", Status::Added),
+                ("tests::helper", "fn", Status::Removed),
+                ("m", "macro", Status::Removed),
+            ]
+        );
     }
 }

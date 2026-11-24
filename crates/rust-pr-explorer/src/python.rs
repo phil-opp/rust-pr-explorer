@@ -301,7 +301,8 @@ fn outline(text: &str) -> (Vec<Def>, String) {
 }
 
 /// Compares two versions of a Python file. Returns the definitions that
-/// changed, in the order of the head version (removed ones last), plus a
+/// changed, in the order of the head version (removed ones where they
+/// were), plus a
 /// `<module>` entry if top-level code outside definitions changed.
 pub fn compare(old: &str, new: &str) -> Vec<PartChange> {
     let (a, a_mod) = outline(old);
@@ -439,5 +440,24 @@ class Store:
             "def f(a, b):\n    return a + b  # sum\n",
         );
         assert!(c.iter().all(|x| x.cosmetic), "{c:#?}");
+    }
+
+    #[test]
+    fn removed_definitions_stay_where_they_were() {
+        let old = "class Store:\n    def get(self):\n        pass\n\ndef gone():\n    pass\n\ndef after():\n    pass\n";
+        let new = "class Store:\n    def get(self):\n        pass\n\n    def size(self):\n        pass\n\ndef after():\n    return 1\n";
+        let names: Vec<(String, Status)> = compare(old, new)
+            .into_iter()
+            .map(|c| (c.name, c.status))
+            .collect();
+        // After the class's new method, not inside the class.
+        assert_eq!(
+            names,
+            [
+                ("Store.size".to_string(), Status::Added),
+                ("gone".to_string(), Status::Removed),
+                ("after".to_string(), Status::Changed),
+            ]
+        );
     }
 }

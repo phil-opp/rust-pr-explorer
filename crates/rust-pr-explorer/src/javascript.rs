@@ -806,7 +806,8 @@ fn outline(text: &str) -> (Vec<Def>, String) {
 }
 
 /// Compares two versions of a JavaScript file. Returns the parts that
-/// changed, in the order of the head version (removed ones last), plus a
+/// changed, in the order of the head version (removed ones where they
+/// were), plus a
 /// `<module>` entry if top-level code outside parts changed.
 pub fn compare(old: &str, new: &str) -> Vec<PartChange> {
     let (a, a_mod) = outline(old);
