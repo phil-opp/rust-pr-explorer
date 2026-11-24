@@ -1369,16 +1369,12 @@ pub fn set_mark(d: &Data, id: &str, note: Option<Note>) {
     }
 }
 
-/// Gives the other items with the same change as `id` (see
-/// [`open_same_change`]) its verdict, without its comment, which stays on
-/// `id`: posted, it would repeat once per item.
-pub fn mark_same_change(d: &Data, id: &str, verdict: Verdict) {
+/// Approves the other items with the same change as `id` (see
+/// [`open_same_change`]), without a comment: one on `id` stays there,
+/// rather than being repeated once per item in a posted review.
+pub fn mark_same_change(d: &Data, id: &str) {
     for other in open_same_change(id) {
-        let note = Note {
-            verdict,
-            text: String::new(),
-        };
-        set_mark(d, &other, Some(note));
+        set_mark(d, &other, Some(Note::default()));
     }
 }
 
@@ -1531,13 +1527,13 @@ fn actions(id: &str) -> String {
     }
     let same = open_same_change(id).len();
     if same > 0 {
-        let (others, verb) = if same == 1 {
-            ("1 other item".to_string(), "gets")
+        let others = if same == 1 {
+            "1 other item".to_string()
         } else {
-            (format!("{same} other items"), "get")
+            format!("{same} other items")
         };
         return format!(
-            r#"<span class="rv-same" title="Their only change is the same: the same names now refer to the same other items. A comment stays on this one.">Same change as {others}, which {verb} this verdict too.</span><button class="rv-btn approve" data-rv-act="approve" title="Approve all {all} and go to the next item (a)">✓ Approve all {all}</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change; all {all} get this verdict (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Add a comment; all {all} get this verdict (c)">✎ Comment</button>"#,
+            r#"<span class="rv-same" title="Their only change is the same: the same names now refer to the same other items.">Same change as {others}.</span><button class="rv-btn approve" data-rv-act="approve" data-rv-all title="Approve this item and the {same} others, and go to the next item (a)">✓ Approve all {all}</button><button class="rv-btn approve" data-rv-act="approve" title="Approve only this item">✓ Only this</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on this item (c)">✎ Comment</button>"#,
             all = same + 1
         );
     }
@@ -1782,10 +1778,12 @@ mod tests {
                 ..Default::default()
             }
         });
-        assert!(
-            actions("c::tests::a")
-                .contains("Same change as 1 other item, which gets this verdict too.")
-        );
+        assert!(actions("c::tests::a").contains("Same change as 1 other item."));
+        // Approving can cover both or only this one.
+        let html = actions("c::tests::a");
+        assert!(html.contains(r#"data-rv-all title="Approve this item and the 1 others"#));
+        assert!(html.contains("✓ Approve all 2</button>"));
+        assert!(html.contains("✓ Only this</button>"));
         REVIEW.with(|r| r.borrow_mut().marks.insert("c::tests::b".into(), 1));
         assert!(!actions("c::tests::a").contains("Same change"));
         REVIEW.with(|r| *r.borrow_mut() = Review::default());
