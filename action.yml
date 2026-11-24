@@ -151,7 +151,7 @@ runs:
       run: |
         # Only for the analysis of this repository (see build.rs): the tool
         # itself needs its viewer.
-        unset RUST_SEMANTIC_REVIEW_STUB_VIEWER
+        unset RUST_SEMANTIC_REVIEW_STUB_VIEWER RUST_PR_EXPLORER_STUB_VIEWER
         # See `[profile.action]` in Cargo.toml.
         cargo build --profile action --locked -p rust-semantic-review
         mkdir -p "$DIR"
