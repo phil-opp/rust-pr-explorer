@@ -620,7 +620,7 @@ pub struct SavedMarks {
 /// The first line of the review marks that the viewer adds to a review it
 /// posts, in a code block in a collapsed `<details>` at the end of the
 /// review's text. One line per mark follows (see the viewer's `carry`).
-pub const REVIEW_MARKS_HEADER: &str = "semantic-review review marks v1";
+pub const REVIEW_MARKS_HEADER: &str = "rust-semantic-review review marks v1";
 /// [`REVIEW_MARKS_HEADER`] in reviews posted before the rename.
 const OLD_REVIEW_MARKS_HEADER: &str = "rust-pr-explorer review marks v1";
 
@@ -639,7 +639,7 @@ pub fn review_marks_in(text: &str) -> Option<String> {
 /// What starts review marks copied to paste on another page, followed by
 /// the marks as base64 JSON (with the reviewed versions and comments,
 /// which a review leaves out).
-pub const MARKS_MARKER: &str = "semantic-review-marks v1 ";
+pub const MARKS_MARKER: &str = "rust-semantic-review-marks v1 ";
 /// [`MARKS_MARKER`] in texts copied before the rename.
 const OLD_MARKS_MARKER: &str = "rust-pr-explorer-marks v1 ";
 

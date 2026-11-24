@@ -1,4 +1,4 @@
-//! Taking review marks to another page. Each Semantic Review comment's page is
+//! Taking review marks to another page. Each Rust Semantic Review comment's page is
 //! served from its own address, and browsers keep local storage per
 //! address, so a later comment's page starts without the marks made on an
 //! earlier one. Marks travel as text instead: in the review that **Finish
@@ -66,7 +66,7 @@ pub fn copy_text() -> Option<String> {
 
 /// The marks for a posted review, empty without marks or if they are too
 /// long. A stale mark loaded from a review can't show what changed since
-/// then; the page of the changes since the last Semantic Review comment does.
+/// then; the page of the changes since the last Rust Semantic Review comment does.
 pub fn for_review() -> String {
     let Some(lines) = review::export(review::Export::Review) else {
         return String::new();
@@ -78,7 +78,7 @@ pub fn for_review() -> String {
     let longest = lines.split(|c| c != '`').map(str::len).max().unwrap_or(0);
     let fence = "`".repeat(longest.max(2) + 1);
     format!(
-        "<details><summary>Review marks (Semantic Review)</summary>\n\n\
+        "<details><summary>Review marks (Rust Semantic Review)</summary>\n\n\
          What this review covered, so that the review page of later commits can show it.\n\n\
          {fence}text\n{REVIEW_MARKS_HEADER}\n{lines}\n{fence}\n\n</details>"
     )
@@ -146,10 +146,10 @@ pub fn dialog_html() -> String {
     let has = review::has_marks();
     format!(
         r#"<div class="rv-finish">
-<p class="sub">Each Semantic Review comment's page keeps its own marks: the browser can't share them between the pages of different comments. Marks are added to this page's, where it has none of its own for the same item.</p>
+<p class="sub">Each Rust Semantic Review comment's page keeps its own marks: the browser can't share them between the pages of different comments. Marks are added to this page's, where it has none of its own for the same item.</p>
 {from_reviews}
 <h4>Copy to another page</h4>
-<p class="sub">Copies your marks of this PR as text, to paste on the page of a later Semantic Review comment.</p>
+<p class="sub">Copies your marks of this PR as text, to paste on the page of a later Rust Semantic Review comment.</p>
 <div class="rv-row"><button id="rv-copy-marks"{copy_off}>Copy marks</button></div>
 <textarea id="rv-out" class="hidden" rows="3" readonly></textarea>
 <h4>Paste from another page</h4>
@@ -180,7 +180,7 @@ mod tests {
 
     #[test]
     fn review_marks_are_found_again() {
-        let block = "<details><summary>Review marks (Semantic Review)</summary>\n\n````text\nsemantic-review review marks v1\nmark 1 a::f\nmark 2 file:x```y\n````\n\n</details>";
+        let block = "<details><summary>Review marks (Rust Semantic Review)</summary>\n\n````text\nrust-semantic-review review marks v1\nmark 1 a::f\nmark 2 file:x```y\n````\n\n</details>";
         assert_eq!(
             review_marks_in(&format!("Looks good.\n\n{block}")).unwrap(),
             "mark 1 a::f\nmark 2 file:x```y"

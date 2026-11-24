@@ -2071,6 +2071,38 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust-semantic-review"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64 0.23.1",
+ "clap",
+ "flate2",
+ "model",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "ra_ap_hir",
+ "ra_ap_hir_def",
+ "ra_ap_ide",
+ "ra_ap_ide_db",
+ "ra_ap_load-cargo",
+ "ra_ap_paths",
+ "ra_ap_project_model",
+ "ra_ap_syntax",
+ "ra_ap_vfs",
+ "salsa",
+ "serde",
+ "serde_json",
+ "similar",
+ "syn 3.0.10",
+ "tempfile",
+ "toml",
+ "wasm-bindgen-cli-support",
+ "wasm-opt",
+]
+
+[[package]]
 name = "rustc-demangle"
 version = "0.1.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2193,38 +2225,6 @@ name = "scratch"
 version = "1.0.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d68f2ec51b097e4c1a75b681a8bec621909b5e91f15bb7b840c4f2f7b01148b2"
-
-[[package]]
-name = "semantic-review"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "base64 0.23.1",
- "clap",
- "flate2",
- "model",
- "prettyplease",
- "proc-macro2",
- "quote",
- "ra_ap_hir",
- "ra_ap_hir_def",
- "ra_ap_ide",
- "ra_ap_ide_db",
- "ra_ap_load-cargo",
- "ra_ap_paths",
- "ra_ap_project_model",
- "ra_ap_syntax",
- "ra_ap_vfs",
- "salsa",
- "serde",
- "serde_json",
- "similar",
- "syn 3.0.10",
- "tempfile",
- "toml",
- "wasm-bindgen-cli-support",
- "wasm-opt",
-]
 
 [[package]]
 name = "semver"

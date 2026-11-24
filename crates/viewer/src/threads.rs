@@ -61,7 +61,7 @@ fn ranges(it: &Item) -> (Span<'_>, Span<'_>) {
 pub fn place(d: &Data) -> Placement {
     let mut p = Placement::default();
     let Some(pr) = &d.out.meta.pr else { return p };
-    // Files that have a card under "Other changed files".
+    // Files that have a card under "Changed files".
     let carded = |path: &str| {
         d.out
             .files

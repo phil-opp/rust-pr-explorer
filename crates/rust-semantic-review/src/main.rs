@@ -1,4 +1,4 @@
-//! Semantic Review: shows a pull request as changed Rust items.
+//! Rust Semantic Review: shows a pull request as changed Rust items.
 
 mod analyze;
 mod commits;
@@ -36,7 +36,12 @@ struct Cli {
     #[command(subcommand)]
     input: Input,
     /// Where to write the review page.
-    #[arg(short, long, global = true, default_value = "semantic-review.html")]
+    #[arg(
+        short,
+        long,
+        global = true,
+        default_value = "rust-semantic-review.html"
+    )]
     out: PathBuf,
     /// Also write the analysis as JSON.
     #[arg(long, global = true)]
@@ -47,7 +52,7 @@ struct Cli {
     /// Allow running the analyzed project's build scripts and procedural
     /// macros, and keep its `.cargo/config.toml` and `rust-toolchain.toml`.
     /// Only use this in a sandboxed environment: the PR's code gets executed.
-    #[arg(long, global = true, env = "SEMANTIC_REVIEW_TRUST_PROJECT_CODE")]
+    #[arg(long, global = true, env = "RUST_SEMANTIC_REVIEW_TRUST_PROJECT_CODE")]
     trust_project_code: bool,
     /// Also run cargo-semver-checks on the two versions and add what it
     /// finds to the SemVer labels. It builds both versions' rustdoc JSON,
@@ -64,7 +69,7 @@ struct Cli {
     #[arg(
         long,
         global = true,
-        env = "SEMANTIC_REVIEW_TARGET_DIR",
+        env = "RUST_SEMANTIC_REVIEW_TARGET_DIR",
         requires = "trust_project_code"
     )]
     target_dir: Option<PathBuf>,

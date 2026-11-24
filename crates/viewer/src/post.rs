@@ -579,7 +579,7 @@ fn body(comments: &[Comment], own: &str, event: Verdict, inline: bool) -> String
     }
     if parts.is_empty() && event != Verdict::Approve {
         parts.push(if comments.is_empty() {
-            "Reviewed with Semantic Review.".to_string()
+            "Reviewed with Rust Semantic Review.".to_string()
         } else {
             "See the comments on the code.".to_string()
         });
@@ -891,7 +891,7 @@ pub fn finish_html(d: &Data) -> String {
 <p class="sub">This page has no access to GitHub and holds no token. Copy the command and run it in a terminal: it posts the review with the <a href="https://cli.github.com" target="_blank" rel="noopener">GitHub CLI</a>, using your own login. It works in bash, zsh and fish.</p>
 <p id="rv-what">{what}</p>
 <div class="rv-row"><button data-rv-out="cmd" class="primary">Copy command</button><button data-rv-out="json">Copy JSON</button></div>
-<p class="sub">The review ends with your marks, in a collapsed “Review marks” section, so that the page of a later Semantic Review comment can load them. It lists what you reviewed and your verdicts; your comments are in the review already.</p>
+<p class="sub">The review ends with your marks, in a collapsed “Review marks” section, so that the page of a later Rust Semantic Review comment can load them. It lists what you reviewed and your verdicts; your comments are in the review already.</p>
 <p class="sub">The comments go on the commit this page shows ({rev}). If the PR got new commits, GitHub shows them where those lines are now, or as outdated.{custom}</p>"#,
             what = posts_html(&s.comments, "", suggested),
             rev = esc(&pr.head_rev),
@@ -1437,7 +1437,7 @@ mod tests {
 
     #[test]
     fn marks_go_at_the_end_of_the_text() {
-        let m = "<!-- semantic-review-marks v1 TWFu -->";
+        let m = "<!-- rust-semantic-review-marks v1 TWFu -->";
         let v = review_value(&[], "", Verdict::Approve, "", true, m);
         assert_eq!(v["body"], m);
         let v = review_value(&[], "Looks good", Verdict::Comment, "", true, m);

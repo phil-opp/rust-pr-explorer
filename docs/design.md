@@ -1,6 +1,6 @@
 # Design notes
 
-This document records how the Semantic Review prototype gets its information and why. It also covers the alternatives that were considered but not implemented. For what the tool shows, see the [README](../README.md).
+This document records how the Rust Semantic Review prototype gets its information and why. It also covers the alternatives that were considered but not implemented. For what the tool shows, see the [README](../README.md).
 
 ## Requirements that shape the design
 
@@ -13,7 +13,7 @@ This document records how the Semantic Review prototype gets its information and
 
 ```text
 crates/model             data types shared by analysis and viewer (serde)
-crates/semantic-review    CLI: get sources, analyze, compare, write the page
+crates/rust-semantic-review CLI: get sources, analyze, compare, write the page
   src/source.rs          git worktrees or directory copies; finds crates and targets
   src/analyze/           syntactic analysis with syn (items, names, edges)
     load.rs              module files, items and impls (passes 1 and 2)
@@ -48,7 +48,7 @@ crates/viewer            the page's front end (wasm, web-sys, pulldown-cmark)
   src/impact.rs          public items that reach a changed internal item
   src/unsafety.rs        unsafe tags, the overview's unsafe box, source stripes
   src/risk.rs            the overview's "Review first" ranking
-  src/files.rs           other changed files (Markdown sections, Python, YAML,
+  src/files.rs           changed files (Markdown sections, Python, YAML,
                          manifests, Rust code outside items)
   src/css.rs             CSS highlighting and selector boxes
 ```
@@ -157,7 +157,7 @@ Paths the project chooses are confined to the checkout: `#[path]` attributes and
 
 ### Trusted mode
 
-In a sandboxed environment (a throwaway container or VM without credentials), running the project's code is acceptable. `--trust-project-code`, or `SEMANTIC_REVIEW_TRUST_PROJECT_CODE=1` for CI and container setups, then:
+In a sandboxed environment (a throwaway container or VM without credentials), running the project's code is acceptable. `--trust-project-code`, or `RUST_SEMANTIC_REVIEW_TRUST_PROJECT_CODE=1` for CI and container setups, then:
 - runs build scripts (rust-analyzer's `cargo check` step), so code included from `OUT_DIR` is analyzed;
 - expands procedural macros with the toolchain's `rust-analyzer-proc-macro-srv`;
 - keeps `.cargo/config.toml` and `rust-toolchain.toml`, which builds may need.

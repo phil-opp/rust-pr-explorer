@@ -1,4 +1,4 @@
-name: Semantic Review
+name: Rust Semantic Review
 
 # Builds the review page for every pull request and links it in a comment.
 # Uses the action from the PR's own checkout, so a PR that changes the tool
@@ -18,13 +18,15 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  # Only to show in the comment when the pages expire.
+  actions: read
 
 # A new push to a PR cancels the PR's running job. Runs on `main` are never
 # cancelled: when merges come faster than a cold build (about 7 minutes),
 # each one would cancel the previous, and the cache would never be saved.
 # They queue instead, and a newer queued run replaces an older one.
 concurrency:
-  group: semantic-review-${{ github.event.pull_request.number || github.ref }}
+  group: rust-semantic-review-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -32,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # The analysis doesn't need the viewer's wasm build (see build.rs).
-      SEMANTIC_REVIEW_STUB_VIEWER: "1"
+      RUST_SEMANTIC_REVIEW_STUB_VIEWER: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: ./

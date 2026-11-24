@@ -489,9 +489,9 @@ fn since_checkout(
             git_dir,
             &[
                 "-c",
-                "user.name=semantic-review",
+                "user.name=rust-semantic-review",
                 "-c",
-                "user.email=semantic-review@localhost",
+                "user.email=rust-semantic-review@localhost",
                 "commit-tree",
                 &tree,
                 "-p",
@@ -1400,7 +1400,7 @@ mod tests {
         };
         let block = |marks: &str| {
             format!(
-                r"<details><summary>Review marks</summary>\n\n```text\nsemantic-review review marks v1\n{marks}\n```\n\n</details>"
+                r"<details><summary>Review marks</summary>\n\n```text\nrust-semantic-review review marks v1\n{marks}\n```\n\n</details>"
             )
         };
         let deleted = format!(
