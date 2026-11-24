@@ -49,7 +49,7 @@ Trusted mode builds the build scripts and proc macros of the PR's dependencies, 
 
 Installing the prebuilt binary adds a few seconds. For a small crate it is cheap; for a crate with heavy dependencies it roughly doubles the analysis. It is independent of `trust-project-code`.
 
-On a PR from a fork, the token GitHub gives the workflow is read-only, so the page is built and uploaded but the comment fails with a warning; the link is still in the job summary.
+On a PR from a fork, the token GitHub gives the workflow is read-only, so the page is built and uploaded but the comment fails with a warning; the link is still in the job summary. The setup below posts the comment there too.
 
 ### Pull requests from forks
 
