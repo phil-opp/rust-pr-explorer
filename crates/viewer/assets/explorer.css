@@ -181,9 +181,7 @@ code { font-size: .92em; }
 .impact { font: 13px var(--sans); margin: 2px 0 6px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
 .impact-h { font-weight: 600; }
 .impact.none { color: var(--muted); }
-.impact button, .impact-list button { font-size: 12px; padding: 0 6px; }
-.impact-list { margin: 2px 0 0; padding-left: 18px; font: 13px var(--sans); }
-.impact-list li { margin: 2px 0; }
+.impact button { font-size: 12px; padding: 0 6px; }
 .semver-sum { margin: 0 0 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
 /* Code */
@@ -285,7 +283,7 @@ a.ref:hover { text-decoration: underline; }
 .irow + .irow, .whole + .irow { margin-top: 10px; }
 .irow .ihead { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .irow .iacts { display: flex; gap: 4px; align-items: start; }
-.irow > .sigbox, .irow > .docs, .irow > details, .irow > .mark, .irow > .docs-acts, .irow > .impact, .irow > .impact-list { grid-column: 1 / -1; }
+.irow > .sigbox, .irow > .docs, .irow > details, .irow > .mark, .irow > .docs-acts, .irow > .impact { grid-column: 1 / -1; }
 .irow .docs { margin: 0; }
 .irow.context { opacity: .75; }
 /* Members (methods, associated items) are small cards inside their item. */
@@ -1036,3 +1034,15 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
      without it the buttons fit on one line. */
   .irow > .iacts .rv-scope, .cg-focus .card-rv .rv-scope { display: none; }
 }
+
+/* Changed call graphs (overview) */
+.cgraph .cg-roots { display: inline-flex; flex-wrap: wrap; gap: 0 4px; font-weight: 600; }
+.cgraph .cg-roots code { font: 600 14px var(--mono); }
+.cgraph > .cg-line, .cgraph > .cg-tree, .cgraph > .cg-fold { grid-column: 1 / -1; }
+.cg-line { font: 13px var(--sans); margin: 2px 0; }
+.cg-tree { list-style: none; margin: 4px 0 2px; padding: 0; font: 13px var(--sans); }
+.cg-tree li { margin: 2px 0; padding-left: calc(var(--depth, 0) * 18px); }
+.cg-tree li .badge, .cg-line .badge { margin-left: 4px; }
+.cg-fold > summary { cursor: pointer; font: 13px var(--sans); color: var(--muted); }
+.cg-fold .cg-tree { margin-top: 2px; }
+.cg-more { color: var(--muted); text-decoration: underline dotted; cursor: help; }

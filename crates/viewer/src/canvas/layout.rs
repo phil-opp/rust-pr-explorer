@@ -255,22 +255,37 @@ pub fn show_impact(app: &mut App, id: &str) {
         toast(&format!("No public item reaches {}", d.display_name(it)));
         return;
     }
+    show_items_from(app, &ids, d.mod_of(it));
+}
+
+/// Opens `ids` on the canvas, arranged by module, viewed from a module
+/// that sees all of them (the first one's if there is one).
+pub fn show_items(app: &mut App, ids: &[String]) {
+    let d = app.d.clone();
+    let Some(first) = ids.first().and_then(|i| d.item(i)) else {
+        return;
+    };
+    show_items_from(app, ids, d.mod_of(first));
+}
+
+fn show_items_from(app: &mut App, ids: &[String], first: &str) {
+    let d = app.d.clone();
     let mut scopes: Vec<String> = ids
         .iter()
         .filter_map(|i| d.item(i))
         .map(|i| d.mod_of(i).to_string())
         .collect();
-    scopes.insert(0, d.mod_of(it).to_string());
+    scopes.insert(0, first.to_string());
     let scope = scopes
         .iter()
         .find(|s| ids.iter().all(|i| d.visible_from(i, s)))
         .cloned()
-        .unwrap_or_else(|| d.mod_of(it).to_string());
+        .unwrap_or_else(|| first.to_string());
     let c = &mut app.s.canvas;
     c.scope = scope;
     c.groups.clear();
     c.links.clear();
-    for id in &ids {
+    for id in ids {
         c.add_group(id, 0.0, 0.0);
     }
     app.s.canvas_focus = None;
