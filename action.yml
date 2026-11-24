@@ -1,7 +1,9 @@
 name: Rust Semantic Review
 description: >-
-  Builds the Rust Semantic Review page for a pull request, uploads it as a
-  workflow artifact that opens in the browser, and links it in a PR comment.
+  Builds the Rust Semantic Review page for a pull request and links it in a
+  PR comment. The page is stored as an artifact of the workflow run: opening
+  it needs a GitHub login with access to the repository, and it expires with
+  the run's artifacts.
 branding:
   icon: git-pull-request
   color: orange

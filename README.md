@@ -51,7 +51,7 @@ The demo in `fixtures/demo` is a small calculator crate. Its "PR" adds variables
 
 ## GitHub Action
 
-The repository is also a GitHub Action that builds the page for every pull request and links it in a comment on the PR:
+The repository is also a GitHub Action that builds the page for every pull request and links it in a comment on the PR. The pages are stored as artifacts of the workflow run, so opening one needs a GitHub login with access to the repository, and they expire with the run's artifacts (90 days unless the repository or `retention-days` sets otherwise):
 
 ```yaml
 # .github/workflows/rust-semantic-review.yml
