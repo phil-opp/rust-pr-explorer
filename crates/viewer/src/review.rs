@@ -109,7 +109,8 @@ struct Review {
     /// PR.
     since: bool,
     /// Everything that can be marked, in reading order: Rust items by
-    /// module (as the sidebar lists them) and position, then other files.
+    /// module (as the sidebar lists them) and position, then the changed
+    /// files.
     units: Vec<String>,
     /// The same units in the order that **Next** goes through them: along
     /// the calls (see [`call_order`]).
@@ -348,8 +349,8 @@ pub fn is_unit_item(it: &Item) -> bool {
     changed(it) && it.info.kind != Kind::Mod
 }
 
-/// Files that get a mark: the ones the overview lists under "Other
-/// changed files".
+/// Files that get a mark: the ones the overview lists under "Changed
+/// files".
 pub fn is_unit_file(f: &ChangedFile) -> bool {
     !f.analyzed || f.outside_items > 0
 }
@@ -498,13 +499,10 @@ fn units_in_order(d: &Data) -> Vec<(String, u64)> {
             out.extend(list.iter().map(|it| (it.info.id.clone(), item_print(it))));
         }
     }
-    out.extend(
-        d.out
-            .files
-            .iter()
-            .filter(|f| is_unit_file(f))
-            .map(|f| (file_unit(&f.path), file_print(f))),
-    );
+    // In the order the overview's "Changed files" shows them.
+    let mut files: Vec<&ChangedFile> = d.out.files.iter().filter(|f| is_unit_file(f)).collect();
+    files.sort_by_key(|f| crate::files::file_rank(f));
+    out.extend(files.iter().map(|f| (file_unit(&f.path), file_print(f))));
     out
 }
 

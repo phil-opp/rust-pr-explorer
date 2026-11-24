@@ -986,8 +986,8 @@ pub fn manifests_html(d: &Data) -> String {
     let cards: String = list
         .iter()
         .map(|f| {
-            // The same review mark as the file's entry under "Other
-            // changed files".
+            // The same review mark as the file's entry under "Changed
+            // files".
             let (kind, body) = if f.lock.is_empty() {
                 ("manifest", manifest_html(&f.manifest))
             } else {
@@ -1006,7 +1006,52 @@ pub fn manifests_html(d: &Data) -> String {
     )
 }
 
-/// Every changed file the Rust analysis doesn't cover.
+/// The groups of the overview's "Changed files", in their order.
+const GROUPS: [&str; 8] = [
+    "Rust code outside items",
+    "Python",
+    "JavaScript",
+    "CSS",
+    "YAML",
+    "Docs",
+    "Package files",
+    "Other files",
+];
+
+/// The group of a changed file under "Changed files": its language or
+/// kind.
+fn file_group(f: &ChangedFile) -> &'static str {
+    if f.analyzed || f.lang == "rust" {
+        return GROUPS[0];
+    }
+    if !f.manifest.is_empty() || !f.lock.is_empty() {
+        return "Package files";
+    }
+    match f.lang.as_str() {
+        "python" => "Python",
+        "javascript" => "JavaScript",
+        "css" => "CSS",
+        "yaml" => "YAML",
+        "markdown" => "Docs",
+        _ => "Other files",
+    }
+}
+
+/// Where a file comes under "Changed files": generated files last, the
+/// others by group. The review order follows it.
+pub fn file_rank(f: &ChangedFile) -> (bool, usize) {
+    let group = file_group(f);
+    (
+        f.generated.is_some(),
+        GROUPS
+            .iter()
+            .position(|g| *g == group)
+            .unwrap_or(GROUPS.len()),
+    )
+}
+
+/// Every changed file that the item sections don't show in full, grouped
+/// by language.
 pub fn other_files_html(d: &Data) -> String {
     // Rust files count as covered unless some of their changes are outside
     // every item.
@@ -1017,16 +1062,33 @@ pub fn other_files_html(d: &Data) -> String {
         .filter(|f| !f.analyzed || f.outside_items > 0 || !f.parts.is_empty())
         .filter(|f| crate::commit_filter::file_in(&f.path))
         .collect();
-    let (generated, own): (Vec<&ChangedFile>, Vec<&ChangedFile>) =
+    let (generated, mut own): (Vec<&ChangedFile>, Vec<&ChangedFile>) =
         others.into_iter().partition(|f| f.generated.is_some());
+    own.sort_by_key(|f| file_rank(f));
     if own.is_empty() && generated.is_empty() {
         return String::new();
     }
     let mut html = format!(
-        r#"<h2>Other changed files {}</h2>"#,
-        crate::pages::help_html("Changes the Rust item view doesn't cover.")
+        r#"<h2>Changed files {}</h2>"#,
+        crate::pages::help_html(
+            "Each changed file, by language, except Rust code that the sections above show as items."
+        )
     );
-    html.extend(own.iter().map(|f| file_card(d, f)));
+    // Group headings only when there is more than one group and some group
+    // has several files: otherwise each card's kind label says as much.
+    let groups: BTreeSet<&str> = own.iter().map(|f| file_group(f)).collect();
+    let mut last = None;
+    for f in &own {
+        let group = file_group(f);
+        if groups.len() > 1 && own.len() > groups.len() && last != Some(group) {
+            let n = own.iter().filter(|o| file_group(o) == group).count();
+            html.push_str(&format!(
+                r#"<h3 class="files-group">{group} <span class="h-note">{n}</span></h3>"#
+            ));
+        }
+        last = Some(group);
+        html.push_str(&file_card(d, f));
+    }
     if !generated.is_empty() {
         html.push_str(&format!(
             r#"<details class="generated"><summary>{} generated or vendored file{} ({})</summary>{}</details>"#,
