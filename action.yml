@@ -28,7 +28,8 @@ inputs:
     default: ${{ github.repository }}
   comment:
     description: >-
-      Post a comment on the PR that links the page. Every push that changes
+      Post a comment on the PR that links the page and lists the PR's
+      breaking changes, if any. Every push that changes
       the PR gets a new comment, which also links a page of the changes
       since the previous comment's commit; a push that only merges the base
       branch or rebases onto it updates the previous comment. If the token
@@ -360,6 +361,7 @@ runs:
         {
           echo "page=$page"
           echo "summary=$(summarize "$dir/counts.json")"
+          echo "counts=$(jq -c . "$dir/counts.json")"
           echo "head=$head"
           echo "previous=$prev"
           # `changes`, `none` or `unavailable (why)`; empty without --since.
@@ -421,6 +423,7 @@ runs:
         POST: ${{ inputs.comment == 'true' }}
         URL: ${{ steps.upload.outputs.artifact-url }}
         SUMMARY: ${{ steps.run.outputs.summary }}
+        COUNTS: ${{ steps.run.outputs.counts }}
         HEAD: ${{ steps.run.outputs.head }}
         PREVIOUS: ${{ steps.run.outputs.previous }}
         PREVIOUS_ID: ${{ steps.run.outputs.previous-id }}

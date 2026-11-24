@@ -11,7 +11,7 @@ By default the analyzed code is never built or run. See [docs/features.md](docs/
 
 ## GitHub Action
 
-Builds the page for every pull request and links it in a comment:
+Builds the page for every pull request and links it in a comment. If the PR breaks the public API, the comment also lists the first five breaking changes, each linked to its place on the page:
 
 ```yaml
 # .github/workflows/rust-semantic-review.yml
@@ -33,7 +33,7 @@ jobs:
 
 | Input | Default | |
 |---|---|---|
-| `comment` | `true` | Post a comment that links the page (and a page of the changes since the previous comment). Where the token can't (PRs from forks), a second workflow can post it, see below. |
+| `comment` | `true` | Post a comment that links the page (and a page of the changes since the previous comment) and lists the PR's breaking changes. Where the token can't (PRs from forks), a second workflow can post it, see below. |
 | `syntax-only` | `false` | Skip rust-analyzer: faster, but method calls stay unresolved. |
 | `trust-project-code` | `auto` | Run the PR's build scripts and proc macros, so calls into generated code resolve. `auto`: on under `pull_request`, off when another event analyzes a PR. Refused under `pull_request_target`. |
 | `semver-checks` | `false` | Also run cargo-semver-checks. Builds the PR's code; refused under `pull_request_target`. |
