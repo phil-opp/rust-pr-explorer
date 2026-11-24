@@ -1,0 +1,15 @@
+# The toolchain for building and developing this repository. rustup installs
+# it, with these components and targets, on the first `cargo` call here.
+#
+# It does not apply to the code that the tool analyzes: rust-analyzer uses
+# the toolchain of the analyzed directory (rustup's default, or with
+# `--trust-project-code` the project's own `rust-toolchain.toml`), and adds
+# `rust-src` to it when it's missing.
+[toolchain]
+channel = "stable"
+# `rust-src`: the tests' analyses read the standard library's source (they
+# use rustup's default toolchain, which is this one when that is `stable`;
+# rust-analyzer adds it otherwise). `rustfmt` and `clippy`: CI.
+components = ["rust-src", "rustfmt", "clippy"]
+# The viewer is compiled to WebAssembly by the CLI's build script.
+targets = ["wasm32-unknown-unknown"]
