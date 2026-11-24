@@ -1309,6 +1309,53 @@ fn analyze_semantic(dir: &Path) -> crate::analyze::Analysis {
     analysis
 }
 
+/// Calls inside `#[test]` functions resolve like any others, in unit tests
+/// and in integration tests. rust-analyzer expands `#[test]` to
+/// `#[cfg(test)]`, so without `cfg(test)` set the function's body is gone
+/// and only paths still resolved, not methods or associated functions.
+#[cfg(feature = "semantic")]
+#[test]
+fn semantic_calls_in_tests() {
+    let body = "let s = S::new();\n    s.go();\n    free();";
+    let dir = write_crate(&[
+        (
+            "src/lib.rs",
+            &format!(
+                "pub struct S;\n\
+                 impl S {{\n    pub fn new() -> S {{ S }}\n    pub fn go(&self) {{}}\n}}\n\
+                 pub fn free() {{}}\n\
+                 pub fn plain() {{\n    {body}\n}}\n\
+                 #[cfg(test)]\nmod tests {{\n    use super::*;\n    #[test]\n    fn unit() {{\n    {body}\n    }}\n}}\n"
+            ),
+        ),
+        (
+            "tests/it.rs",
+            &format!(
+                "use t::*;\n\
+                 #[test]\nfn in_test() {{\n    {body}\n}}\n\
+                 fn helper() {{\n    {body}\n}}\n"
+            ),
+        ),
+    ]);
+    let an = analyze_semantic(dir.path());
+    let calls = |id: &str| -> Vec<String> {
+        let info = &an.items[id].info;
+        assert_eq!(info.unresolved_calls, 0, "{id}");
+        info.calls.iter().map(|c| c.to.clone()).collect()
+    };
+    let all = ["t::S::go", "t::S::new", "t::free"];
+    for id in [
+        "t::plain",
+        "t::tests::unit",
+        "test:it::in_test",
+        "test:it::helper",
+    ] {
+        assert_eq!(calls(id), all, "{id}");
+    }
+    // Code behind `cfg(test)` is still not public API.
+    assert!(!an.items["t::tests::unit"].info.public);
+}
+
 /// rust-analyzer's resolved scopes decide the public API, with
 /// `#[doc(hidden)]` and `#[doc(inline)]` taken into account like rustdoc.
 #[cfg(feature = "semantic")]
