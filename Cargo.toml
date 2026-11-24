@@ -16,6 +16,8 @@ serde_json = "1.0.154"
 # exact same wasm-bindgen version.
 wasm-bindgen = "=0.2.130"
 wasm-bindgen-cli-support = "=0.2.130"
+# The page embeds its wasm and data gzipped (see `render_page`).
+flate2 = "1.1"
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
