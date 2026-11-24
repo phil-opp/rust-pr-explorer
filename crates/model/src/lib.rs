@@ -385,6 +385,56 @@ pub struct Item {
     /// and its API changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub api: Option<ApiChange>,
+    /// The `unsafe` code the item adds, changes or removes (see
+    /// [`UnsafeChange`]). Empty if its `unsafe` code, if any, is unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsafe_code: Vec<UnsafeChange>,
+}
+
+/// A piece of `unsafe` code that a PR adds, changes or removes: an
+/// `unsafe` block, function, impl, trait or `extern` block, or an
+/// attribute that is unsafe to use (`#[unsafe(no_mangle)]`, `#[no_mangle]`,
+/// `#[export_name]`, `#[link_section]`). Code inside a macro's arguments or
+/// a `macro_rules!` body counts too, as far as its tokens show it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct UnsafeChange {
+    pub kind: UnsafeKind,
+    /// `Added`, `Changed` or `Removed`.
+    pub status: Status,
+    /// What it is, as code: `unsafe fn read`, `unsafe impl Send for Buf`,
+    /// `#[no_mangle]`; for a block, `unsafe { … }`.
+    pub what: String,
+    /// Its first and last line in the head's file (not for a removed one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lines: Option<(u32, u32)>,
+    /// Its first and last line in the base's file (not for an added one).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old_lines: Option<(u32, u32)>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum UnsafeKind {
+    Block,
+    Fn,
+    Impl,
+    Trait,
+    Extern,
+    Attr,
+}
+
+impl UnsafeKind {
+    /// What the kind is called in a sentence: "`unsafe` block".
+    pub fn label(self) -> &'static str {
+        match self {
+            UnsafeKind::Block => "unsafe block",
+            UnsafeKind::Fn => "unsafe fn",
+            UnsafeKind::Impl => "unsafe impl",
+            UnsafeKind::Trait => "unsafe trait",
+            UnsafeKind::Extern => "extern block",
+            UnsafeKind::Attr => "unsafe attribute",
+        }
+    }
 }
 
 /// Whether a public API change is breaking, by Cargo's SemVer rules.
@@ -517,6 +567,10 @@ pub struct PrMeta {
     /// The compared base commit (abbreviated): the merge base of the PR
     /// with `base_ref`, unless another base was given.
     pub base_rev: String,
+    /// The compared base commit in full, for links to its lines. Empty for
+    /// pages from before it was recorded.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub base_commit: String,
     /// The PR's branch, e.g. `fix-parser`, if known (only the GitHub CLI
     /// knows it).
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -728,6 +782,25 @@ pub struct ChangedFile {
     pub old_text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new_text: Option<String>,
+    /// Hashes of the file's whole content in the base and in the head
+    /// (see [`content_hash`]), empty for a side without the file. They
+    /// identify a version of the file across pages that compare it with
+    /// different revisions, for sharing review marks between them.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub old_hash: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub new_hash: String,
+}
+
+/// Hash of a file's content, as hex: FNV-1a like [`stable_hash`], over the
+/// raw bytes.
+pub fn content_hash(bytes: &[u8]) -> String {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in bytes {
+        h ^= u64::from(*b);
+        h = h.wrapping_mul(0x0100_0000_01b3);
+    }
+    format!("{h:016x}")
 }
 
 /// One entry of a `Cargo.toml` that changed.
@@ -766,6 +839,54 @@ pub struct LockChange {
     /// another checksum: the published package itself differs.
     #[serde(default)]
     pub checksum_changed: bool,
+    /// For `Cargo.lock`: how the package is used, in the head (in the
+    /// base for a removed package).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dep: Option<DepKind>,
+    /// For `Cargo.lock`: the packages that depend on it, in the head (in
+    /// the base for a removed package).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub dependents: Vec<String>,
+    /// The package comes from crates.io (in the head, or in the base for a
+    /// removed package), so diff.rs, docs.rs and crates.io have it.
+    #[serde(default)]
+    pub crates_io: bool,
+    /// What its manifest says, from the package's sources that Cargo
+    /// downloaded for the analysis. Absent when they aren't there (e.g.
+    /// with `--syntax-only`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub info: Option<CrateInfo>,
+}
+
+/// How a locked package is used.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DepKind {
+    /// A package of the workspace, or a path dependency.
+    Local,
+    /// A dependency of a local package.
+    Direct,
+    /// Only a dependency of other dependencies.
+    Transitive,
+}
+
+/// A crate's metadata, from the manifest of its newest locked version.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct CrateInfo {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// The `repository` URL of its manifest.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    /// The changelog file in the published package, e.g. `CHANGELOG.md`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changelog: Option<String>,
+    /// It has a build script, which runs at build time.
+    #[serde(default)]
+    pub build_script: bool,
+    /// It is a procedural macro, which runs at build time.
+    #[serde(default)]
+    pub proc_macro: bool,
 }
 
 /// A selector of a stylesheet whose properties changed. Its properties
@@ -856,4 +977,7 @@ pub struct PartChange {
     /// entries of their own).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lines: Vec<SourceLine>,
+    /// For Rust code: the `unsafe` code it adds, changes or removes.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unsafe_code: Vec<UnsafeChange>,
 }

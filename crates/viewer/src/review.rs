@@ -20,7 +20,16 @@
 //! gets one too.
 //!
 //! Marks are kept in the browser's local storage, per pull request (or per
-//! pair of compared trees), when the browser allows that.
+//! pair of compared trees), when the browser allows that. The page of the
+//! whole PR and the page of the changes since an earlier commit share
+//! them. Their diffs differ, so a mark also records which change of the
+//! unit was reviewed: from which version to which (see [`Edge`]). A unit
+//! counts as reviewed when the reviewed changes lead from the version the
+//! page compares with to the one it shows: the whole PR reviewed at an
+//! earlier commit plus the changes since then make the PR's item reviewed,
+//! and the whole PR reviewed covers the changes since any commit. A hunk's
+//! mark is keyed by its changed lines, so it is shared when both pages show
+//! the same change.
 
 use crate::code::esc;
 use crate::data::{Data, changed};
@@ -79,12 +88,26 @@ pub struct Note {
     pub text: String,
 }
 
+/// A reviewed change of a unit: from the version a page compared with to
+/// the version it showed (see [`version_pair`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct Edge {
+    from: String,
+    to: String,
+    /// Reviewed on the page of the whole PR (else of the changes since an
+    /// earlier commit).
+    full: bool,
+}
+
 #[derive(Default)]
 struct Review {
     /// Review mode: the controls for marking are shown.
     on: bool,
     /// Storage key of this PR's marks.
     key: String,
+    /// The page shows the changes since an earlier commit, not the whole
+    /// PR.
+    since: bool,
     /// Everything that can be marked, in reading order: Rust items by
     /// module (as the sidebar lists them) and position, then other files.
     units: Vec<String>,
@@ -93,8 +116,14 @@ struct Review {
     order: Vec<String>,
     /// Hash of each unit's diff.
     prints: HashMap<String, u64>,
-    /// Saved marks: unit → hash of its diff when it was marked.
+    /// Saved marks: unit → hash of its diff when it was marked. For
+    /// items and files only from the page of the whole PR (the hashes of
+    /// the other page's diffs would replace them); for hunks from both.
     marks: BTreeMap<String, u64>,
+    /// The versions each unit is compared between on this page.
+    pairs: HashMap<String, (String, String)>,
+    /// Saved reviewed changes of each unit, from both pages.
+    edges: BTreeMap<String, Vec<Edge>>,
     /// The version each marked unit had when it was marked. Missing for
     /// marks made by pages from before versions were saved.
     versions: BTreeMap<String, Snapshot>,
@@ -138,6 +167,16 @@ const HUNK_GAP: usize = 8;
 
 /// The hunks of a changed item, if it has more than one.
 pub fn hunks(it: &Item) -> Vec<Hunk> {
+    let out = changes(it);
+    if out.len() < 2 {
+        return Vec::new();
+    }
+    out
+}
+
+/// The separate changes of a changed item, also when it has only one.
+/// Reformatted lines are no part of them.
+pub fn changes(it: &Item) -> Vec<Hunk> {
     if it.status != Status::Changed {
         return Vec::new();
     }
@@ -201,9 +240,6 @@ pub fn hunks(it: &Item) -> Vec<Hunk> {
             h.old.push(o);
             o += 1;
         }
-    }
-    if out.len() < 2 {
-        return Vec::new();
     }
     let mut seen = HashSet::new();
     out.into_iter()
@@ -296,6 +332,7 @@ const MODE_KEY: &str = "rust-pr-explorer.review-mode";
 const MARKS_KEY: &str = "rust-pr-explorer.reviewed";
 const VERSIONS_KEY: &str = "rust-pr-explorer.reviewed-versions";
 const NOTES_KEY: &str = "rust-pr-explorer.review-notes";
+const EDGES_KEY: &str = "rust-pr-explorer.reviewed-changes";
 
 /// The unit id of a changed file.
 pub fn file_unit(path: &str) -> String {
@@ -346,20 +383,74 @@ fn file_print(f: &ChangedFile) -> u64 {
 }
 
 /// Which pull request (or local project) the page is about: marks of one
-/// PR apply to every page generated for it, also after new commits.
+/// PR apply to every page generated for it, also after new commits, and
+/// also to the pages of the changes since an earlier commit.
 fn identity(d: &Data) -> String {
     let meta = &d.out.meta;
     match (&meta.pr, &meta.project) {
-        // A page of the changes since an earlier commit has diffs of its
-        // own, so its marks are kept apart from the whole PR's.
-        (Some(pr), _) => match &pr.since {
-            Some(since) => format!("{}#{} since {since}", pr.repo, pr.number),
-            None => format!("{}#{}", pr.repo, pr.number),
-        },
+        (Some(pr), _) => format!("{}#{}", pr.repo, pr.number),
         (None, Some(project)) => format!("local:{project}"),
         // Pages from before projects were identified.
         (None, None) => meta.url.clone().unwrap_or_else(|| meta.title.clone()),
     }
+}
+
+/// A side of a unit that doesn't exist (an added unit's base).
+const ABSENT: &str = "-";
+
+/// Hash of one side of an item: its signature, docs and source lines on
+/// that side. The same version of an item gets the same hash on every page,
+/// whatever it is compared with.
+fn item_side(it: &Item, head: bool) -> String {
+    let (skip, sig, docs) = if head {
+        ('-', &it.info.sig, &it.info.docs)
+    } else {
+        (
+            '+',
+            it.old_sig.as_ref().unwrap_or(&it.info.sig),
+            it.old_docs.as_ref().unwrap_or(&it.info.docs),
+        )
+    };
+    let lines: Vec<&str> = it
+        .source
+        .iter()
+        .filter(|l| l.0 != skip)
+        .map(|l| l.1.as_str())
+        .collect();
+    let parts = (&it.info.kind, sig, docs, lines);
+    format!(
+        "{:016x}",
+        hash(&serde_json::to_string(&parts).unwrap_or_default())
+    )
+}
+
+/// The versions a page compares a unit between: (base, head), each a hash
+/// of that side's content, [`ABSENT`] for a side without the unit. `None`
+/// when they are unknown (a page from an analysis before files had
+/// hashes).
+fn version_pair(d: &Data, unit: &str) -> Option<(String, String)> {
+    if let Some(path) = unit.strip_prefix("file:") {
+        let f = d.out.files.iter().find(|f| f.path == path)?;
+        let side = |h: &String, present: bool| match (h.is_empty(), present) {
+            (false, _) => Some(h.clone()),
+            (true, false) => Some(ABSENT.to_string()),
+            (true, true) => None,
+        };
+        return Some((
+            side(&f.old_hash, f.status != Status::Added)?,
+            side(&f.new_hash, f.status != Status::Removed)?,
+        ));
+    }
+    let it = d.item(unit)?;
+    let base = match it.status {
+        Status::Added => ABSENT.to_string(),
+        _ => item_side(it, false),
+    };
+    let head = match it.status {
+        Status::Removed => ABSENT.to_string(),
+        _ => item_side(it, true),
+    };
+    Some((base, head))
 }
 
 /// Every unit in reading order.
@@ -634,6 +725,68 @@ fn storage() -> Option<web_sys::Storage> {
     dom::window().local_storage().ok().flatten()
 }
 
+/// Encodes reviewed changes as lines of `f|s from to id` (`f` for the
+/// page of the whole PR).
+fn encode_edges(edges: &BTreeMap<String, Vec<Edge>>) -> String {
+    edges
+        .iter()
+        .flat_map(|(id, list)| {
+            list.iter().map(move |e| {
+                let page = if e.full { 'f' } else { 's' };
+                format!("{page} {} {} {id}\n", e.from, e.to)
+            })
+        })
+        .collect()
+}
+
+fn decode_edges(s: &str) -> BTreeMap<String, Vec<Edge>> {
+    let mut out: BTreeMap<String, Vec<Edge>> = BTreeMap::new();
+    for l in s.lines() {
+        let mut parts = l.splitn(4, ' ');
+        let (Some(page), Some(from), Some(to), Some(id)) =
+            (parts.next(), parts.next(), parts.next(), parts.next())
+        else {
+            continue;
+        };
+        let full = match page {
+            "f" => true,
+            "s" => false,
+            _ => continue,
+        };
+        out.entry(id.to_string()).or_default().push(Edge {
+            from: from.to_string(),
+            to: to.to_string(),
+            full,
+        });
+    }
+    out
+}
+
+/// Whether the reviewed changes of a unit cover what a page shows of it:
+/// they lead from the version it compares with to the one it shows. A
+/// review of the whole PR also covers every page of the changes since an
+/// earlier commit that ends at the same version.
+fn covered(edges: &[Edge], (from, to): (&str, &str), since: bool) -> bool {
+    if since && edges.iter().any(|e| e.full && e.to == to) {
+        return true;
+    }
+    // At least one reviewed change: a unit can change in ways the versions
+    // leave out (e.g. only its position), so `from` can equal `to`.
+    let mut seen: HashSet<&str> = HashSet::new();
+    let mut todo = vec![from];
+    while let Some(v) = todo.pop() {
+        for e in edges.iter().filter(|e| e.from == v) {
+            if e.to == to {
+                return true;
+            }
+            if seen.insert(&e.to) {
+                todo.push(&e.to);
+            }
+        }
+    }
+    false
+}
+
 /// Encodes marks as lines of `hash id`.
 fn encode(marks: &BTreeMap<String, u64>) -> String {
     marks
@@ -651,10 +804,17 @@ fn decode(s: &str) -> BTreeMap<String, u64> {
         .collect()
 }
 
-/// Reads the saved marks for this page's PR.
-pub fn load(d: &Data) {
-    let units = units_in_order(d);
-    let key = identity(d);
+/// The marks saved for a PR.
+#[derive(Default)]
+struct Stored {
+    marks: BTreeMap<String, u64>,
+    edges: BTreeMap<String, Vec<Edge>>,
+    versions: BTreeMap<String, Snapshot>,
+    notes: BTreeMap<String, Note>,
+}
+
+/// Reads the marks saved under a PR's key.
+fn read_stored(key: &str) -> Stored {
     let store = storage();
     let get = |prefix: &str| {
         store
@@ -662,28 +822,71 @@ pub fn load(d: &Data) {
             .and_then(|s| s.get_item(&format!("{prefix}:{key}")).ok().flatten())
     };
     let marks = get(MARKS_KEY).map(|s| decode(&s)).unwrap_or_default();
+    let edges = get(EDGES_KEY).map(|s| decode_edges(&s)).unwrap_or_default();
+    let marked = |id: &String| marks.contains_key(id) || edges.contains_key(id);
     let mut versions: BTreeMap<String, Snapshot> = get(VERSIONS_KEY)
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    versions.retain(|id, _| marks.contains_key(id));
+    versions.retain(|id, _| marked(id));
     let mut notes: BTreeMap<String, Note> = get(NOTES_KEY)
         .and_then(|s| serde_json::from_str(&s).ok())
         .unwrap_or_default();
-    notes.retain(|id, _| marks.contains_key(id));
+    notes.retain(|id, _| marked(id));
+    Stored {
+        marks,
+        edges,
+        versions,
+        notes,
+    }
+}
+
+/// Reads the saved marks again, before changing them: the other page of
+/// the PR, open in another tab, may have saved marks since this page read
+/// them, and saving this page's copy would lose those.
+fn reread() {
+    let key = REVIEW.with(|r| r.borrow().key.clone());
+    let s = read_stored(&key);
+    REVIEW.with(|r| {
+        let mut r = r.borrow_mut();
+        r.marks = s.marks;
+        r.edges = s.edges;
+        r.versions = s.versions;
+        r.notes = s.notes;
+    });
+}
+
+/// Reads the saved marks for this page's PR.
+pub fn load(d: &Data) {
+    let units = units_in_order(d);
+    let key = identity(d);
+    let Stored {
+        marks,
+        edges,
+        versions,
+        notes,
+    } = read_stored(&key);
     // On unless the reader turned it off before.
-    let on = store
+    let on = storage()
         .and_then(|s| s.get_item(MODE_KEY).ok().flatten())
         .is_none_or(|v| v != "off");
     let (hunks, prints) = hunks_and_prints(d, &units);
+    let pairs = units
+        .iter()
+        .filter_map(|(id, _)| Some((id.clone(), version_pair(d, id)?)))
+        .collect();
     let order = call_order(d, &units);
+    let since = d.out.meta.pr.as_ref().is_some_and(|pr| pr.since.is_some());
     REVIEW.with(|r| {
         *r.borrow_mut() = Review {
             on,
             key,
+            since,
             prints,
             units: units.into_iter().map(|(id, _)| id).collect(),
             order,
             marks,
+            pairs,
+            edges,
             versions,
             notes,
             unfolded: HashSet::new(),
@@ -694,7 +897,7 @@ pub fn load(d: &Data) {
 }
 
 fn save() {
-    let (key, marks, versions, notes) = REVIEW.with(|r| {
+    let (key, marks, edges, versions, notes) = REVIEW.with(|r| {
         let r = r.borrow();
         let versions = if r.versions.is_empty() {
             String::new()
@@ -706,7 +909,13 @@ fn save() {
         } else {
             serde_json::to_string(&r.notes).unwrap_or_default()
         };
-        (r.key.clone(), encode(&r.marks), versions, notes)
+        (
+            r.key.clone(),
+            encode(&r.marks),
+            encode_edges(&r.edges),
+            versions,
+            notes,
+        )
     });
     let put = |s: &web_sys::Storage, prefix: &str, text: &str| {
         let k = format!("{prefix}:{key}");
@@ -722,6 +931,11 @@ fn save() {
         );
         return;
     };
+    if !put(&store, EDGES_KEY, &edges) {
+        crate::toast(
+            "The browser's storage is full: the marks of the whole PR are saved, but not which changes you reviewed, so the PR's other page can't use them.",
+        );
+    }
     if !put(&store, NOTES_KEY, &notes) {
         crate::toast(
             "The browser's storage is full: your verdicts and comments are lost when the page is closed.",
@@ -763,10 +977,16 @@ pub fn mark(id: &str) -> Option<Mark> {
     REVIEW.with(|r| {
         let r = r.borrow();
         let now = r.prints.get(id)?;
-        Some(match r.marks.get(id) {
-            None => Mark::Open,
-            Some(h) if h == now => Mark::Done,
-            Some(_) => Mark::Stale,
+        let edges = r.edges.get(id).map(Vec::as_slice).unwrap_or_default();
+        let pair = r.pairs.get(id);
+        let done = r.marks.get(id) == Some(now)
+            || pair.is_some_and(|(f, t)| covered(edges, (f, t), r.since));
+        Some(if done {
+            Mark::Done
+        } else if r.marks.contains_key(id) || !edges.is_empty() {
+            Mark::Stale
+        } else {
+            Mark::Open
         })
     })
 }
@@ -807,15 +1027,43 @@ pub fn set_mark(d: &Data, id: &str, note: Option<Note>) {
             s.at = js_sys::Date::now();
             s
         });
+    reread();
     let changed = REVIEW.with(|r| {
         let mut r = r.borrow_mut();
         let Some(&now) = r.prints.get(id) else {
             return false;
         };
+        let pair = r.pairs.get(id).cloned();
+        let is_hunk = r.hunks.values().flatten().any(|h| h.id == id);
         if done {
-            r.marks.insert(id.to_string(), now);
+            // The other page's diff of an item has another hash: its mark
+            // is only the reviewed change.
+            if !r.since || is_hunk {
+                r.marks.insert(id.to_string(), now);
+            }
+            if let Some((from, to)) = pair {
+                let e = Edge {
+                    from,
+                    to,
+                    full: !r.since,
+                };
+                let list = r.edges.entry(id.to_string()).or_default();
+                if !list.contains(&e) {
+                    list.push(e);
+                }
+            }
         } else {
+            // Every review that ends at the version shown, so that the
+            // unit is open on both pages.
             r.marks.remove(id);
+            if let Some((_, to)) = pair
+                && let Some(list) = r.edges.get_mut(id)
+            {
+                list.retain(|e| e.to != to);
+                if list.is_empty() {
+                    r.edges.remove(id);
+                }
+            }
             r.unfolded.remove(id);
         }
         match note.filter(|n| *n != Note::default()) {
@@ -839,6 +1087,7 @@ pub fn clear() {
     REVIEW.with(|r| {
         let mut r = r.borrow_mut();
         r.marks.clear();
+        r.edges.clear();
         r.versions.clear();
         r.notes.clear();
         r.unfolded.clear();
@@ -1080,7 +1329,7 @@ fn update_groups() {
 }
 
 /// Leaves review mode; the marks stay.
-const EXIT: &str = r#"<button id="rv-keys" title="Keyboard shortcuts (?)">?</button><button id="rv-exit" title="Hide the review controls; your marks stay">Exit review</button>"#;
+const EXIT: &str = r#"<button id="rv-keys" title="Keyboard shortcuts (?)">?</button><button id="rv-exit" title="Hide the review controls; your marks stay">Exit<span class="btn-label"> review</span></button>"#;
 
 /// The progress and the review actions in the header: "Next" while
 /// something is left, then "Finish review…" as the main action. "Clear"
@@ -1104,7 +1353,7 @@ pub fn update_progress() {
                     .to_string()
             };
             format!(
-                r#"<span class="rv-progress{}" title="Reviewed items and files"><span class="rv-count">{count}</span><span class="rv-meter"><span style="width:{percent}%"></span></span></span>{next}<button id="rv-finish" class="{}" title="Collect your verdicts and comments for GitHub">Finish review…</button><button id="rv-clear" title="Remove all review marks">Clear marks</button>{EXIT}"#,
+                r#"<span class="rv-progress{}" title="Reviewed items and files"><span class="rv-count">{count}</span><span class="rv-meter"><span style="width:{percent}%"></span></span></span>{next}<button id="rv-finish" class="{}" title="Collect your verdicts and comments for GitHub">Finish<span class="btn-label"> review</span>…</button><button id="rv-clear" title="Remove all review marks">Clear<span class="btn-label"> marks</span></button>{EXIT}"#,
                 if all { " all" } else { "" },
                 if all { "primary" } else { "" },
             )
@@ -1281,10 +1530,13 @@ mod tests {
             *r.borrow_mut() = Review {
                 on: true,
                 key: String::new(),
+                since: false,
                 prints,
                 units: units.into_iter().map(|(id, _)| id).collect(),
                 order,
                 marks: marks.iter().map(|(id, h)| (id.to_string(), *h)).collect(),
+                pairs: HashMap::new(),
+                edges: BTreeMap::new(),
                 versions: BTreeMap::new(),
                 notes: BTreeMap::new(),
                 unfolded: HashSet::new(),
@@ -1565,6 +1817,74 @@ mod tests {
         let one = identity(&d);
         d.out.meta.project = Some("4567".into());
         assert_ne!(identity(&d), one);
+    }
+
+    fn edge(from: &str, to: &str, full: bool) -> Edge {
+        Edge {
+            from: from.into(),
+            to: to.into(),
+            full,
+        }
+    }
+
+    #[test]
+    fn reviewed_changes_round_trip() {
+        let mut m = BTreeMap::new();
+        m.insert(
+            "file:docs/a b.md".to_string(),
+            vec![edge("-", "00ff", true), edge("00ff", "1234", false)],
+        );
+        m.insert("t::f".to_string(), vec![edge("aa", "bb", true)]);
+        assert_eq!(decode_edges(&encode_edges(&m)), m);
+        // Damaged lines are skipped.
+        assert_eq!(decode_edges("x a b t::f\nf a\n").len(), 0);
+    }
+
+    #[test]
+    fn reviewed_changes_chain_up() {
+        // The whole PR reviewed at commit A, then the changes since A.
+        let both = [edge("base", "a", true), edge("a", "b", false)];
+        assert!(covered(&both, ("base", "b"), false));
+        assert!(!covered(&both[..1], ("base", "b"), false));
+        assert!(!covered(&both[1..], ("base", "b"), false));
+        // The page of the changes since A.
+        assert!(covered(&both[1..], ("a", "b"), true));
+        // The whole PR reviewed at B covers the changes since any commit.
+        let whole = [edge("base", "b", true)];
+        assert!(covered(&whole, ("a", "b"), true));
+        assert!(!covered(&whole, ("a", "c"), true));
+        // Changes since another commit don't.
+        assert!(!covered(&[edge("x", "b", false)], ("a", "b"), true));
+        // Nor does nothing, also when both versions are the same.
+        assert!(!covered(&[], ("a", "a"), false));
+    }
+
+    #[test]
+    fn an_items_version_is_the_same_on_both_pages() {
+        // The whole PR at commit A: `f` changed from base.
+        let mut at_a = item("c::f", Kind::Fn, "c", "src/lib.rs", 1, Status::Changed);
+        at_a.old_sig = Some("fn f(x: u8)".into());
+        at_a.source = vec![
+            sl('-', "fn f(x: u8) {"),
+            sl('+', "fn c::f() {"),
+            sl(' ', "}"),
+        ];
+        // The changes since A, at B: `f`'s body changed.
+        let mut since = item("c::f", Kind::Fn, "c", "src/lib.rs", 1, Status::Changed);
+        since.source = vec![sl(' ', "fn c::f() {"), sl('+', "    g();"), sl(' ', "}")];
+        // The whole PR at B.
+        let mut at_b = since.clone();
+        at_b.old_sig = at_a.old_sig.clone();
+        at_b.source = vec![
+            sl('-', "fn f(x: u8) {"),
+            sl('+', "fn c::f() {"),
+            sl('+', "    g();"),
+            sl(' ', "}"),
+        ];
+        assert_eq!(item_side(&at_a, true), item_side(&since, false));
+        assert_eq!(item_side(&since, true), item_side(&at_b, true));
+        assert_eq!(item_side(&at_a, false), item_side(&at_b, false));
+        assert_ne!(item_side(&at_a, true), item_side(&at_b, true));
     }
 
     #[test]

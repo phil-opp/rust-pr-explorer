@@ -189,6 +189,20 @@ fn read(path: &Path) -> Result<Option<String>, ()> {
     String::from_utf8(bytes).map(Some).map_err(|_| ())
 }
 
+/// Hash of one side of a changed file (see `ChangedFile::new_hash`): of
+/// its bytes, or of the path a symlink points to. Empty without the file.
+fn side_hash(present: bool, path: &Path) -> String {
+    if !present {
+        return String::new();
+    }
+    match std::fs::read_link(path) {
+        Ok(target) => model::content_hash(format!("symlink {}", target.display()).as_bytes()),
+        Err(_) => std::fs::read(path)
+            .map(|b| model::content_hash(&b))
+            .unwrap_or_default(),
+    }
+}
+
 /// The files that differ between two trees, leaving out directories named
 /// in `skip`.
 pub fn changed_files(base: &Path, head: &Path, skip: &[&str]) -> Vec<ChangedFile> {
@@ -234,6 +248,8 @@ pub fn changed_files(base: &Path, head: &Path, skip: &[&str]) -> Vec<ChangedFile
                 lang(path, binary).to_string()
             },
             generated: generated(path, tb.as_deref().or(ta.as_deref())),
+            old_hash: side_hash(a.contains(path), &pa),
+            new_hash: side_hash(b.contains(path), &pb),
             ..Default::default()
         };
         match (&ta, &tb) {
@@ -260,7 +276,7 @@ pub fn changed_files(base: &Path, head: &Path, skip: &[&str]) -> Vec<ChangedFile
                     file.manifest = manifest_changes(old, new);
                 }
                 if crate::lockfile::is_lock(path) {
-                    file.lock = crate::lockfile::compare(old, new);
+                    file.lock = crate::lockfile::compare(path, old, new);
                 }
             }
             _ => file.too_large = !binary,
@@ -554,6 +570,11 @@ mod tests {
         assert_eq!(changed_lines(&notes.hunks), (vec![10], vec![10]));
         assert_eq!(files[2].generated.as_deref(), Some("vendored"));
         assert_eq!(files[2].status, Status::Added);
+        // Each side's content hash, none for the side without the file.
+        assert_eq!(notes.old_hash, model::content_hash(lines.as_bytes()));
+        assert_ne!(notes.new_hash, notes.old_hash);
+        assert_eq!(files[0].old_hash, "");
+        assert_eq!(files[0].new_hash, model::content_hash(&[0, 1, 2]));
     }
 
     #[test]

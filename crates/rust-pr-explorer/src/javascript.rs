@@ -480,6 +480,7 @@ impl Outline<'_> {
             first: first_line,
             last: last_line,
             nested: Vec::new(),
+            unsafe_sites: Vec::new(),
         });
         self.spans.push((first, head_end, last));
         self.defs.len() - 1

@@ -32,6 +32,8 @@ pub struct Def {
     pub last: usize,
     /// Physical lines that belong to nested parts.
     pub nested: Vec<(usize, usize)>,
+    /// For Rust code: its `unsafe` code.
+    pub unsafe_sites: Vec<crate::unsafety::Site>,
 }
 
 /// Makes keys unique: the n-th repetition of a name gets `#n`.
@@ -118,6 +120,7 @@ pub fn compare_defs(a: &[Def], b: &[Def], old: &str, new: &str) -> Vec<PartChang
                 sig: o.sig.clone(),
                 line: o.first + 1,
                 lines: diff_lines(&own_lines(&old_lines, o), ""),
+                unsafe_code: crate::unsafety::compare(&o.unsafe_sites, &[]),
                 ..Default::default()
             });
             continue;
@@ -132,6 +135,7 @@ pub fn compare_defs(a: &[Def], b: &[Def], old: &str, new: &str) -> Vec<PartChang
                 sig: d.sig.clone(),
                 line: d.first + 1,
                 lines: diff_lines("", &src),
+                unsafe_code: crate::unsafety::compare(&[], &d.unsafe_sites),
                 ..Default::default()
             }),
             Some(o) => {
@@ -166,6 +170,7 @@ pub fn compare_defs(a: &[Def], b: &[Def], old: &str, new: &str) -> Vec<PartChang
                     cosmetic,
                     line: d.first + 1,
                     lines: diff_lines(&old_src, &src),
+                    unsafe_code: crate::unsafety::compare(&o.unsafe_sites, &d.unsafe_sites),
                 });
             }
         }
@@ -329,6 +334,7 @@ fn rust_walk(
             first: start.saturating_sub(1),
             last: end.saturating_sub(1),
             nested: Vec::new(),
+            unsafe_sites: crate::unsafety::sites(item.to_token_stream()),
         });
     }
 }
@@ -607,6 +613,7 @@ impl Yaml<'_> {
             first: b.first,
             last: b.last,
             nested,
+            unsafe_sites: Vec::new(),
         });
         let mut counts = BTreeMap::new();
         for c in &children {

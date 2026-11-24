@@ -605,8 +605,36 @@ impl Analyzer {
             doc_hidden,
             call_sites: body_col.sites,
             ext_sites,
+            unsafe_sites: own_unsafe(&p.node),
         })
     }
+}
+
+/// The `unsafe` code of an item itself: for an impl or a trait only its
+/// header, since its members are items of their own; none for a module.
+fn own_unsafe(node: &Node) -> Vec<crate::unsafety::Site> {
+    use quote::ToTokens;
+    let tokens = match node {
+        Node::Mod { .. } => return Vec::new(),
+        Node::Item(Item::Impl(i)) => {
+            let mut i = i.clone();
+            i.items.clear();
+            i.into_token_stream()
+        }
+        Node::Item(Item::Trait(t)) => {
+            let mut t = t.clone();
+            t.items.clear();
+            t.into_token_stream()
+        }
+        Node::Item(item) => item.to_token_stream(),
+        Node::ImplFn(f) => f.to_token_stream(),
+        Node::ImplConst(c) => c.to_token_stream(),
+        Node::ImplType(t) => t.to_token_stream(),
+        Node::TraitFn(f) => f.to_token_stream(),
+        Node::TraitConst(c) => c.to_token_stream(),
+        Node::TraitType(t) => t.to_token_stream(),
+    };
+    crate::unsafety::sites(tokens)
 }
 
 /// The targets of resolved paths, in source order.

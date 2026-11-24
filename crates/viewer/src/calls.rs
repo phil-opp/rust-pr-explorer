@@ -19,6 +19,11 @@ use web_sys::Element;
 
 /// The trail is cut to this many items.
 const TRAIL: usize = 30;
+/// A list shows at most this many changed items, and fills up to
+/// [`ROWS`] with unchanged ones, until "Show all" is pressed: an item
+/// with hundreds of callers would otherwise bury the card.
+const CHANGED_ROWS: usize = 30;
+const ROWS: usize = 12;
 
 #[derive(Default)]
 pub struct Calls {
@@ -28,6 +33,8 @@ pub struct Calls {
     trail: Vec<String>,
     /// Unchanged items whose card shows docs and source.
     expanded: BTreeSet<String>,
+    /// The lists (by section class) shown whole for the current focus.
+    show_all: BTreeSet<String>,
 }
 
 /// Focuses `id` and shows the call view: from the view's own links, the
@@ -47,6 +54,7 @@ pub fn focus(app: &mut App, id: &str) {
             }
         }
         s.focus = Some(id.to_string());
+        s.show_all.clear();
     }
     if app.s.view == View::Calls {
         render(app);
@@ -129,18 +137,56 @@ fn row_html(d: &Data, id: &str) -> String {
     };
     let context = !changed(it) && !d.touched(it);
     format!(
-        r#"<button class="cg-row{}" data-cfocus="{}" title="{}"><span class="dot {dot}"></span><span class="cg-name"><span class="kind">{}</span> {}<span class="cg-mod">{}</span></span>{done}{counts}</button>"#,
+        r#"<button class="cg-row{}" data-cfocus="{}" title="{}"><span class="dot {dot}"></span><span class="cg-name"><span class="kind">{}</span> {}{}<span class="cg-mod">{}</span></span>{done}{counts}</button>"#,
         if context { " context" } else { "" },
         esc(id),
         esc(&format!("Focus {}", d.short_path(id))),
         it.info.kind.label(),
         esc(&d.display_name(it)),
+        crate::unsafety::tag(it),
         esc(&d.mod_label(d.mod_of(it))),
     )
 }
 
-fn section_html(d: &Data, class: &str, title: &str, empty: &str, list: &[String]) -> String {
-    let rows: String = list.iter().map(|t| row_html(d, t)).collect();
+fn section_html(
+    d: &Data,
+    s: &Calls,
+    class: &str,
+    title: &str,
+    empty: &str,
+    list: &[String],
+) -> String {
+    let all = s.show_all.contains(class);
+    let (mut changed_n, mut shown_n) = (0, 0);
+    let mut rows = String::new();
+    let (mut hidden_changed, mut hidden) = (0, 0);
+    for t in list {
+        let ch = d.item(t).is_some_and(|it| changed(it) || d.touched(it));
+        let show = all
+            || if ch {
+                changed_n < CHANGED_ROWS
+            } else {
+                shown_n < ROWS
+            };
+        if show {
+            rows.push_str(&row_html(d, t));
+            shown_n += 1;
+            changed_n += usize::from(ch);
+        } else {
+            hidden += 1;
+            hidden_changed += usize::from(ch);
+        }
+    }
+    if hidden > 0 {
+        let what = match (hidden_changed, hidden - hidden_changed) {
+            (0, u) => format!("{u} unchanged"),
+            (c, 0) => format!("{c} changed"),
+            (c, u) => format!("{c} changed, {u} unchanged"),
+        };
+        rows.push_str(&format!(
+            r#"<button class="cg-more" data-cmore="{class}">Show {hidden} more ({what})</button>"#
+        ));
+    }
     format!(
         r#"<section class="cg-sec {class}"><h2>{title} <span class="cg-count">{}</span></h2>{}</section>"#,
         list.len(),
@@ -182,7 +228,7 @@ fn trail_html(d: &Data, s: &Calls) -> String {
 /// other changed item calls first (where a review usually starts). With a
 /// module (focused, or picked as "Internal call graph"), only the module's
 /// own changed items, and "other" means other in that module.
-fn start_html(d: &Data, module: Option<&str>) -> String {
+fn start_html(d: &Data, s: &Calls, module: Option<&str>) -> String {
     let in_scope = |it: &Item| module.is_none_or(|m| d.mod_of(it) == m);
     let changed_here = |it: &Item| {
         (changed(it) || d.touched(it)) && in_scope(it) && crate::commit_filter::item_in(&it.info.id)
@@ -237,11 +283,12 @@ fn start_html(d: &Data, module: Option<&str>) -> String {
     };
     let mut html = format!(
         r#"<div class="cg-start"><h1>{title}</h1><p class="sub">{intro}</p>{}"#,
-        section_html(d, "cg-roots", top_title, "None.", &ids(&top))
+        section_html(d, s, "cg-roots", top_title, "None.", &ids(&top))
     );
     if !rest.is_empty() {
         html.push_str(&section_html(
             d,
+            s,
             "cg-rest",
             "Other changed functions",
             "None.",
@@ -251,6 +298,7 @@ fn start_html(d: &Data, module: Option<&str>) -> String {
     if !others.is_empty() {
         html.push_str(&section_html(
             d,
+            s,
             "cg-other",
             "Other changed items",
             "None.",
@@ -265,14 +313,14 @@ pub fn render(app: &App) {
     let d = &app.d;
     let s = &app.s.calls;
     let Some(it) = s.focus.as_deref().and_then(|f| d.item(f)) else {
-        dom::set_html("view-calls", &start_html(d, None));
+        dom::set_html("view-calls", &start_html(d, s, None));
         return;
     };
     // A module: its changed items, to pick one from.
     if it.info.kind == Kind::Mod {
         dom::set_html(
             "view-calls",
-            &(trail_html(d, s) + &start_html(d, Some(&it.info.id))),
+            &(trail_html(d, s) + &start_html(d, s, Some(&it.info.id))),
         );
         return;
     }
@@ -288,6 +336,7 @@ pub fn render(app: &App) {
     if is_fn || !up.is_empty() {
         above.push_str(&section_html(
             d,
+            s,
             "cg-callers",
             "Called by",
             "Nothing in the analyzed code calls this.",
@@ -297,6 +346,7 @@ pub fn render(app: &App) {
     if !used.is_empty() || !is_fn && it.info.kind != Kind::Mod {
         above.push_str(&section_html(
             d,
+            s,
             "cg-users",
             "Used by",
             "Nothing in the analyzed code uses this.",
@@ -313,6 +363,7 @@ pub fn render(app: &App) {
         };
         section_html(
             d,
+            s,
             "cg-callees",
             "Calls",
             "Calls nothing in the analyzed code.",
@@ -337,6 +388,12 @@ pub fn render(app: &App) {
 
 /// Handles a click inside the call view. Returns whether it was consumed.
 pub fn on_click(app: &mut App, el: &Element) -> bool {
+    if let Some(b) = dom::closest(el, "[data-cmore]") {
+        let class = dom::data(&b, "cmore").unwrap_or_default();
+        app.s.calls.show_all.insert(class);
+        render(app);
+        return true;
+    }
     if let Some(r) = dom::closest(el, "[data-cfocus]") {
         let id = dom::data(&r, "cfocus").unwrap_or_default();
         focus(app, &id);

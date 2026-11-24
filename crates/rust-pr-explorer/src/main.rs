@@ -21,6 +21,7 @@ mod sigdiff;
 mod source;
 #[cfg(test)]
 mod tests;
+mod unsafety;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
@@ -102,7 +103,8 @@ const IOSEVKA_700: &[u8] = include_bytes!("../../viewer/assets/fonts/iosevka-700
 const STYLE: &str = include_str!("../../viewer/assets/explorer.css");
 // Built by build.rs from the `viewer` crate.
 const GLUE: &str = include_str!(concat!(env!("OUT_DIR"), "/viewer.js"));
-const WASM: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/viewer_bg.wasm"));
+// Gzipped, like the data (see `render_page`).
+const WASM_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/viewer_bg.wasm.gz"));
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -275,6 +277,7 @@ fn analyze_all(
             let since_base = analyze_side(&s.dir, how, "since");
             let pr = checkout.pr.clone().map(|pr| model::PrMeta {
                 base_rev: s.commit[..s.commit.len().min(10)].to_string(),
+                base_commit: s.commit.clone(),
                 custom_base: true,
                 since: Some(s.commit.clone()),
                 ..pr
@@ -333,7 +336,10 @@ fn compare(
         .filter(|i| i.info.kind == model::Kind::Mod)
         .map(|i| i.info.file.as_str())
         .collect();
+    // The analysis has had Cargo download the dependencies' sources.
+    let registry = lockfile::registry_sources();
     for f in &mut files {
+        lockfile::add_info(&mut f.lock, &registry);
         f.analyzed = analyzed.contains(f.path.as_str());
         if f.analyzed {
             let text = |dir: &Path| std::fs::read_to_string(dir.join(&f.path)).unwrap_or_default();
@@ -419,12 +425,13 @@ fn analyze_side(root: &Path, how: &Settings, label: &str) -> (analyze::Analysis,
 
 fn render_page(title: &str, json: &str) -> String {
     use base64::Engine;
-    // Keep the embedded JSON from closing the script element.
-    // Every `<` escaped: no `</script>` and no `<!--` can end or change
-    // the script element the JSON is in.
-    let json = json.replace('<', "\\u003c");
     let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
-    let wasm = b64(WASM);
+    // The wasm and the data are embedded gzipped and base64 encoded, and
+    // unpacked by the browser: a large PR's page is about a fourth of its
+    // plain size. Base64 also has no `<`, so the data can't end or change
+    // the script element it is in.
+    let data = b64(&gzip(json.as_bytes()));
+    let wasm = b64(WASM_GZ);
     // The default code font, embedded so that the page works offline.
     let fonts: String = [(400, IOSEVKA_400), (700, IOSEVKA_700)]
         .iter()
@@ -436,14 +443,22 @@ fn render_page(title: &str, json: &str) -> String {
             )
         })
         .collect();
+    // Base64 has no braces, so the data can't be taken for a placeholder.
     TEMPLATE
+        .replace("{{DATA}}", &data)
+        .replace("{{WASM}}", &wasm)
         .replace("/*{{FONTS}}*/", &fonts)
         .replace("/*{{STYLE}}*/", STYLE)
         .replace("/*{{GLUE}}*/", GLUE)
-        .replace("{{WASM}}", &wasm)
+        // Last, so that nothing in the PR's title is taken for a placeholder.
         .replace("{{TITLE}}", &html_escape(title))
-        // Last, so that nothing in the analyzed code is taken for a placeholder.
-        .replace("/*{{DATA}}*/", &json)
+}
+
+fn gzip(bytes: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    gz.write_all(bytes).expect("gzip into memory");
+    gz.finish().expect("gzip into memory")
 }
 
 fn html_escape(s: &str) -> String {

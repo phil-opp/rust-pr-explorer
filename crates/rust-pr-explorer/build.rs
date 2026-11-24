@@ -22,7 +22,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=RUST_PR_EXPLORER_STUB_VIEWER");
     if std::env::var_os("RUST_PR_EXPLORER_STUB_VIEWER").is_some_and(|v| v == "1") {
         std::fs::write(out_dir.join("viewer.js"), "").unwrap();
-        std::fs::write(out_dir.join("viewer_bg.wasm"), "").unwrap();
+        std::fs::write(out_dir.join("viewer_bg.wasm.gz"), "").unwrap();
         return;
     }
 
@@ -47,6 +47,22 @@ fn main() {
             .run(&wasm, &wasm)
             .expect("wasm-opt failed");
     }
+    gzip(
+        &out_dir.join("viewer_bg.wasm"),
+        &out_dir.join("viewer_bg.wasm.gz"),
+    );
+}
+
+/// The page embeds the wasm gzipped, which makes it about a third of its
+/// size, and the browser unpacks it with a `DecompressionStream`: the
+/// page is often served without compression, e.g. from a workflow
+/// artifact or as a local file.
+fn gzip(from: &Path, to: &Path) {
+    use std::io::Write;
+    let wasm = std::fs::read(from).unwrap();
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+    gz.write_all(&wasm).unwrap();
+    std::fs::write(to, gz.finish().unwrap()).unwrap();
 }
 
 fn build_viewer(workspace: &Path, target_dir: &Path) {
