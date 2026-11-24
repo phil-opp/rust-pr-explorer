@@ -789,6 +789,11 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .rv-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
 .rv-row .grow { flex: 1; }
 .rv-editor button, .rv-finish button { padding: 4px 12px; }
+/* A link that looks like the dialog's buttons. */
+.rv-finish a.rv-btn { font-size: 13px; color: inherit; text-decoration: none; background: var(--bg-alt); border: 1px solid var(--border); border-radius: 4px; padding: 4px 12px; }
+.rv-finish a.rv-btn:hover { border-color: var(--link); }
+/* Buttons big enough to tap. */
+@media (hover: none) and (pointer: coarse) { .rv-editor button, .rv-finish button, .rv-finish a.rv-btn { padding: 8px 14px; } }
 #modal-b button.primary { background: var(--reviewed); border-color: var(--reviewed); color: var(--bg); font-weight: 600; }
 .rv-ev { display: block; margin: 4px 0; cursor: pointer; }
 .rv-cmd { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 4px 8px; background: var(--bg-code); border-radius: 4px; font-size: 12px; }
