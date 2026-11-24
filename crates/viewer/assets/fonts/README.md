@@ -1,11 +1,11 @@
 # Iosevka (subset)
 
-The default code font of the explorer, embedded in every generated page so that
+The default code font, embedded in every generated page so that
 it works offline.
 
 - Source: `@fontsource/iosevka` 5.3.0 on npm (`files/iosevka-latin-{400,700}-normal.woff2`).
 - License: SIL Open Font License 1.1, see `LICENSE-Iosevka.txt`.
-- Subset to the characters the explorer shows in code (ASCII, Latin-1 and a few
+- Subset to the characters the page shows in code (ASCII, Latin-1 and a few
   punctuation marks and arrows), which takes each weight from about 1 MB to 23 kB:
 
 ```sh

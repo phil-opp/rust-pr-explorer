@@ -1,4 +1,4 @@
-// Headless browser smoke test of an explorer page.
+// Headless browser smoke test of a review page.
 //
 // Usage: node ci/smoke.mjs <page.html> <out-dir>
 //

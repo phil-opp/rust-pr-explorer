@@ -1,5 +1,5 @@
 //! Compiles the viewer crate to WebAssembly and generates its JavaScript
-//! bindings, so that `main.rs` can embed both in the explorer page.
+//! bindings, so that `main.rs` can embed both in the review page.
 //!
 //! Requires the `wasm32-unknown-unknown` target:
 //! `rustup target add wasm32-unknown-unknown`.
@@ -15,12 +15,12 @@ fn main() {
         println!("cargo:rerun-if-changed={}", workspace.join(dep).display());
     }
 
-    // For analyzing this repository with the explorer itself in trusted
+    // For analyzing this repository with the tool itself in trusted
     // mode, which runs this build script once per version: the viewer's
     // wasm build is most of that time, and the analysis doesn't need it.
     // A tool built this way shows an empty page.
-    println!("cargo:rerun-if-env-changed=RUST_PR_EXPLORER_STUB_VIEWER");
-    if std::env::var_os("RUST_PR_EXPLORER_STUB_VIEWER").is_some_and(|v| v == "1") {
+    println!("cargo:rerun-if-env-changed=SEMANTIC_REVIEW_STUB_VIEWER");
+    if std::env::var_os("SEMANTIC_REVIEW_STUB_VIEWER").is_some_and(|v| v == "1") {
         std::fs::write(out_dir.join("viewer.js"), "").unwrap();
         std::fs::write(out_dir.join("viewer_bg.wasm.gz"), "").unwrap();
         return;

@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/model", "crates/rust-pr-explorer", "crates/viewer"]
+members = ["crates/model", "crates/semantic-review", "crates/viewer"]
 exclude = ["fixtures"]
-default-members = ["crates/model", "crates/rust-pr-explorer"]
+default-members = ["crates/model", "crates/semantic-review"]
 
 [workspace.package]
 version = "0.1.0"
@@ -38,7 +38,7 @@ lto = true
 [profile.action]
 inherits = "release"
 
-[profile.action.package.rust-pr-explorer]
+[profile.action.package.semantic-review]
 opt-level = 0
 
 [profile.action.package.model]

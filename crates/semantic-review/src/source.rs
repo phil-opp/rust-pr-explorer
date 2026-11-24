@@ -376,7 +376,7 @@ impl Checkout {
 }
 
 /// What changed in a pull request since an earlier commit of it, such as
-/// the one an earlier explorer page showed.
+/// the one an earlier review page showed.
 pub enum Since {
     /// The PR changed since then.
     Changes(SinceChanges),
@@ -485,9 +485,9 @@ fn since_checkout(
             git_dir,
             &[
                 "-c",
-                "user.name=rust-pr-explorer",
+                "user.name=semantic-review",
                 "-c",
-                "user.email=rust-pr-explorer@localhost",
+                "user.email=semantic-review@localhost",
                 "commit-tree",
                 &tree,
                 "-p",

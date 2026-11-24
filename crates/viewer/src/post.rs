@@ -579,7 +579,7 @@ fn body(comments: &[Comment], own: &str, event: Verdict, inline: bool) -> String
     }
     if parts.is_empty() && event != Verdict::Approve {
         parts.push(if comments.is_empty() {
-            "Reviewed with Rust PR Explorer.".to_string()
+            "Reviewed with Semantic Review.".to_string()
         } else {
             "See the comments on the code.".to_string()
         });

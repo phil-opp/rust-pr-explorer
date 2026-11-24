@@ -1,6 +1,6 @@
 [package]
 name = "viewer"
-description = "The explorer page's front end, compiled to WebAssembly"
+description = "The review page's front end, compiled to WebAssembly"
 version.workspace = true
 edition.workspace = true
 

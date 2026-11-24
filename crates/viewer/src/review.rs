@@ -328,6 +328,8 @@ thread_local! {
     static REVIEW: RefCell<Review> = RefCell::new(Review::default());
 }
 
+// The keys keep the tool's old name, so that marks saved before the rename
+// still load.
 const MODE_KEY: &str = "rust-pr-explorer.review-mode";
 const MARKS_KEY: &str = "rust-pr-explorer.reviewed";
 const VERSIONS_KEY: &str = "rust-pr-explorer.reviewed-versions";

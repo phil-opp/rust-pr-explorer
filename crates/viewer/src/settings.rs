@@ -49,6 +49,8 @@ const FONTS: &[&str] = &[
     "Consolas",
 ];
 const SIZES: std::ops::RangeInclusive<u32> = 10..=22;
+// Keeps the tool's old name, so that settings saved before the rename still
+// load.
 const KEY: &str = "rust-pr-explorer.settings";
 
 thread_local! {

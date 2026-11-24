@@ -1,5 +1,5 @@
 [package]
-name = "rust-pr-explorer"
+name = "semantic-review"
 version.workspace = true
 edition.workspace = true
 build = "build.rs"

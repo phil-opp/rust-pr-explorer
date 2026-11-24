@@ -1,4 +1,4 @@
-//! Front end of the Rust PR Explorer page, compiled to WebAssembly.
+//! Front end of the Semantic Review page, compiled to WebAssembly.
 //!
 //! The analysis is embedded in the page as JSON. Views are rendered as
 //! HTML strings; one listener per event type on the document dispatches

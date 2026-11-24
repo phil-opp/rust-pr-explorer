@@ -1,4 +1,4 @@
-//! The analysis result that the command-line tool embeds in the explorer
+//! The analysis result that the command-line tool embeds in the review
 //! page and the viewer reads back.
 
 use serde::{Deserialize, Serialize};
@@ -589,7 +589,7 @@ pub struct PrMeta {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub custom_base: bool,
     /// The page shows only what changed since this earlier commit of the
-    /// PR (in full), e.g. the one an earlier explorer page showed, leaving
+    /// PR (in full), e.g. the one an earlier review page showed, leaving
     /// out what the base branch changed in between. `base_rev` is then
     /// that commit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
