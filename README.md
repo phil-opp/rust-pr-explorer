@@ -43,14 +43,14 @@ jobs:
 
 ### Pull requests from forks
 
-On a PR from a fork (and one by Dependabot), GitHub gives the workflow a read-only token, so the action can't post the comment. It then uploads the data for the comment instead, and a second workflow, triggered by `workflow_run` and with a token that can write, can post it. PRs from branches of the repository keep getting their comment from the workflow above.
+On a PR from a fork (and one by Dependabot), GitHub gives the workflow a read-only token, so the action can't post the comment. It then uploads the data for the comment instead, and a second workflow, triggered by `workflow_run` and with a token that can write, can post it. PRs from branches of the repository keep getting their comment from `rust-semantic-review.yml`.
 
 ```yaml
 # .github/workflows/rust-semantic-review-comment.yml
 name: Rust Semantic Review comment
 on:
   workflow_run:
-    workflows: [Rust Semantic Review] # the name of the workflow above
+    workflows: [Rust Semantic Review] # the `name` of rust-semantic-review.yml
     types: [completed]
 permissions:
   actions: read
@@ -63,7 +63,7 @@ jobs:
       - uses: phil-opp/rust-semantic-review/comment@main
 ```
 
-With `comment: workflow-run`, the workflow above never comments itself and only needs `pull-requests: read`; the second workflow then posts every comment.
+With `comment: workflow-run` in `rust-semantic-review.yml`, the action there never comments itself and only needs `pull-requests: read`; `rust-semantic-review-comment.yml` then posts every comment.
 
 The second workflow runs as it is on the default branch and never checks out or runs the PR's code. It treats the data from the first run as untrusted, since a fork's PR can change that workflow; see [docs/usage.md](docs/usage.md#pull-requests-from-forks).
 
