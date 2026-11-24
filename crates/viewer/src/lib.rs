@@ -267,6 +267,22 @@ pub fn hide_tooltip() {
     }
 }
 
+thread_local! {
+    /// Whether the last pointer was a finger. A tap fires `mouseover`
+    /// too, but no `mouseout` follows, so a hover preview it opened would
+    /// stay on top of the page.
+    static TOUCH: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+fn note_pointer(ev: &PointerEvent) {
+    let touch = ev.pointer_type() == "touch";
+    if touch && !TOUCH.replace(true) {
+        hide_tooltip();
+    } else if ev.pointer_type() == "mouse" {
+        TOUCH.set(false);
+    }
+}
+
 fn install_listeners() {
     let doc: web_sys::EventTarget = dom::document().into();
     if let Some(overview) = dom::by_id("view-overview") {
@@ -295,6 +311,7 @@ fn install_listeners() {
         let (Some(el), Ok(pev)) = (dom::target_element(&ev), ev.dyn_into::<PointerEvent>()) else {
             return;
         };
+        note_pointer(&pev);
         with_app(|app| {
             // Search results are picked on press, before the input's blur hides them.
             if let Some(r) = dom::closest(&el, "#search-results [data-i]") {
@@ -313,6 +330,7 @@ fn install_listeners() {
         let Ok(pev) = ev.dyn_into::<PointerEvent>() else {
             return;
         };
+        note_pointer(&pev);
         with_app(|app| {
             canvas::on_pointer_move(app, &pev);
             space::on_pointer_move(app, &pev);
@@ -1117,7 +1135,8 @@ fn on_mouse_over(app: &mut App, el: &Element) {
             dom::toggle_class(&c, "hover-target", false);
         }
     }
-    let Some(r) = dom::closest(el, ".ref") else {
+    // No hover previews for taps: the tap opens the item anyway.
+    let Some(r) = dom::closest(el, ".ref").filter(|_| !TOUCH.get()) else {
         hide_tooltip();
         return;
     };
