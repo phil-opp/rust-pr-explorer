@@ -1819,6 +1819,7 @@ mod tests {
                 unfolded: HashSet::new(),
                 hunks,
                 saved: Vec::new(),
+                stayed: None,
             }
         });
     }
