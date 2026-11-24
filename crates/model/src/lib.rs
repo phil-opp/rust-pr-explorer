@@ -544,6 +544,41 @@ pub struct PrMeta {
     /// resolved, in the order GitHub lists them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads: Vec<ReviewThread>,
+    /// Review marks that reviewers saved in their reviews of the PR (see
+    /// [`MARKS_MARKER`]): the latest of each reviewer, so that a page
+    /// built after new commits can offer them again.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub saved_marks: Vec<SavedMarks>,
+}
+
+/// Review marks saved in a review of the PR.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, Eq)]
+pub struct SavedMarks {
+    /// Who posted the review.
+    pub login: String,
+    /// When, as GitHub gives it (ISO 8601).
+    pub at: String,
+    pub url: String,
+    /// The marks, as the viewer wrote them (base64 of JSON).
+    pub data: String,
+}
+
+/// What starts the review marks that the viewer adds, hidden in an HTML
+/// comment, to a review it posts: `<!-- rust-pr-explorer-marks v1 DATA -->`
+/// with the marks as base64. The same text without the comment is what the
+/// viewer copies to paste on another page.
+pub const MARKS_MARKER: &str = "rust-pr-explorer-marks v1 ";
+
+/// The marks data (base64) after the marker in a text, with any line
+/// breaks taken out.
+pub fn marks_in(text: &str) -> Option<String> {
+    let start = text.find(MARKS_MARKER)? + MARKS_MARKER.len();
+    let data: String = text[start..]
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .take_while(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '/' | '='))
+        .collect();
+    (!data.is_empty()).then_some(data)
 }
 
 /// A review thread of a pull request: comments on a line of a file.

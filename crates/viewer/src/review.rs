@@ -134,6 +134,9 @@ struct Review {
     unfolded: HashSet<String>,
     /// The hunks of items that have more than one, by item.
     hunks: HashMap<String, Vec<Hunk>>,
+    /// Marks that reviewers saved in their reviews of the PR, latest
+    /// first.
+    saved: Vec<model::SavedMarks>,
 }
 
 /// One separate change in an item's diff.
@@ -884,9 +887,116 @@ pub fn load(d: &Data) {
             notes,
             unfolded: HashSet::new(),
             hunks,
+            saved: d
+                .out
+                .meta
+                .pr
+                .as_ref()
+                .map(|pr| pr.saved_marks.clone())
+                .unwrap_or_default(),
         }
     });
     apply_mode();
+}
+
+/// The marks of a PR as one text, to take them to another page: in a
+/// posted review, or copied and pasted.
+#[derive(Serialize, Deserialize)]
+struct Payload {
+    v: u32,
+    /// The PR's storage key, so that marks don't go to another PR.
+    key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    marks: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    edges: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    notes: BTreeMap<String, Note>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    versions: BTreeMap<String, Snapshot>,
+}
+
+/// Whether anything of this PR is marked, on this page or not.
+pub fn has_marks() -> bool {
+    REVIEW.with(|r| {
+        let r = r.borrow();
+        !r.marks.is_empty() || !r.edges.is_empty()
+    })
+}
+
+/// The saved marks of this PR as JSON, `None` when there are none. With
+/// `versions`, also the reviewed versions (for **Show changes**), which
+/// can make it much longer.
+pub fn export(versions: bool) -> Option<String> {
+    reread();
+    REVIEW.with(|r| {
+        let r = r.borrow();
+        if r.marks.is_empty() && r.edges.is_empty() {
+            return None;
+        }
+        let p = Payload {
+            v: 1,
+            key: r.key.clone(),
+            marks: encode(&r.marks),
+            edges: encode_edges(&r.edges),
+            notes: r.notes.clone(),
+            versions: if versions {
+                r.versions.clone()
+            } else {
+                BTreeMap::new()
+            },
+        };
+        serde_json::to_string(&p).ok()
+    })
+}
+
+/// Adds the marks of an [`export`] to the saved ones, where this page has
+/// none of its own for the same unit, and saves them. Returns how many
+/// units and hunks got a mark they didn't have. Call [`load`] afterwards
+/// to show them.
+pub fn import(json: &str) -> Result<usize, String> {
+    let p: Payload =
+        serde_json::from_str(json).map_err(|_| "These aren't review marks.".to_string())?;
+    if p.v != 1 {
+        return Err("These marks are from a newer version of the explorer.".to_string());
+    }
+    reread();
+    let added = REVIEW.with(|r| {
+        let mut r = r.borrow_mut();
+        if p.key != r.key {
+            return Err(format!(
+                "These marks are for {}, not for this page's {}.",
+                p.key, r.key
+            ));
+        }
+        let before: HashSet<String> = r.marks.keys().chain(r.edges.keys()).cloned().collect();
+        for (id, h) in decode(&p.marks) {
+            r.marks.entry(id).or_insert(h);
+        }
+        for (id, list) in decode_edges(&p.edges) {
+            let mine = r.edges.entry(id).or_default();
+            for e in list {
+                if !mine.contains(&e) {
+                    mine.push(e);
+                }
+            }
+        }
+        for (id, n) in p.notes {
+            r.notes.entry(id).or_insert(n);
+        }
+        for (id, v) in p.versions {
+            r.versions.entry(id).or_insert(v);
+        }
+        let after: HashSet<&String> = r.marks.keys().chain(r.edges.keys()).collect();
+        Ok(after.iter().filter(|id| !before.contains(**id)).count())
+    })?;
+    save();
+    Ok(added)
+}
+
+/// Marks that reviewers saved in their reviews of the PR.
+pub fn saved_marks() -> Vec<model::SavedMarks> {
+    REVIEW.with(|r| r.borrow().saved.clone())
 }
 
 fn save() {
@@ -1324,6 +1434,25 @@ fn update_groups() {
 /// Leaves review mode; the marks stay.
 const EXIT: &str = r#"<button id="rv-keys" title="Keyboard shortcuts (?)">?</button><button id="rv-exit" title="Hide the review controls; your marks stay">Exit review</button>"#;
 
+/// A button that loads the marks saved in a review, while this page has
+/// no marks of the PR: what a page of a later explorer comment starts with,
+/// since it can't see the marks of the earlier one's page.
+fn load_offer() -> String {
+    if has_marks() {
+        return String::new();
+    }
+    let saved = saved_marks();
+    match saved.as_slice() {
+        [] => String::new(),
+        [one] => format!(
+            r#"<button id="rv-load" class="primary" title="Load the marks you saved with your review of {}">Load marks from {}'s review</button>"#,
+            esc(&one.at),
+            esc(&one.login)
+        ),
+        _ => r#"<button id="rv-load" class="primary" title="Load the marks saved with a review of this PR">Load marks from a review…</button>"#.to_string(),
+    }
+}
+
 /// The progress and the review actions in the header: "Next" while
 /// something is left, then "Finish review…" as the main action. "Clear"
 /// and "Exit review" sit apart.
@@ -1346,9 +1475,10 @@ pub fn update_progress() {
                     .to_string()
             };
             format!(
-                r#"<span class="rv-progress{}" title="Reviewed items and files"><span class="rv-count">{count}</span><span class="rv-meter"><span style="width:{percent}%"></span></span></span>{next}<button id="rv-finish" class="{}" title="Collect your verdicts and comments for GitHub">Finish review…</button><button id="rv-clear" title="Remove all review marks">Clear marks</button>{EXIT}"#,
+                r#"<span class="rv-progress{}" title="Reviewed items and files"><span class="rv-count">{count}</span><span class="rv-meter"><span style="width:{percent}%"></span></span></span>{next}<button id="rv-finish" class="{}" title="Collect your verdicts and comments for GitHub">Finish review…</button>{load}<button id="rv-marks" title="Take your marks to another page, or clear them">Marks…</button>{EXIT}"#,
                 if all { " all" } else { "" },
                 if all { "primary" } else { "" },
+                load = load_offer(),
             )
         }
     };
@@ -1534,6 +1664,7 @@ mod tests {
                 notes: BTreeMap::new(),
                 unfolded: HashSet::new(),
                 hunks,
+                saved: Vec::new(),
             }
         });
     }

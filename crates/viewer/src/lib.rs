@@ -7,6 +7,7 @@
 mod bump;
 mod calls;
 mod canvas;
+mod carry;
 mod code;
 mod commit_filter;
 mod css;
@@ -727,11 +728,69 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
         if sure {
             review::clear();
             app.s.rv_current = None;
+            close_modal();
             set_view(app, app.s.view);
         }
         return true;
     }
+    if dom::closest(el, "#rv-marks").is_some() {
+        open_modal("Your review marks", &carry::dialog_html());
+        return true;
+    }
+    if dom::closest(el, "#rv-load").is_some() {
+        match review::saved_marks().as_slice() {
+            [one] => load_marks(app, &one.data.clone()),
+            _ => open_modal("Your review marks", &carry::dialog_html()),
+        }
+        return true;
+    }
+    if let Some(b) = dom::closest(el, "[data-rv-load]") {
+        let i: usize = dom::data(&b, "rv-load")
+            .and_then(|i| i.parse().ok())
+            .unwrap_or(usize::MAX);
+        if let Some(m) = review::saved_marks().get(i) {
+            load_marks(app, &m.data.clone());
+        }
+        return true;
+    }
+    if dom::closest(el, "#rv-paste-load").is_some() {
+        load_marks(app, &textarea_value("rv-paste"));
+        return true;
+    }
+    if dom::closest(el, "#rv-copy-marks").is_some() {
+        if let Some(text) = carry::copy_text() {
+            if let Some(out) =
+                dom::by_id("rv-out").and_then(|t| t.dyn_into::<web_sys::HtmlTextAreaElement>().ok())
+            {
+                out.set_value(&text);
+                dom::toggle_class(&out, "hidden", false);
+                out.select();
+            }
+            copy(&text, "Your marks");
+        }
+        return true;
+    }
     false
+}
+
+/// Loads marks from a text (see `carry`) and shows them.
+fn load_marks(app: &mut App, text: &str) {
+    // A review's data is the base64 alone.
+    let text = if text.contains(model::MARKS_MARKER) {
+        text.to_string()
+    } else {
+        format!("{}{text}", model::MARKS_MARKER)
+    };
+    match carry::import_text(&text) {
+        Ok(msg) => {
+            close_modal();
+            review::load(&app.d);
+            set_view(app, app.s.view);
+            pages::render_sidebar(app);
+            toast(&msg);
+        }
+        Err(e) => toast(&e),
+    }
 }
 
 /// Gives a unit a verdict and moves on to the next unreviewed one.
@@ -842,11 +901,11 @@ fn finish_output(app: &App, what: &str) {
             "The review as Markdown",
         ),
         "cmd" => (
-            post::command(&app.d, &comments, &own, event).unwrap_or_default(),
+            post::command(&app.d, &comments, &own, event, &carry::for_review()).unwrap_or_default(),
             "The command",
         ),
         _ => (
-            post::review_json(&comments, &own, event, commit),
+            post::review_json(&comments, &own, event, commit, &carry::for_review()),
             "The review's JSON",
         ),
     };
