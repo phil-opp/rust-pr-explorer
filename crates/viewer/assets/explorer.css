@@ -918,7 +918,7 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
 /* The focused card is laid out like a page section, not placed on the
    canvas; what only the canvas can do (close it, open its relatives next
    to it) is left out, since the lists show the relatives. */
-.cg-focus { scroll-margin-top: 44px; }
+.cg-focus, .cg-above { scroll-margin-top: 44px; }
 .cg-focus .card { position: relative; left: auto !important; top: auto !important; width: auto; }
 .cg-focus .card-h .x, .cg-focus .card-badge.private,
 .cg-focus [data-act="callers"], .cg-focus [data-act="callees"], .cg-focus [data-act="uses"],

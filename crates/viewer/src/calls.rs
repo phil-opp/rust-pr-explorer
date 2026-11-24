@@ -40,6 +40,20 @@ pub struct Calls {
 /// Focuses `id` and shows the call view: from the view's own links, the
 /// trail grows (or, for an item already on it, goes back to it).
 pub fn focus(app: &mut App, id: &str) {
+    // On a phone the card is below the callers: start there.
+    focus_at(app, id, "#view-calls .cg-focus");
+}
+
+/// Focuses `id` like [`focus`], but starts at what calls or uses it,
+/// which on a phone is above the card: for "Show callers", whose callers
+/// would otherwise be out of sight, and which would do nothing visible
+/// when pressed on the focused item's own card.
+pub fn show_callers(app: &mut App, id: &str) {
+    focus_at(app, id, "#view-calls .cg-above");
+}
+
+/// Focuses `id` and scrolls the element matching `start` to the top.
+fn focus_at(app: &mut App, id: &str, start: &'static str) {
     if app.d.item(id).is_none() {
         return;
     }
@@ -65,12 +79,11 @@ pub fn focus(app: &mut App, id: &str) {
     if let Some(sec) = dom::html_by_id("view-calls") {
         sec.set_scroll_top(0);
     }
-    // On a phone the card is below the callers: start there.
-    dom::raf(|| {
-        if let Some(card) = dom::query("#view-calls .cg-focus") {
+    dom::raf(move || {
+        if let Some(el) = dom::query(start) {
             let opts = web_sys::ScrollIntoViewOptions::new();
             opts.set_block(web_sys::ScrollLogicalPosition::Start);
-            card.scroll_into_view_with_scroll_into_view_options(&opts);
+            el.scroll_into_view_with_scroll_into_view_options(&opts);
         }
     });
 }

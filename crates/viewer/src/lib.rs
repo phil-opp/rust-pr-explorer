@@ -580,10 +580,10 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
     }
     if let Some(b) = dom::closest(el, "[data-impact]") {
         let id = dom::data(&b, "impact").unwrap_or_default();
-        // On a phone: the item in the call view, whose callers lead up
+        // On a phone: the item's callers in the call view, which lead up
         // to the public API.
         if narrow() {
-            calls::focus(app, &id);
+            calls::show_callers(app, &id);
         } else {
             canvas::show_impact(app, &id);
         }
