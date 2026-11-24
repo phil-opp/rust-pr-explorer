@@ -13,6 +13,7 @@ mod parts;
 mod public_api;
 mod python;
 mod reformat;
+mod reuse;
 #[cfg(feature = "semantic")]
 mod semantic;
 mod semver;
@@ -96,6 +97,19 @@ enum Input {
         /// on stdout.
         #[arg(long, conflicts_with = "base")]
         since: Option<String>,
+        /// Also save the analysis of the head here, so that a later run
+        /// with `--since` this commit can reuse it with
+        /// `--since-analysis`.
+        #[arg(long)]
+        save_head_analysis: Option<PathBuf>,
+        /// The analysis of the `--since` commit that an earlier run saved
+        /// with `--save-head-analysis`, used instead of analyzing that
+        /// commit again if it fits exactly: the same tree, the same build
+        /// of the tool and the same settings and toolchain. Otherwise it
+        /// is analyzed. Prints `since-analysis: reused` or
+        /// `since-analysis: analyzed (reason)` on stdout.
+        #[arg(long, requires = "since")]
+        since_analysis: Option<PathBuf>,
     },
     /// Two revisions of a local git repository.
     Git {
@@ -146,8 +160,17 @@ fn main() -> Result<()> {
     } else {
         source::Trust::Untrusted
     };
+    let (mut save_head, mut since_analysis) = (None, None);
     let checkout = match &cli.input {
-        Input::Pr { pr, base, since } => {
+        Input::Pr {
+            pr,
+            base,
+            since,
+            save_head_analysis,
+            since_analysis: reuse,
+        } => {
+            save_head = save_head_analysis.as_deref();
+            since_analysis = reuse.as_deref();
             source::Checkout::from_github_pr(pr, base.as_deref(), since.as_deref(), trust)?
         }
         Input::Git { repo, base, head } => source::Checkout::from_git(repo, base, head, trust)?,
@@ -175,6 +198,8 @@ fn main() -> Result<()> {
         semantic: !cli.syntax_only,
         trust,
         target_dir,
+        save_head,
+        since_analysis,
     };
     let (mut output, since) = analyze_all(&checkout, &how);
     if cli.semver_checks {
@@ -268,6 +293,23 @@ struct Settings<'a> {
     /// when trusted). `None` uses the project's own.
     #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
     target_dir: Option<&'a Path>,
+    /// Where to save the head's analysis (see [`reuse`]).
+    save_head: Option<&'a Path>,
+    /// A saved analysis to use for the "since" side if it fits.
+    since_analysis: Option<&'a Path>,
+}
+
+impl Settings<'_> {
+    /// The key of an analysis of `dir`, a checkout of `tree`, with these
+    /// settings.
+    fn key(&self, tree: &str, dir: &Path) -> reuse::Key {
+        reuse::Key::new(
+            tree,
+            dir,
+            self.trust == source::Trust::Trusted,
+            self.semantic,
+        )
+    }
 }
 
 #[cfg(test)]
@@ -280,6 +322,8 @@ fn analyze_checkout(
         semantic,
         trust,
         target_dir: None,
+        save_head: None,
+        since_analysis: None,
     };
     analyze_all(checkout, &how).0
 }
@@ -293,6 +337,17 @@ fn analyze_all(
 ) -> (model::Output, Option<model::Output>) {
     let base = analyze_side(&checkout.base_dir, how, "base");
     let head = analyze_side(&checkout.head_dir, how, "head");
+    if let (Some(path), Some(tree)) = (how.save_head, &checkout.head_tree) {
+        let start = std::time::Instant::now();
+        match reuse::save(path, &how.key(tree, &checkout.head_dir), &head) {
+            Ok(()) => eprintln!(
+                "head: analysis saved to {} in {:.1} s",
+                path.display(),
+                start.elapsed().as_secs_f64()
+            ),
+            Err(e) => eprintln!("warning: could not save the head's analysis: {e:#}"),
+        }
+    }
     let meta = |label: &str, pr: Option<model::PrMeta>| model::Meta {
         title: checkout.title.clone(),
         base: label.to_string(),
@@ -306,7 +361,6 @@ fn analyze_all(
     };
     let since = match &checkout.since {
         Some(source::Since::Changes(s)) => {
-            let since_base = analyze_side(&s.dir, how, "since");
             let pr = checkout.pr.clone().map(|pr| model::PrMeta {
                 base_rev: s.commit[..s.commit.len().min(10)].to_string(),
                 base_commit: s.commit.clone(),
@@ -314,15 +368,50 @@ fn analyze_all(
                 since: Some(s.commit.clone()),
                 ..pr
             });
-            Some(compare(
-                (&s.dir, since_base),
-                (&checkout.head_dir, head.clone()),
-                s.files.clone(),
-                meta(&s.label, pr),
-                // Commits are traced from the PR's base, which this page
-                // doesn't compare with.
-                None,
-            ))
+            let since_compare = |since_base| {
+                compare(
+                    (&s.dir, since_base),
+                    (&checkout.head_dir, head.clone()),
+                    s.files.clone(),
+                    meta(&s.label, pr.clone()),
+                    // Commits are traced from the PR's base, which this page
+                    // doesn't compare with.
+                    None,
+                )
+            };
+            let reused = how.since_analysis.and_then(|path| {
+                let start = std::time::Instant::now();
+                let loaded = reuse::load(path, &how.key(&s.tree, &s.dir));
+                let reused = match loaded {
+                    Ok(since_base) => {
+                        eprintln!(
+                            "since: reusing the saved analysis from {} (read in {:.1} s)",
+                            path.display(),
+                            start.elapsed().as_secs_f64()
+                        );
+                        // It comes from another run: if it makes the
+                        // comparison fail, analyze after all.
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            since_compare(since_base)
+                        }))
+                        .map_err(|_| "comparing with it failed".to_string())
+                    }
+                    Err(e) => Err(format!("{e:#}")),
+                };
+                match reused {
+                    Ok(output) => {
+                        println!("since-analysis: reused");
+                        Some(output)
+                    }
+                    Err(why) => {
+                        eprintln!("since: not reusing the saved analysis: {why}");
+                        let why = why.split_whitespace().collect::<Vec<_>>().join(" ");
+                        println!("since-analysis: analyzed ({why})");
+                        None
+                    }
+                }
+            });
+            Some(reused.unwrap_or_else(|| since_compare(analyze_side(&s.dir, how, "since"))))
         }
         _ => None,
     };

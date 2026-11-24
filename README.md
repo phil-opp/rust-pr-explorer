@@ -23,6 +23,7 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  actions: read # optional: reuses the previous run's analysis, see `reuse-analysis`
 jobs:
   explore:
     runs-on: ubuntu-latest
@@ -41,6 +42,7 @@ jobs:
 | `save-cache` | on the default branch | Where the dependencies' and target directory's caches are saved. |
 | `cache-target` | `false` | In trusted mode, also cache the analysis' target directory: much faster, but can take several GB. |
 | `retention-days` | repository setting | How long the page is kept. |
+| `reuse-analysis` | `true` | For the page of the changes since the previous comment, reuse the previous run's analysis of that commit instead of analyzing it again (needs `actions: read`). |
 | `pr`, `repository` | the triggering PR | Analyze another pull request. |
 
 ### Pull requests from forks

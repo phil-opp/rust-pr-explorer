@@ -19,7 +19,8 @@ on:
 permissions:
   contents: read
   pull-requests: write
-  # Only to show in the comment when the pages expire.
+  # To show in the comment when the pages expire, and to download the
+  # previous run's analysis (see `reuse-analysis`).
   actions: read
 
 # A new push to a PR cancels the PR's running job. Runs on `main` are never
