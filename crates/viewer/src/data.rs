@@ -175,12 +175,38 @@ impl Data {
             && self.public_path(it).is_some_and(|p| p != def)
     }
 
+    /// Whether the item's crate allows breaking changes (see
+    /// `CrateVersion::allow_breaking`).
+    pub fn breaking_allowed(&self, it: &Item) -> bool {
+        let krate = it.info.id.split("::").next().unwrap_or(&it.info.id);
+        self.out
+            .meta
+            .versions
+            .get(krate)
+            .is_some_and(|v| v.allow_breaking)
+    }
+
+    /// A breaking change in a crate that doesn't allow them.
+    pub fn breaks(&self, it: &Item) -> bool {
+        it.api
+            .as_ref()
+            .is_some_and(|a| a.level == ApiLevel::Breaking)
+            && !self.breaking_allowed(it)
+    }
+
     /// The item's SemVer label: breaking, non-breaking or "check by hand",
-    /// with the reasons on hover.
+    /// with the reasons on hover. In a crate that allows breaking changes,
+    /// "breaking" is muted and says so.
     pub fn api_badge(&self, it: &Item) -> String {
         let Some(api) = &it.api else {
             return String::new();
         };
+        if api.level == ApiLevel::Breaking && self.breaking_allowed(it) {
+            return format!(
+                r#"<span class="api api-allowed" title="{}&#10;&#10;Breaking changes are allowed in this crate (allow-breaking-changes in its Cargo.toml).">breaking (allowed)</span>"#,
+                esc(&api.reasons.join("\n").replace('`', ""))
+            );
+        }
         let icon = match api.level {
             ApiLevel::Breaking => "⚠ ",
             ApiLevel::Unknown => "? ",
@@ -231,10 +257,12 @@ impl Data {
         if lines.is_empty() {
             return String::new();
         }
-        format!(
-            r#"<ul class="api-why api-{}">{lines}</ul>"#,
+        let css = if api.level == ApiLevel::Breaking && self.breaking_allowed(it) {
+            "allowed"
+        } else {
             api.level.css()
-        )
+        };
+        format!(r#"<ul class="api-why api-{css}">{lines}</ul>"#)
     }
 
     /// Public paths gained and lost, marked like other changes.
@@ -518,6 +546,15 @@ impl Data {
             Some(it) if self.is_root(it) => target_label(&it.info.id),
             Some(_) => format!("mod {}", self.short_path(m)),
             None => m.to_string(),
+        }
+    }
+
+    /// [`Self::mod_label`] with the path as code: "mod <code>parser::lexer</code>".
+    pub fn mod_label_html(&self, m: &str) -> String {
+        let label = self.mod_label(m);
+        match label.split_once(' ') {
+            Some((kind, path)) => format!("{} <code>{}</code>", esc(kind), esc(path)),
+            None => format!("<code>{}</code>", esc(&label)),
         }
     }
 

@@ -21,7 +21,6 @@ mod nav;
 mod pages;
 mod post;
 mod review;
-mod risk;
 mod route;
 mod settings;
 mod sha256;
@@ -595,6 +594,18 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
     }
     if let Some(b) = dom::closest(el, "[data-graph]") {
         show_module_graph(app, &dom::data(&b, "graph").unwrap_or_default());
+        return;
+    }
+    if let Some(f) = dom::closest(el, "[data-goto-item]") {
+        // An item's row on the overview, e.g. from the list of breaking
+        // changes.
+        let id = dom::data(&f, "goto-item").unwrap_or_default();
+        if let Some(row) = dom::query_all("#view-overview .irow[data-id]")
+            .into_iter()
+            .find(|r| dom::data(r, "id").as_deref() == Some(id.as_str()))
+        {
+            reveal(&row);
+        }
         return;
     }
     if let Some(f) = dom::closest(el, "[data-goto-file]") {
