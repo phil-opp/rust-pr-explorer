@@ -309,14 +309,95 @@ pub struct SigDiff {
 pub struct SourceLine(pub char, pub String);
 
 /// Lines of an item's base version (`old`, `old_len`) that its head
-/// version has, only reformatted, at `new`, `new_len`. Lines are counted in
+/// version has, reformatted, at `new`, `new_len`. Lines are counted in
 /// each version's lines: `source` without the lines of the other side.
-#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+///
+/// Rewrapped lines can also have a few tokens added or removed, as when
+/// a call gets an argument and rustfmt then splits it over several lines.
+/// Those tokens are in `added` and `removed`; without them the lines were
+/// only reformatted.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Reformatted {
     pub old: u32,
     pub old_len: u32,
     pub new: u32,
     pub new_len: u32,
+    /// Tokens of the head version that the base version doesn't have.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub added: Vec<TokenSpan>,
+    /// Tokens of the base version that the head version doesn't have.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub removed: Vec<RemovedTokens>,
+}
+
+impl Reformatted {
+    /// Lines that were only reformatted: no tokens were added or removed.
+    pub fn only_reformatted(&self) -> bool {
+        self.added.is_empty() && self.removed.is_empty()
+    }
+
+    /// Whether the head version's line `line` has tokens that were added,
+    /// or is where removed ones were: a changed line of the group.
+    pub fn changes_new_line(&self, line: u32) -> bool {
+        self.added.iter().any(|t| t.line == line) || self.removed.iter().any(|t| t.at.line == line)
+    }
+
+    /// Whether all of the head version's line `line` (`text`) was added.
+    pub fn adds_line(&self, line: u32, text: &str) -> bool {
+        covers(self.added.iter().filter(|t| t.line == line), text)
+    }
+
+    /// Whether all of the base version's line `line` (`text`) was removed.
+    pub fn removes_line(&self, line: u32, text: &str) -> bool {
+        covers(
+            self.removed
+                .iter()
+                .map(|r| &r.old)
+                .filter(|t| t.line == line),
+            text,
+        )
+    }
+}
+
+/// Whether `spans` cover all of `text` but whitespace and commas.
+fn covers<'a>(spans: impl Iterator<Item = &'a TokenSpan>, text: &str) -> bool {
+    let mut cover = vec![false; text.chars().count()];
+    for t in spans {
+        let end = (t.end as usize).min(cover.len());
+        cover[(t.start as usize).min(end)..end].fill(true);
+    }
+    let mut any = false;
+    for (c, covered) in text.chars().zip(cover) {
+        if !c.is_whitespace() && c != ',' {
+            if !covered {
+                return false;
+            }
+            any = true;
+        }
+    }
+    any
+}
+
+/// Characters `start..end` of line `line` of one version of an item's
+/// source (counted as in [`Reformatted`]).
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TokenSpan {
+    pub line: u32,
+    pub start: u32,
+    pub end: u32,
+}
+
+/// Removed tokens of one line of the base version: where they were, and
+/// where they would be in the head version, to show them struck out in
+/// the head version's lines.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct RemovedTokens {
+    pub old: TokenSpan,
+    /// A position in the head version (`start` and `end` are equal).
+    pub at: TokenSpan,
+    /// The removed text, as it is shown there: on one line, with what
+    /// separated it from the token before it.
+    pub text: String,
 }
 
 /// A block of removed or added lines of an item's source that was moved.

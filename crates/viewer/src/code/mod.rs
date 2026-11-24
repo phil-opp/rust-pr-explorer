@@ -8,7 +8,8 @@ mod sig_diff;
 mod tests;
 
 pub use docs_diff::{
-    Seg, docs_compare_html, docs_diff_segs, mark_changed_tokens, markdown_diff_segs, marked_html,
+    Seg, docs_compare_html, docs_diff_segs, mark_changed_tokens, mark_removed_spans, mark_spans,
+    markdown_diff_segs, marked_html,
 };
 pub use highlight::{Links, code_html, ref_tag};
 pub use markdown::{docs_html, first_paragraph, markdown_file_html};

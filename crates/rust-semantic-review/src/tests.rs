@@ -165,6 +165,8 @@ fn rewrapped_lines_are_found_in_the_demo() {
             old_len: 1,
             new: 2,
             new_len: 4,
+            added: Vec::new(),
+            removed: Vec::new(),
         }]
     );
     // Items without a rewrap have none.

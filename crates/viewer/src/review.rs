@@ -189,8 +189,9 @@ pub fn changes(it: &Item) -> Vec<Hunk> {
     }
     let (o0, n0) = (it.old_line.unwrap_or(it.info.line), it.info.line);
     let (mut o, mut n) = (o0, n0);
-    // Lines that were only reformatted are not changes to review, whether
-    // or not the source view hides them.
+    // Lines that were reformatted are not changes to review, whether or
+    // not the source view hides them, except for the new lines with added
+    // or removed tokens (removed ones are shown there).
     let rf = |side_old: bool, line: usize| {
         it.reformatted.iter().any(|g| {
             let (start, len, i) = if side_old {
@@ -199,6 +200,7 @@ pub fn changes(it: &Item) -> Vec<Hunk> {
                 (g.new, g.new_len, line - n0)
             };
             (start as usize..(start + len) as usize).contains(&i)
+                && (side_old || !g.changes_new_line(i as u32))
         })
     };
     // Per hunk: its changed lines as text, and the hunk.
