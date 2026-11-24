@@ -30,16 +30,9 @@ opt-level = "s"
 codegen-units = 1
 lto = true
 
-# Used by the GitHub Action (`action.yml`), which builds the tool on every
-# run that can't reuse a cached binary. Dependencies (rust-analyzer, syn, …)
-# are optimized as in `release` and come from the cache; the workspace's own
-# crates, rebuilt on each run, are not optimized. That builds them in about
-# two thirds of the time, and the analysis is as fast as with `release`.
+# Used by the GitHub Action (`action.yml`), which builds the tool once per
+# version and caches the binary. Like `release`: the tool's own crates used
+# to be left unoptimized here, which saved about 20 s of a 4.5 minute build
+# but made the analysis of a large workspace (dora) about 15% slower.
 [profile.action]
 inherits = "release"
-
-[profile.action.package.rust-semantic-review]
-opt-level = 0
-
-[profile.action.package.model]
-opt-level = 0

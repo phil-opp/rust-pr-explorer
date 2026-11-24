@@ -19,6 +19,7 @@ tempfile = "3.27.0"
 toml = "1.2.2"
 base64 = "0.23.1"
 flate2.workspace = true
+mimalloc = "0.1.52"
 
 
 [features]
