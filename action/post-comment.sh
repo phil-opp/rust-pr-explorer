@@ -3,6 +3,8 @@
 # pages. Used by the action (`comment: true`) and by the comment-only action
 # in `comment/` (`comment: workflow-run`).
 #
+# Writes `posted=false` to GITHUB_OUTPUT if commenting failed.
+#
 # Environment: GH_TOKEN, REPO, PR, POST (`true` to comment, else only the job
 # summary), URL, ARTIFACT_ID and SUMMARY of the page, SINCE_URL,
 # SINCE_ARTIFACT_ID and SINCE_SUMMARY of the page of the changes since the
@@ -114,8 +116,14 @@ else
   result=$(gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$body" 2>&1) || failed=1
 fi
 if [ -n "$failed" ]; then
-  # E.g. a PR from a fork, whose token is read-only.
-  echo "::warning::Could not comment on the PR (does the token have pull-requests: write? On PRs from forks, see \`comment: workflow-run\`): $result"
+  # E.g. a PR from a fork, whose token is read-only. The action then uploads
+  # the data for the comment-only action.
+  echo "posted=false" >> "$GITHUB_OUTPUT"
+  if [ "${COMMENT_ONLY:-}" = true ]; then
+    echo "::error::Could not comment on the PR (does the token have pull-requests: write?): $result"
+    exit 1
+  fi
+  echo "::warning::Could not comment on the PR, e.g. because the token is read-only on PRs from forks. The data for the comment is uploaded, so that a workflow_run workflow with the comment-only action can post it (see the README): $result"
 elif [ "$mode" = new ] && [ -n "$PREVIOUS_NODE_ID" ]; then
   # Collapse the previous comment: the new one has the current numbers and
   # links. Each new comment hides the one before it, so only the latest

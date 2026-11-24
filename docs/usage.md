@@ -49,11 +49,11 @@ Trusted mode builds the build scripts and proc macros of the PR's dependencies, 
 
 Installing the prebuilt binary adds a few seconds. For a small crate it is cheap; for a crate with heavy dependencies it roughly doubles the analysis. It is independent of `trust-project-code`.
 
-On a PR from a fork, the token GitHub gives the workflow is read-only, so the page is built and uploaded but the comment fails with a warning; the link is still in the job summary.
+On a PR from a fork, the token GitHub gives the workflow is read-only, so the page is built and uploaded but the comment fails with a warning; the link is still in the job summary, and the setup below posts the comment.
 
 ### Pull requests from forks
 
-With `comment: workflow-run`, the action reads the previous comment as usual but doesn't post: it uploads what the comment needs as the `rust-semantic-review-comment` artifact (the PR number, the analyzed commit, the previous comment's commit, the outcome of `--since`, and the numbers of the summaries). A second workflow, triggered by `workflow_run` when the first one completes, posts the comment with the comment-only action `phil-opp/rust-semantic-review/comment` (see the README for both workflows). `workflow_run` runs the workflow file from the default branch, with a token that can write also when the first run was for a fork. The comment-only action never checks out or runs the PR's code, and it builds nothing: it only uses `gh`, `jq` and `unzip`.
+When the action can't post the comment (with `comment: true`, the default), or never tries (with `comment: workflow-run`), it uploads what the comment needs as the `rust-semantic-review-comment` artifact (the PR number, the analyzed commit, the previous comment's commit, the outcome of `--since`, and the numbers of the summaries). A second workflow, triggered by `workflow_run` when the first one completes, posts the comment with the comment-only action `phil-opp/rust-semantic-review/comment` (see the README for both workflows). `workflow_run` runs the workflow file from the default branch, with a token that can write also when the first run was for a fork. The comment-only action never checks out or runs the PR's code, and it builds nothing: it only uses `gh`, `jq` and `unzip`.
 
 Under `pull_request`, a PR from a fork can change the first workflow and the action, so everything in its artifacts is untrusted. The comment-only action:
 

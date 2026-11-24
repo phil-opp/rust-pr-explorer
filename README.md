@@ -32,7 +32,7 @@ jobs:
 
 | Input | Default | |
 |---|---|---|
-| `comment` | `true` | Post a comment that links the page (and a page of the changes since the previous comment). `workflow-run` leaves it to a second workflow, see below. |
+| `comment` | `true` | Post a comment that links the page (and a page of the changes since the previous comment). Where the token can't (PRs from forks), a second workflow can post it, see below. |
 | `syntax-only` | `false` | Skip rust-analyzer: faster, but method calls stay unresolved. |
 | `trust-project-code` | `auto` | Run the PR's build scripts and proc macros, so calls into generated code resolve. `auto`: on under `pull_request`, off when another event analyzes a PR. Refused under `pull_request_target`. |
 | `semver-checks` | `false` | Also run cargo-semver-checks. Builds the PR's code; refused under `pull_request_target`. |
@@ -43,18 +43,7 @@ jobs:
 
 ### Pull requests from forks
 
-On a PR from a fork, GitHub gives the workflow a read-only token, so the comment can't be posted and the link is only in the job summary. To comment there too, let the workflow above only upload the data for the comment, and post it from a second workflow, triggered by `workflow_run`, whose token can write:
-
-```yaml
-# In the workflow above:
-permissions:
-  contents: read
-  pull-requests: read
-# …
-      - uses: phil-opp/rust-semantic-review@main
-        with:
-          comment: workflow-run
-```
+On a PR from a fork (and one by Dependabot), GitHub gives the workflow a read-only token, so the action can't post the comment. It then uploads the data for the comment instead, and a second workflow, triggered by `workflow_run` and with a token that can write, can post it. PRs from branches of the repository keep getting their comment from the workflow above.
 
 ```yaml
 # .github/workflows/rust-semantic-review-comment.yml
@@ -73,6 +62,8 @@ jobs:
     steps:
       - uses: phil-opp/rust-semantic-review/comment@main
 ```
+
+With `comment: workflow-run`, the workflow above never comments itself and only needs `pull-requests: read`; the second workflow then posts every comment.
 
 The second workflow runs as it is on the default branch and never checks out or runs the PR's code. It treats the data from the first run as untrusted, since a fork's PR can change that workflow; see [docs/usage.md](docs/usage.md#pull-requests-from-forks).
 

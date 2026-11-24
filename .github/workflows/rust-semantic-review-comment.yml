@@ -1,7 +1,8 @@
 name: Rust Semantic Review comment
 
-# Posts the comment for each run of rust-semantic-review.yml on a pull
-# request, also on PRs from forks, whose runs get a read-only token.
+# Posts the comment for runs of rust-semantic-review.yml that could not post
+# it themselves: on PRs from forks (and by Dependabot), whose runs get a
+# read-only token.
 #
 # `workflow_run` runs this file and the checkout as they are on the default
 # branch, with a token that can write: nothing of the PR is checked out or

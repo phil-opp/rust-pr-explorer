@@ -1,8 +1,8 @@
 name: Rust Semantic Review
 
-# Builds the review page for every pull request. The comment that links it
-# is posted by rust-semantic-review-comment.yml, which has a token that can
-# write also on PRs from forks. Uses the action from the PR's own checkout,
+# Builds the review page for every pull request and links it in a comment.
+# On PRs from forks, whose token is read-only, rust-semantic-review-comment.yml
+# posts the comment instead. Uses the action from the PR's own checkout,
 # so a PR that changes the tool shows itself with its own version.
 #
 # In trusted mode: the PR's build scripts and proc macros run, as they do in
@@ -18,8 +18,9 @@ on:
 
 permissions:
   contents: read
-  # For the previous comment and the review threads.
-  pull-requests: read
+  pull-requests: write
+  # Only to show in the comment when the pages expire.
+  actions: read
 
 # A new push to a PR cancels the PR's running job. Runs on `main` are never
 # cancelled: when merges come faster than a cold build (about 7 minutes),
@@ -41,4 +42,3 @@ jobs:
         with:
           # Trusted mode is on by default under pull_request.
           cache-target: true
-          comment: workflow-run
