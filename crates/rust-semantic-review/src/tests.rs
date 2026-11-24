@@ -533,6 +533,35 @@ fn renamed_import_resolves_and_changing_target_is_a_change() {
     assert_eq!(f.info.sig_refs["Y"].id.as_deref(), Some("t::b::X"));
 }
 
+/// A test whose text is unchanged but whose call now resolves to a new
+/// helper of the same name (shadowing the glob-imported function) shows
+/// that line as changed, with what the name referred to before and now.
+#[test]
+fn a_call_that_resolves_elsewhere_shows_as_a_changed_line() {
+    let lib = |helper: &str| {
+        format!(
+            "fn f() {{}}\n\nmod tests {{\n    use super::*;\n{helper}\n    fn t() {{\n        f();\n    }}\n}}\n"
+        )
+    };
+    let base = write_crate(&[("src/lib.rs", &lib(""))]);
+    let head = write_crate(&[("src/lib.rs", &lib("    fn f() {}\n"))]);
+    let out = analyze_dirs(base.path(), head.path());
+    let t = &out.items["t::tests::t"];
+    assert_eq!(t.status, Status::Changed);
+    assert!(t.changes.body);
+    let tags: String = t.source.iter().map(|l| l.0).collect();
+    assert_eq!(tags, " -+ ");
+    assert_eq!(t.source[1].1, t.source[2].1);
+    let [r] = &t.retargeted[..] else {
+        panic!("one retargeted name: {:?}", t.retargeted);
+    };
+    assert_eq!((r.old_line, r.line, r.name.as_str()), (1, 1, "f"));
+    assert_eq!(r.old.as_ref().map(|r| r.path.as_str()), Some("t::f"));
+    assert_eq!(r.new.as_ref().map(|r| r.path.as_str()), Some("t::tests::f"));
+    // The base line keeps its link to the old target.
+    assert!(t.old_source_refs.values().any(|r| r.path == "t::f"));
+}
+
 #[test]
 fn glob_imports_super_and_nested_files() {
     let dir = write_crate(&[

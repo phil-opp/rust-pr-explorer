@@ -771,6 +771,75 @@ fn source_links_both_versions_and_marks_new_and_changed_items() {
 }
 
 #[test]
+fn a_line_whose_call_resolves_elsewhere_says_so() {
+    use model::{Item, Kind, Retarget, SourceLine, Status};
+    let item = |id: &str, status: Status| Item {
+        status,
+        info: model::ItemInfo {
+            id: id.into(),
+            kind: Kind::Fn,
+            name: id.rsplit("::").next().unwrap().into(),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let r = |id: &str| Ref {
+        id: Some(id.into()),
+        path: id.into(),
+    };
+    let mut it = item("c::tests::t", Status::Changed);
+    it.changes.body = true;
+    it.info.line = 20;
+    it.old_line = Some(10);
+    it.source = vec![
+        SourceLine(' ', "fn t() {".into()),
+        SourceLine('-', "    f();".into()),
+        SourceLine('+', "    f();".into()),
+        SourceLine(' ', "}".into()),
+    ];
+    it.old_source_refs.insert("11:4".into(), r("c::f"));
+    it.info.source_refs.insert("21:4".into(), r("c::tests::f"));
+    it.retargeted = vec![Retarget {
+        old_line: 1,
+        line: 1,
+        col: 4,
+        name: "f".into(),
+        old: Some(r("c::f")),
+        new: Some(r("c::tests::f")),
+    }];
+    let mut out = empty().out;
+    out.items.insert(it.info.id.clone(), it.clone());
+    out.items
+        .insert("c::f".into(), item("c::f", Status::Unchanged));
+    out.items
+        .insert("c::tests::f".into(), item("c::tests::f", Status::Added));
+    let d = Data::new(out);
+    for split in [false, true] {
+        crate::settings::set(crate::settings::Settings {
+            split,
+            ..Default::default()
+        });
+        let html = d.source_html(&it, Some(true), false);
+        // Counted as one changed line, not `+0 −0`.
+        assert!(html.contains(r#"<span class="d-add">+1</span>"#), "{html}");
+        assert!(html.contains(r#"<span class="d-del">−1</span>"#), "{html}");
+        assert!(html.contains("(a name refers to another item)"), "{html}");
+        // A note says what the name refers to now and before.
+        assert!(
+            html.contains(
+                r#"Line 21: <code>f</code> now refers to <a class="ref" data-id="c::tests::f""#
+            ),
+            "{html}"
+        );
+        assert!(
+            html.contains(r#"before to <a class="ref" data-id="c::f""#),
+            "{html}"
+        );
+    }
+    crate::settings::set(Default::default());
+}
+
+#[test]
 fn small_new_items_start_open() {
     use model::{Item, Kind, SourceLine, Status};
     let d = empty();

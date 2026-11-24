@@ -516,6 +516,8 @@ a.card-badge[data-drill]:hover { border-style: solid; }
 .ln.mv::before, .ln.mv .sg { color: var(--moved) !important; }
 .mv-note { float: right; margin-left: 16px; font: 12px var(--sans); color: var(--moved); }
 .d-mv { color: var(--moved); }
+.rt-note { margin: 4px 0 6px; font-size: 13px; color: var(--moved); overflow-wrap: anywhere; }
+.rt-note code { font-size: 12px; }
 /* Removed lines are marked by their background and "-" alone. A changed
    line paired with its new version also has its changed words marked. */
 .ln.del .wc { background: color-mix(in srgb, var(--removed) 28%, transparent); text-decoration: line-through 1.5px var(--removed); border-radius: 2px; }
