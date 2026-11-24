@@ -244,10 +244,13 @@ impl Checkout {
         let head_rev = rev_parse(&git_dir, "refs/pr/head")?;
         // Title and branch names are only known to GitHub's API.
         let gh = gh_pr_view(&owner, &repo, number);
-        let threads = if gh.is_some() {
-            gh_review_threads(&owner, &repo, number)
+        let (threads, saved_marks) = if gh.is_some() {
+            (
+                gh_review_threads(&owner, &repo, number),
+                gh_saved_marks(&owner, &repo, number),
+            )
         } else {
-            Vec::new()
+            (Vec::new(), Vec::new())
         };
         let (base_rev, base_label, base_ref) = match base {
             Some(b) => {
@@ -359,6 +362,7 @@ impl Checkout {
                 custom_base: base.is_some(),
                 since: None,
                 threads,
+                saved_marks,
             }),
             // The PR identifies the project.
             project: None,
@@ -689,6 +693,78 @@ fn gh_review_threads(owner: &str, repo: &str, number: u64) -> Vec<model::ReviewT
         Err(e) => eprintln!("note: could not fetch the PR's review threads: {e}"),
     }
     Vec::new()
+}
+
+/// Asks the GitHub CLI for the review marks that reviewers saved in their
+/// reviews of the PR. Empty (with a note) if that fails.
+fn gh_saved_marks(owner: &str, repo: &str, number: u64) -> Vec<model::SavedMarks> {
+    let out = std::process::Command::new("gh")
+        .args([
+            "api",
+            "--paginate",
+            &format!("repos/{owner}/{repo}/pulls/{number}/reviews?per_page=100"),
+        ])
+        .output();
+    match out {
+        Ok(o) if o.status.success() => match parse_saved_marks(&o.stdout) {
+            Ok(list) => return list,
+            Err(e) => eprintln!("note: could not read the PR's reviews: {e}"),
+        },
+        Ok(o) => eprintln!(
+            "note: could not fetch the PR's reviews: {}",
+            String::from_utf8_lossy(&o.stderr).trim()
+        ),
+        Err(e) => eprintln!("note: could not fetch the PR's reviews: {e}"),
+    }
+    Vec::new()
+}
+
+/// The latest saved marks of each reviewer in `gh api --paginate` output
+/// of a PR's reviews: one JSON array per page, oldest review first.
+fn parse_saved_marks(json: &[u8]) -> Result<Vec<model::SavedMarks>> {
+    #[derive(serde::Deserialize)]
+    struct Review {
+        /// `null` for a deleted account.
+        user: Option<User>,
+        #[serde(default)]
+        body: Option<String>,
+        /// `null` for a pending review.
+        #[serde(default)]
+        submitted_at: Option<String>,
+        #[serde(default)]
+        html_url: String,
+    }
+    #[derive(serde::Deserialize)]
+    struct User {
+        login: String,
+    }
+    let mut latest: BTreeMap<String, model::SavedMarks> = BTreeMap::new();
+    for page in serde_json::Deserializer::from_slice(json).into_iter::<Vec<Review>>() {
+        for r in page.context("unexpected reply")? {
+            let (Some(user), Some(at)) = (r.user, r.submitted_at) else {
+                continue;
+            };
+            let Some(data) = r.body.as_deref().and_then(model::review_marks_in) else {
+                continue;
+            };
+            let newer = latest.get(&user.login).is_none_or(|m| m.at <= at);
+            if newer {
+                latest.insert(
+                    user.login.clone(),
+                    model::SavedMarks {
+                        login: user.login,
+                        at,
+                        url: r.html_url,
+                        data,
+                    },
+                );
+            }
+        }
+    }
+    let mut out: Vec<model::SavedMarks> = latest.into_values().collect();
+    // The latest first.
+    out.sort_by(|a, b| b.at.cmp(&a.at));
+    Ok(out)
 }
 
 /// The threads in `gh api graphql --paginate` output: one JSON document
@@ -1313,6 +1389,45 @@ mod tests {
         assert_eq!(pr.head_ref_name, "value-bag");
         assert!(pr.is_cross_repository);
         assert_eq!(pr.head_repository_owner["login"], "someone");
+    }
+
+    #[test]
+    fn saved_marks_are_the_latest_of_each_reviewer() {
+        let review = |login: &str, at: &str, body: &str| {
+            format!(
+                r#"{{"user":{{"login":"{login}"}},"body":"{body}","submitted_at":"{at}","html_url":"https://github.com/o/r/pull/1#r-{at}"}}"#
+            )
+        };
+        let block = |marks: &str| {
+            format!(
+                r"<details><summary>Review marks</summary>\n\n```text\nrust-pr-explorer review marks v1\n{marks}\n```\n\n</details>"
+            )
+        };
+        let deleted = format!(
+            r#"{{"user":null,"body":"{}","submitted_at":"2026-01-05T00:00:00Z","html_url":""}}"#,
+            block("mark 5 x")
+        );
+        let json = format!(
+            "[{},{},{}][{},{}]",
+            review("a", "2026-01-01T00:00:00Z", &block("mark 1 a::f")),
+            review("b", "2026-01-02T00:00:00Z", "Looks good"),
+            review(
+                "b",
+                "2026-01-03T00:00:00Z",
+                &format!(r"x\r\n\r\n{}", block(r"mark 2 b::g\r\nmark 3 b::h"))
+            ),
+            review("a", "2026-01-04T00:00:00Z", &block("mark 4 a::f")),
+            deleted,
+        );
+        let marks = parse_saved_marks(json.as_bytes()).unwrap();
+        let got: Vec<(&str, &str)> = marks
+            .iter()
+            .map(|m| (m.login.as_str(), m.data.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [("a", "mark 4 a::f"), ("b", "mark 2 b::g\nmark 3 b::h")]
+        );
     }
 
     #[test]
