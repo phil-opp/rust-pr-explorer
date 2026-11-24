@@ -181,44 +181,6 @@ fn impact_button() -> (&'static str, &'static str) {
     }
 }
 
-/// The impact of a module's changed internal items, one line per item, for
-/// the overview's list of internal changes.
-pub fn list_html(d: &Data, items: &[&Item]) -> String {
-    let rows: String = items
-        .iter()
-        .filter(|it| applies(d, it))
-        .map(|it| {
-            let imp = impact(d, &it.info.id);
-            let reached = if imp.paths.is_empty() {
-                r#"<span class="dim">no public item reaches it</span>"#.to_string()
-            } else {
-                format!(
-                    r#"affects {} <button data-impact="{}" title="{}">{}</button>"#,
-                    reached_html(d, &imp),
-                    esc(&it.info.id),
-                    impact_button().0,
-                    if crate::narrow() {
-                        "callers ▸"
-                    } else {
-                        "canvas ▸"
-                    },
-                )
-            };
-            format!(
-                r#"<li><a class="ref" data-id="{}" data-kind="{}"><code>{}</code></a> {}</li>"#,
-                esc(&it.info.id),
-                it.info.kind.css(),
-                esc(&d.display_name(it)),
-                reached
-            )
-        })
-        .collect();
-    if rows.is_empty() {
-        return String::new();
-    }
-    format!(r#"<ul class="impact-list">{rows}</ul>"#)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
