@@ -24,9 +24,9 @@
   --removed: light-dark(#c4302b, #f06b62);
   --removed-bg: light-dark(#fdecea, #3a1c1b);
   --changed: light-dark(#9a6700, #e3b341);
-  --changed-bg: light-dark(#fff5d6, #3a3116);
+  --changed-bg: light-dark(#fff7df, #3a3116);
   --moved: light-dark(#5b4ec2, #ada2ff);
-  --moved-bg: light-dark(#eeebfa, #29253f);
+  --moved-bg: light-dark(#f2f0fb, #29253f);
   --private: light-dark(#595959, #b4b4bc);
   --highlight: light-dark(#ffe48a, #6b5a12);
   --reviewed: light-dark(#0b7285, #4fc3d6);
