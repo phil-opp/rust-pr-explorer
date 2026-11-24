@@ -32,13 +32,48 @@ jobs:
 
 | Input | Default | |
 |---|---|---|
-| `comment` | `true` | Post a comment that links the page (and a page of the changes since the previous comment). |
+| `comment` | `true` | Post a comment that links the page (and a page of the changes since the previous comment). `workflow-run` leaves it to a second workflow, see below. |
 | `syntax-only` | `false` | Skip rust-analyzer: faster, but method calls stay unresolved. |
 | `trust-project-code` | `false` | Run the PR's build scripts and proc macros, so calls into generated code resolve. Refused under `pull_request_target`. |
 | `semver-checks` | `false` | Also run cargo-semver-checks. Builds the PR's code; refused under `pull_request_target`. |
 | `cache` / `save-cache` | `true` / on the default branch | Cache the built tool / also its dependencies. |
 | `retention-days` | repository setting | How long the page is kept. |
 | `pr`, `repository` | the triggering PR | Analyze another pull request. |
+
+### Pull requests from forks
+
+On a PR from a fork, GitHub gives the workflow a read-only token, so the comment can't be posted and the link is only in the job summary. To comment there too, let the workflow above only upload the data for the comment, and post it from a second workflow, triggered by `workflow_run`, whose token can write:
+
+```yaml
+# In the workflow above:
+permissions:
+  contents: read
+  pull-requests: read
+# …
+      - uses: phil-opp/rust-semantic-review@main
+        with:
+          comment: workflow-run
+```
+
+```yaml
+# .github/workflows/rust-semantic-review-comment.yml
+name: Rust Semantic Review comment
+on:
+  workflow_run:
+    workflows: [Rust Semantic Review] # the name of the workflow above
+    types: [completed]
+permissions:
+  actions: read
+  pull-requests: write
+jobs:
+  comment:
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: phil-opp/rust-semantic-review/comment@main
+```
+
+The second workflow runs as it is on the default branch and never checks out or runs the PR's code. It treats the data from the first run as untrusted, since a fork's PR can change that workflow; see [docs/usage.md](docs/usage.md#pull-requests-from-forks).
 
 The pages are stored as artifacts of the workflow run: opening one needs a GitHub login with access to the repository, and they expire with the run's artifacts (90 days unless the repository or `retention-days` sets otherwise).
 
