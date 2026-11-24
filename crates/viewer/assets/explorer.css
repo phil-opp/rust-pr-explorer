@@ -898,6 +898,8 @@ body:not(.reviewing) .hunk-rv:not(:has(.rvc.done, .rvc.stale)) { display: none; 
 .rt-snippet { flex: 1; min-width: 12em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .rt-rest-h { margin: 12px 0 4px; color: var(--muted); font-size: 13px; }
 #rv-bar #rv-keys { margin-left: 6px; min-width: 26px; color: var(--muted); }
+/* The shortcuts need a keyboard, which a touch screen usually lacks. */
+@media (hover: none) and (pointer: coarse) { #rv-bar #rv-keys { display: none; } }
 .keys { border-collapse: collapse; margin-top: 8px; }
 .keys td { padding: 4px 12px 4px 0; vertical-align: top; }
 .keys td:first-child { white-space: nowrap; }
@@ -966,11 +968,17 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
   #search { width: 100%; }
   #search-results { width: min(420px, calc(100vw - 20px)); }
   #settings { width: min(280px, calc(100vw - 20px)); }
-  /* View tabs and review controls stay on one line and scroll sideways. */
-  .top-row.sub { overflow-x: auto; scrollbar-width: none; gap: 10px; }
-  .top-row.sub::-webkit-scrollbar { display: none; }
+  /* The row wraps instead of scrolling sideways, where the review controls
+     ended up off screen. The view tabs keep one line and scroll sideways
+     on their own if the screen is too narrow even for them; the review bar
+     gets a line of its own. */
+  .top-row.sub { height: auto; min-height: 39px; flex-wrap: wrap; gap: 6px 10px; padding-top: 4px; padding-bottom: 4px; }
   .top-row.sub > * { flex: none; }
-  #views button { padding: 4px 10px; }
+  #commit-menu:empty { display: none; }
+  #views { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+  #views::-webkit-scrollbar { display: none; }
+  #views button { flex: none; padding: 4px 10px; }
+  .reviewing #rv-bar { flex: 1 1 100%; flex-wrap: wrap; row-gap: 6px; }
   #sidebar {
     display: none; position: absolute; top: 0; bottom: 0; left: 0; z-index: 40;
     width: min(320px, 86vw);

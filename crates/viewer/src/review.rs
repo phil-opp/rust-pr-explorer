@@ -1439,7 +1439,7 @@ fn update_groups() {
 }
 
 /// Leaves review mode; the marks stay.
-const EXIT: &str = r#"<button id="rv-keys" title="Keyboard shortcuts (?)">?</button><button id="rv-exit" title="Hide the review controls; your marks stay">Exit review</button>"#;
+const EXIT: &str = r#"<button id="rv-keys" title="Keyboard shortcuts (?)">?</button><button id="rv-exit" title="Hide the review controls; your marks stay">Exit<span class="btn-label"> review</span></button>"#;
 
 /// A button that loads the marks saved in a review, while this page has
 /// no marks of the PR: what a page of a later explorer comment starts with,
@@ -1452,11 +1452,11 @@ fn load_offer() -> String {
     match saved.as_slice() {
         [] => String::new(),
         [one] => format!(
-            r#"<button id="rv-load" class="primary" title="Load the marks you saved with your review of {}">Load marks from {}'s review</button>"#,
+            r#"<button id="rv-load" class="primary" title="Load the marks you saved with your review of {}">Load marks<span class="btn-label"> from {}'s review</span></button>"#,
             esc(&one.at),
             esc(&one.login)
         ),
-        _ => r#"<button id="rv-load" class="primary" title="Load the marks saved with a review of this PR">Load marks from a review…</button>"#.to_string(),
+        _ => r#"<button id="rv-load" class="primary" title="Load the marks saved with a review of this PR">Load marks<span class="btn-label"> from a review</span>…</button>"#.to_string(),
     }
 }
 
@@ -1482,7 +1482,7 @@ pub fn update_progress() {
                     .to_string()
             };
             format!(
-                r#"<span class="rv-progress{}" title="Reviewed items and files"><span class="rv-count">{count}</span><span class="rv-meter"><span style="width:{percent}%"></span></span></span>{next}<button id="rv-finish" class="{}" title="Collect your verdicts and comments for GitHub">Finish review…</button>{load}<button id="rv-marks" title="Take your marks to another page, or clear them">Marks…</button>{EXIT}"#,
+                r#"<span class="rv-progress{}" title="Reviewed items and files"><span class="rv-count">{count}</span><span class="rv-meter"><span style="width:{percent}%"></span></span></span>{next}<button id="rv-finish" class="{}" title="Collect your verdicts and comments for GitHub">Finish<span class="btn-label"> review</span>…</button>{load}<button id="rv-marks" title="Take your marks to another page, or clear them">Marks…</button>{EXIT}"#,
                 if all { " all" } else { "" },
                 if all { "primary" } else { "" },
                 load = load_offer(),
