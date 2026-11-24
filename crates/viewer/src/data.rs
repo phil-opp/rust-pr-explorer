@@ -2,7 +2,7 @@
 
 use crate::code::{Seg, esc, marked_html};
 use model::{ApiLevel, External, Item, ItemInfo, Kind, Output, Status, UseCtx};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::ops::Range;
 
 /// Body diffs with up to this many changed lines start open.
@@ -1050,10 +1050,12 @@ impl Data {
         // Changed lines that pair up (the first old one with the first new
         // one, and so on), to have their changed words marked.
         let mut pairs: Vec<(usize, usize)> = Vec::new();
-        // Lines that were only reformatted (see `Item::reformatted`): their
-        // groups are shown as unchanged, the lines between them are diffed.
-        let mut rf_old: HashSet<usize> = HashSet::new();
-        let mut rf_new: HashSet<usize> = HashSet::new();
+        // Lines that were reformatted (see `Item::reformatted`), with their
+        // group: groups are shown in their new form, as unchanged lines
+        // with any added or removed tokens marked, and the lines between
+        // them are diffed.
+        let mut rf_old: HashMap<usize, &model::Reformatted> = HashMap::new();
+        let mut rf_new: HashMap<usize, &model::Reformatted> = HashMap::new();
         let mut segments: Vec<(Range<usize>, Range<usize>, bool)> = Vec::new();
         let (mut po, mut pn) = (0, 0);
         if opts.reformat && matches!(it.status, Status::Changed | Status::Unchanged) {
@@ -1065,8 +1067,8 @@ impl Data {
                 }
                 segments.push((po..o.start, pn..n.start, false));
                 (po, pn) = (o.end, n.end);
-                rf_old.extend(o.clone());
-                rf_new.extend(n.clone());
+                rf_old.extend(o.clone().map(|a| (a, g)));
+                rf_new.extend(n.clone().map(|b| (b, g)));
                 segments.push((o, n, true));
             }
         }
@@ -1114,22 +1116,38 @@ impl Data {
         // A row of reformatted lines.
         let rf_row = |&(o, n): &(Option<usize>, Option<usize>)| {
             (o.is_some() || n.is_some())
-                && o.is_none_or(|a| rf_old.contains(&a))
-                && n.is_none_or(|b| rf_new.contains(&b))
+                && o.is_none_or(|a| rf_old.contains_key(&a))
+                && n.is_none_or(|b| rf_new.contains_key(&b))
         };
+        // Reformatted lines with tokens added (on the new side) or removed
+        // (on the old side; inline, they are shown on the new side).
+        let rf_added = |b: usize| rf_new[&b].added.iter().any(|t| t.line as usize == b);
+        let rf_removed = |a: usize| rf_old[&a].removed.iter().any(|t| t.old.line as usize == a);
         let changed_row = |r: &(Option<usize>, Option<usize>)| match *r {
-            _ if rf_row(r) => false,
+            (o, n) if rf_row(r) => {
+                n.is_some_and(|b| {
+                    if split {
+                        rf_added(b)
+                    } else {
+                        rf_new[&b].changes_new_line(b as u32)
+                    }
+                }) || o.is_some_and(rf_removed)
+            }
             (Some(a), Some(b)) => ok[a] != nk[b],
             _ => true,
         };
+        // Reformatted lines count as added or removed where they have
+        // added or removed tokens, inline and side by side alike.
         let added = rows
             .iter()
-            .filter(|r| r.1.is_some() && (r.0.is_none() || split) && changed_row(r))
-            .count();
+            .filter(|r| r.1.is_some() && (r.0.is_none() || split) && changed_row(r) && !rf_row(r))
+            .count()
+            + rf_new.keys().filter(|&&b| rf_added(b)).count();
         let removed = rows
             .iter()
-            .filter(|r| r.0.is_some() && (r.1.is_none() || split) && changed_row(r))
-            .count();
+            .filter(|r| r.0.is_some() && (r.1.is_none() || split) && changed_row(r) && !rf_row(r))
+            .count()
+            + rf_old.keys().filter(|&&a| rf_removed(a)).count();
         // Line numbers in the files the two versions come from.
         let (old_start, new_start) = match it.status {
             Status::Removed => (it.info.line, it.info.line),
@@ -1201,11 +1219,22 @@ impl Data {
                 }
             }
         }
+        // Whole lines of reformatted groups that were added or removed.
+        let rf_adds = |b: usize| {
+            rf_new
+                .get(&b)
+                .is_some_and(|g| g.adds_line(b as u32, new[b]))
+        };
+        let rf_removes = |a: usize| {
+            rf_old
+                .get(&a)
+                .is_some_and(|g| g.removes_line(a as u32, old[a]))
+        };
         let new_code = |n: usize| {
             if let Some(html) = marked_new.get(&n) {
                 return html.clone();
             }
-            code_html(
+            let html = code_html(
                 self,
                 new[n],
                 Links::Source {
@@ -1213,13 +1242,51 @@ impl Data {
                     refs: &it.info.source_refs,
                     of: &it.info.id,
                 },
-            )
+            );
+            // The added tokens of a reformatted line, and inline, the
+            // removed ones where they were.
+            match rf_new.get(&n) {
+                Some(g) if !g.only_reformatted() => {
+                    let added: Vec<(usize, usize)> = if rf_adds(n) {
+                        Vec::new()
+                    } else {
+                        g.added
+                            .iter()
+                            .filter(|t| t.line as usize == n)
+                            .map(|t| (t.start as usize, t.end as usize))
+                            .collect()
+                    };
+                    let removed: Vec<(usize, &str)> = if split {
+                        Vec::new()
+                    } else {
+                        g.removed
+                            .iter()
+                            .filter(|t| t.at.line as usize == n)
+                            .map(|t| (t.at.start as usize, t.text.as_str()))
+                            .collect()
+                    };
+                    crate::code::mark_spans(&html, &added, &removed)
+                }
+                _ => html,
+            }
         };
         let old_code = |o: usize| {
-            marked_old
-                .get(&o)
-                .cloned()
-                .unwrap_or_else(|| code_html(self, old[o], old_links(o)))
+            if let Some(html) = marked_old.get(&o) {
+                return html.clone();
+            }
+            let html = code_html(self, old[o], old_links(o));
+            match rf_old.get(&o) {
+                Some(g) if !g.only_reformatted() && !rf_removes(o) => {
+                    let removed: Vec<(usize, usize)> = g
+                        .removed
+                        .iter()
+                        .filter(|t| t.old.line as usize == o)
+                        .map(|t| (t.old.start as usize, t.old.end as usize))
+                        .collect();
+                    crate::code::mark_removed_spans(&html, &removed)
+                }
+                _ => html,
+            }
         };
         let nonempty = |s: String| if s.is_empty() { " ".to_string() } else { s };
         // Lines inside `unsafe` code that changed get a stripe, and the
@@ -1264,7 +1331,11 @@ impl Data {
                         format!(
                             r#"<span class="no {side}">{}</span><span class="ln {}{}{un}" data-t="{}">{un_note}{}{}</span>"#,
                             start + i,
-                            if rf {
+                            if rf && class == "add" && rf_adds(i) {
+                                "add rfa"
+                            } else if rf && class == "del" && rf_removes(i) {
+                                "del rfa"
+                            } else if rf {
                                 "rf"
                             } else if same {
                                 ""
@@ -1272,7 +1343,11 @@ impl Data {
                                 class
                             },
                             if mv { " mv" } else { "" },
-                            if same { String::new() } else { tag.to_string() },
+                            if same || rf && !changed_row(&(o, n)) {
+                                String::new()
+                            } else {
+                                tag.to_string()
+                            },
                             if mv {
                                 moved_note(tag, i)
                             } else {
@@ -1290,14 +1365,25 @@ impl Data {
             } else {
                 let (class, tag, idx, no, code) = match (o, n) {
                     (_, Some(b)) if o.is_some() => ("", ' ', b, new_start + b, new_code(b)),
-                    (None, Some(b)) if rf_new.contains(&b) => {
+                    // A reformatted line: wholly added, with some tokens
+                    // added or removed (`~`), or only reformatted.
+                    (None, Some(b)) if rf_adds(b) => {
+                        ("add rfa", '+', b, new_start + b, new_code(b))
+                    }
+                    (None, Some(b))
+                        if rf_new.get(&b).is_some_and(|g| g.changes_new_line(b as u32)) =>
+                    {
+                        ("rf", '~', b, new_start + b, new_code(b))
+                    }
+                    (None, Some(b)) if rf_new.contains_key(&b) => {
                         ("rf", ' ', b, new_start + b, new_code(b))
                     }
                     (None, Some(b)) => ("add", '+', b, new_start + b, new_code(b)),
                     (Some(a), _) => ("del", '-', a, old_start + a, old_code(a)),
                     (None, None) => unreachable!(),
                 };
-                let mv = tag != ' ' && moved(tag, idx).is_some();
+                let mv =
+                    matches!(tag, '+' | '-') && class != "add rfa" && moved(tag, idx).is_some();
                 let (un, un_note) = uns(tag == '-', no);
                 format!(
                     r#"<span class="ln {class}{}{un}" data-t="{}" data-no="{no}">{}{un_note}{}{}</span>"#,
@@ -1329,10 +1415,18 @@ impl Data {
         const MIN_FOLD: usize = 2;
         let mut gaps: Vec<std::ops::Range<usize>> = Vec::new();
         if rows.iter().any(changed_row) {
-            // Lines with a review thread stay shown, like changed ones.
+            // Lines with a review thread stay shown, like changed ones, and
+            // so do all reformatted lines of a group with changed tokens:
+            // the rest of the call or literal that changed.
+            let in_changed_group = |(o, n): (Option<usize>, Option<usize>)| {
+                o.and_then(|a| rf_old.get(&a))
+                    .or_else(|| n.and_then(|b| rf_new.get(&b)))
+                    .is_some_and(|g| !g.only_reformatted())
+            };
             let near = |i: usize| {
-                (i.saturating_sub(CONTEXT)..(i + CONTEXT + 1).min(rows.len()))
-                    .any(|r| changed_row(&rows[r]) || !threads_at(r).is_empty())
+                in_changed_group(rows[i])
+                    || (i.saturating_sub(CONTEXT)..(i + CONTEXT + 1).min(rows.len()))
+                        .any(|r| changed_row(&rows[r]) || !threads_at(r).is_empty())
             };
             let mut i = 0;
             while i < rows.len() {

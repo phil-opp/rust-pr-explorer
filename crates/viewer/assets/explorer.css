@@ -485,6 +485,15 @@ a.card-badge[data-drill]:hover { border-style: solid; }
 /* Lines that were only rewrapped count as unchanged; a dotted rule on the
    left still shows where the formatting differs. */
 .ln.rf { background: linear-gradient(var(--muted) 50%, transparent 50%) 1px 0 / 1px 4px repeat-y; }
+/* Rewrapped lines that also gained or lost a few tokens, as a call that
+   got an argument and was then split by rustfmt: the tokens are marked
+   (removed ones struck out where they were), the line gets a "~", and a
+   line that is all new (the argument's own line) is an added line. */
+.ln.add.rfa { background: linear-gradient(var(--muted) 50%, transparent 50%) 1px 0 / 1px 4px repeat-y, var(--added-bg); }
+.ln.del.rfa { background: linear-gradient(var(--muted) 50%, transparent 50%) 1px 0 / 1px 4px repeat-y, var(--removed-bg); }
+.ln.rf::before, .ln.rf .sg { color: var(--changed); }
+.ln .wc.ti { background: color-mix(in srgb, var(--added) 28%, transparent); border-radius: 2px; }
+.ln .wc.td { background: color-mix(in srgb, var(--removed) 28%, transparent); text-decoration: line-through 1.5px var(--removed); border-radius: 2px; }
 /* Moved lines (code that went to or came from another place, e.g. an
    extracted helper) keep their "-" or "+" but get their own color and a
    rule on the left, so that they read as moved, not as new code. */
@@ -745,6 +754,14 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 .rvc .rv-note { border-style: dashed; color: var(--muted); font-style: italic; max-width: 30ch; overflow: hidden; text-overflow: ellipsis; }
 .rvc .rv-edit, .rvc .rv-fold { color: var(--muted); }
 body:not(.reviewing) .rv-edit, .card-rv .rv-fold { display: none; }
+/* Where to go next after a verdict that didn't move on (see
+   `next_steps_html` in lib.rs): on its own line below the buttons. */
+.rvc:has(.rv-next) { flex-wrap: wrap; }
+.rv-next { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; margin-top: 4px; font-size: 12px; }
+.rv-next .rv-next-label { font-weight: 600; color: var(--muted); }
+.rv-next .rv-go code { font-size: 12px; }
+.rvc .rv-go-btn { color: var(--link); }
+body:not(.reviewing) .rv-next { display: none; }
 .rv-chip.stale { border: 1px dashed var(--changed); color: var(--changed); background: var(--changed-bg); }
 .rv-all { color: var(--reviewed); font-weight: 700; }
 /* The review state in lists of changes (the overview's internal changes). */
@@ -845,6 +862,9 @@ pre .rt-row { max-width: min(760px, 100cqw); }
 .hunk-rv .rv-btn { font-size: 11px; padding: 0 6px; }
 .rv-scope { color: var(--muted); font-size: 12px; white-space: nowrap; }
 body:not(.reviewing) .rv-scope { display: none; }
+.rvc:has(> .rv-same) { flex-wrap: wrap; justify-content: flex-end; }
+.rv-same { flex-basis: 100%; color: var(--muted); font-size: 12px; text-align: right; }
+body:not(.reviewing) .rv-same { display: none; }
 .hunk-rv .rv-fold { display: none; }
 /* "GitHub ↗": opens an item or a change in the pull request's diff on
    GitHub. Outside review mode, a change's link floats at the right of its

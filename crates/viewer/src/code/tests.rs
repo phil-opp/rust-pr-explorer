@@ -915,6 +915,8 @@ fn reformatted_lines_are_shown_as_unchanged() {
         old_len: 1,
         new: 1,
         new_len: 4,
+        added: Vec::new(),
+        removed: Vec::new(),
     }];
     let html = d.source_html(&it, Some(true), false);
     // Only `x + 1` → `x + 2` counts; the call is shown in its new form.
@@ -938,6 +940,64 @@ fn reformatted_lines_are_shown_as_unchanged() {
         html.contains(">+5</span> <span class=\"d-del\">−2<"),
         "{html}"
     );
+}
+
+#[test]
+fn tokens_added_to_rewrapped_lines_are_marked() {
+    use model::{Item, Reformatted, RemovedTokens, SourceLine, Status, TokenSpan};
+    let d = empty();
+    let mut it = Item {
+        status: Status::Changed,
+        ..Default::default()
+    };
+    it.changes.body = true;
+    it.info.id = "c::f".into();
+    it.info.kind = model::Kind::Fn;
+    it.info.line = 1;
+    it.old_line = Some(1);
+    // `g(a, b)` → `g(a, c, d)`, split by rustfmt.
+    it.source = vec![
+        SourceLine(' ', "fn f() {".into()),
+        SourceLine('-', "    g(a, b);".into()),
+        SourceLine('+', "    g(".into()),
+        SourceLine('+', "        a, c,".into()),
+        SourceLine('+', "        d,".into()),
+        SourceLine('+', "    );".into()),
+        SourceLine(' ', "}".into()),
+    ];
+    let span = |line, start, end| TokenSpan { line, start, end };
+    it.reformatted = vec![Reformatted {
+        old: 1,
+        old_len: 1,
+        new: 1,
+        new_len: 4,
+        added: vec![span(2, 11, 12), span(3, 8, 9)],
+        removed: vec![RemovedTokens {
+            old: span(1, 10, 11),
+            at: span(2, 10, 10),
+            text: " b".into(),
+        }],
+    }];
+    let html = d.source_html(&it, Some(true), false);
+    // `c` is an added token of a kept line, with `b` struck out before
+    // it, and `d` an added line.
+    assert!(
+        html.contains(r#"a, <span class="wc td">b</span> <span class="wc ti">c</span>,"#),
+        "{html}"
+    );
+    assert_eq!(html.matches(r#"class="ln add rfa""#).count(), 1, "{html}");
+    // The line with `c` (its row and its gutter).
+    assert_eq!(html.matches(r#"data-t="~""#).count(), 2, "{html}");
+    // Two lines with added tokens, one with removed ones.
+    assert!(
+        html.contains(">+2</span> <span class=\"d-del\">−1<"),
+        "{html}"
+    );
+    // The review has one change: the new lines with tokens.
+    let changes = crate::review::changes(&it);
+    assert_eq!(changes.len(), 1);
+    assert_eq!(changes[0].new, [3, 4]);
+    assert!(changes[0].old.is_empty());
 }
 
 #[test]

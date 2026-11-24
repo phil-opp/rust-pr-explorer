@@ -537,3 +537,84 @@ pub fn mark_changed_tokens(old: &str, new: &str) -> Option<(String, String)> {
     };
     Some((render(&a, &changed_a), render(&b, &changed_b)))
 }
+
+/// A line's highlighted HTML with the characters `added` (ranges of its
+/// text, in chars) marked as added, and `removed` text shown struck out at
+/// the given columns. For reformatted lines that also gained or lost a few
+/// tokens (see `model::Reformatted`).
+pub fn mark_spans(html: &str, added: &[(usize, usize)], removed: &[(usize, &str)]) -> String {
+    mark_columns(html, added, "wc ti", removed)
+}
+
+/// A line's highlighted HTML with the characters `removed` (ranges of its
+/// text, in chars) marked as removed.
+pub fn mark_removed_spans(html: &str, removed: &[(usize, usize)]) -> String {
+    mark_columns(html, removed, "wc td", &[])
+}
+
+fn mark_columns(
+    html: &str,
+    spans: &[(usize, usize)],
+    class: &str,
+    inserts: &[(usize, &str)],
+) -> String {
+    let marked = |col: usize| spans.iter().any(|&(s, e)| s <= col && col < e);
+    let mut inserts = inserts.to_vec();
+    inserts.sort_by_key(|&(at, _)| at);
+    let mut inserts = inserts.into_iter().peekable();
+    let mut out = String::new();
+    let mut open = false;
+    // Closes the mark, then adds the removed text that goes before `col`:
+    // what separates it from the token before, and the text struck out.
+    let mut insert = |out: &mut String, open: &mut bool, col: usize| {
+        while let Some((_, text)) = inserts.next_if(|&(at, _)| at <= col) {
+            if *open {
+                out.push_str("</span>");
+                *open = false;
+            }
+            let body = text.trim_start();
+            out.push_str(&super::esc(&text[..text.len() - body.len()]));
+            out.push_str(r#"<span class="wc td">"#);
+            out.push_str(&super::esc(body));
+            out.push_str("</span>");
+        }
+    };
+    let mut col = 0;
+    for t in html_tokens(html) {
+        if is_tag(t) {
+            if open {
+                out.push_str("</span>");
+                open = false;
+            }
+            out.push_str(t);
+            continue;
+        }
+        // An entity is one character; other text goes char by char.
+        let pieces: Vec<&str> = if t.starts_with('&') && t.len() > 1 {
+            vec![t]
+        } else {
+            t.char_indices()
+                .map(|(i, c)| &t[i..i + c.len_utf8()])
+                .collect()
+        };
+        for p in pieces {
+            insert(&mut out, &mut open, col);
+            let m = marked(col);
+            if open && !m {
+                out.push_str("</span>");
+                open = false;
+            }
+            if m && !open {
+                out.push_str(&format!(r#"<span class="{class}">"#));
+                open = true;
+            }
+            out.push_str(p);
+            col += 1;
+        }
+    }
+    insert(&mut out, &mut open, usize::MAX);
+    if open {
+        out.push_str("</span>");
+    }
+    out
+}
