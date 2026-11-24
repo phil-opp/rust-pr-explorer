@@ -84,6 +84,9 @@ pub struct ItemData {
     /// names it (the position of its last segment).
     #[cfg_attr(not(feature = "semantic"), allow(dead_code))]
     pub ext_sites: BTreeMap<String, LineCol>,
+    /// The item's own `unsafe` code (not its members', which are items of
+    /// their own).
+    pub unsafe_sites: Vec<crate::unsafety::Site>,
 }
 
 #[derive(Clone)]

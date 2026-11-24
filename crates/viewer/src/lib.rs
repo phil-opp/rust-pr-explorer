@@ -27,6 +27,7 @@ mod sha256;
 mod since;
 mod space;
 mod threads;
+mod unsafety;
 mod yaml;
 
 use code::esc;
@@ -1113,9 +1114,18 @@ fn on_mouse_over(app: &mut App, el: &Element) {
         Some(id) => {
             let it = d.item(&id).unwrap();
             html.push_str(&format!(
-                "<div>{}{} · {}</div>",
+                "<div>{}{}{} · {}</div>",
                 it.info.kind.label(),
                 if it.info.test { " · test" } else { "" },
+                match it
+                    .unsafe_code
+                    .iter()
+                    .any(|c| c.status != model::Status::Removed)
+                {
+                    true => " · <b>⚠ changes unsafe code</b>",
+                    false if !it.unsafe_code.is_empty() => " · removes unsafe code",
+                    false => "",
+                },
                 if d.external(&id).is_some() {
                     "outside the analyzed crates · click for its docs".to_string()
                 } else {
@@ -1184,12 +1194,13 @@ fn render_search(app: &mut App) {
         .enumerate()
         .map(|(i, it)| {
             format!(
-                r#"<div class="{}" data-i="{i}"><span class="dot {}"></span> <span class="kind">{}</span> {} {}</div>"#,
+                r#"<div class="{}" data-i="{i}"><span class="dot {}"></span> <span class="kind">{}</span> {} {}{}</div>"#,
                 if i == app.s.search_sel { "sel" } else { "" },
                 it.status.css(),
                 it.info.kind.label(),
                 esc(d.short_path(&it.info.id)),
                 data::test_tag_of(it),
+                unsafety::tag(it),
             )
         })
         .collect();

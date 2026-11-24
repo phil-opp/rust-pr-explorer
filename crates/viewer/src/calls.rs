@@ -137,12 +137,13 @@ fn row_html(d: &Data, id: &str) -> String {
     };
     let context = !changed(it) && !d.touched(it);
     format!(
-        r#"<button class="cg-row{}" data-cfocus="{}" title="{}"><span class="dot {dot}"></span><span class="cg-name"><span class="kind">{}</span> {}<span class="cg-mod">{}</span></span>{done}{counts}</button>"#,
+        r#"<button class="cg-row{}" data-cfocus="{}" title="{}"><span class="dot {dot}"></span><span class="cg-name"><span class="kind">{}</span> {}{}<span class="cg-mod">{}</span></span>{done}{counts}</button>"#,
         if context { " context" } else { "" },
         esc(id),
         esc(&format!("Focus {}", d.short_path(id))),
         it.info.kind.label(),
         esc(&d.display_name(it)),
+        crate::unsafety::tag(it),
         esc(&d.mod_label(d.mod_of(it))),
     )
 }

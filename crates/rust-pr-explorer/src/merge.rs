@@ -31,6 +31,7 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
             Some(b) => compare(&ctx, b, h, moves.get(&id).cloned()),
             None => Item {
                 api: semver::classify(&ctx, None, Some(&h), &[], &[], None),
+                unsafe_code: crate::unsafety::compare(&[], &h.unsafe_sites),
                 source: lines(&h.source, '+'),
                 info: h.info,
                 status: Status::Added,
@@ -44,6 +45,7 @@ pub fn merge(base: Analysis, head: Analysis, meta: Meta) -> Output {
             id,
             Item {
                 api: semver::classify(&ctx, Some(&b), None, &[], &[], None),
+                unsafe_code: crate::unsafety::compare(&b.unsafe_sites, &[]),
                 source: lines(&b.source, '-'),
                 old_line: Some(b.info.line),
                 info: b.info,
@@ -171,6 +173,7 @@ fn compare(ctx: &semver::Context, b: ItemData, h: ItemData, moved_from: Option<S
     );
     Item {
         api,
+        unsafe_code: crate::unsafety::compare(&b.unsafe_sites, &h.unsafe_sites),
         sig_diff,
         sig_diff_public,
         old_sig_public: (b.info.sig != h.info.sig)

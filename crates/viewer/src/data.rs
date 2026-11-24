@@ -1110,6 +1110,14 @@ impl Data {
                 .unwrap_or_else(|| code_html(self, old[o], old_links(o)))
         };
         let nonempty = |s: String| if s.is_empty() { " ".to_string() } else { s };
+        // Lines inside `unsafe` code that changed get a stripe, and the
+        // first one says what it is.
+        let uns = |old: bool, no: usize| -> (&'static str, String) {
+            if !crate::unsafety::marks_line(&it.unsafe_code, old, no) {
+                return ("", String::new());
+            }
+            (" uns", crate::unsafety::note_at(&it.unsafe_code, old, no))
+        };
         // The PR's review threads under the rows of their lines.
         let threads = self.item_threads(&it.info.id);
         let threads_at = |r: usize| -> Vec<&model::ReviewThread> {
@@ -1140,8 +1148,9 @@ impl Data {
                     Some(i) => {
                         let tag = if class == "del" { '-' } else { '+' };
                         let mv = !same && moved(tag, i).is_some();
+                        let (un, un_note) = uns(side == "o", start + i);
                         format!(
-                            r#"<span class="no {side}">{}</span><span class="ln {}{}" data-t="{}">{}{}</span>"#,
+                            r#"<span class="no {side}">{}</span><span class="ln {}{}{un}" data-t="{}">{un_note}{}{}</span>"#,
                             start + i,
                             if rf {
                                 "rf"
@@ -1177,8 +1186,9 @@ impl Data {
                     (None, None) => unreachable!(),
                 };
                 let mv = tag != ' ' && moved(tag, idx).is_some();
+                let (un, un_note) = uns(tag == '-', no);
                 format!(
-                    r#"<span class="ln {class}{}" data-t="{}" data-no="{no}">{}{}{}</span>"#,
+                    r#"<span class="ln {class}{}{un}" data-t="{}" data-no="{no}">{}{un_note}{}{}</span>"#,
                     if mv { " mv" } else { "" },
                     if tag == ' ' {
                         String::new()

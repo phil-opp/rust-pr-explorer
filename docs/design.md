@@ -30,6 +30,7 @@ crates/rust-pr-explorer  CLI: get sources, analyze, compare, write the page
   src/semver_checks.rs   cargo-semver-checks findings, folded into the labels
   src/sigdiff.rs         structured signature diffs
   src/reformat.rs        source lines that were only rewrapped (token diff)
+  src/unsafety.rs        unsafe code per item and part, and how it changed
   src/files.rs           every changed file: line diffs, Cargo.toml entries
   src/lockfile.rs        lock files (Cargo.lock, uv.lock, poetry.lock) by package,
                          Cargo.lock dependency kinds, crate metadata
@@ -45,6 +46,7 @@ crates/viewer            the page's front end (wasm, web-sys, pulldown-cmark)
   src/canvas/            canvas of cards: cards, edges, layout, events
   src/map.rs, route.rs   structure view (module map, matrix) and arrow routing
   src/impact.rs          public items that reach a changed internal item
+  src/unsafety.rs        unsafe tags, the overview's unsafe box, source stripes
   src/files.rs           other changed files (Markdown sections, Python, YAML,
                          manifests, Rust code outside items)
   src/css.rs             CSS highlighting and selector boxes

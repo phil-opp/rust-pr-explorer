@@ -1495,3 +1495,52 @@ fn crate_versions_follow_the_workspace_and_publish() {
     // Binaries have no API.
     assert_eq!(versions.len(), 2, "{versions:?}");
 }
+
+#[test]
+fn unsafe_code_is_tracked_per_item() {
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "pub struct Buf(*mut u8);\n\
+         unsafe impl Send for Buf {}\n\
+         pub unsafe fn read(p: *const u8) -> u8 {\n    *p\n}\n\
+         impl Buf {\n    pub fn first(&self) -> u8 {\n        self.peek()\n    }\n    \
+         fn peek(&self) -> u8 {\n        0\n    }\n}\n",
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        "pub struct Buf(*mut u8);\n\
+         pub unsafe fn read(p: *const u8) -> u8 {\n    p.read()\n}\n\
+         impl Buf {\n    pub fn first(&self) -> u8 {\n        self.peek()\n    }\n    \
+         fn peek(&self) -> u8 {\n        unsafe { *self.0 }\n    }\n}\n",
+    )]);
+    let out = analyze_dirs(base.path(), head.path());
+    let changes = |id: &str| {
+        out.items[id]
+            .unsafe_code
+            .iter()
+            .map(|c| (c.status, c.kind, c.what.clone()))
+            .collect::<Vec<_>>()
+    };
+    use model::UnsafeKind;
+    assert_eq!(
+        changes("t::read"),
+        [(Status::Changed, UnsafeKind::Fn, "unsafe fn read".into())]
+    );
+    assert_eq!(
+        changes("t::Buf::peek"),
+        [(Status::Added, UnsafeKind::Block, "unsafe { … }".into())]
+    );
+    assert_eq!(
+        out.items["t::Buf::peek"].unsafe_code[0].lines,
+        Some((10, 10))
+    );
+    let removed: Vec<_> = out
+        .items
+        .values()
+        .filter(|it| it.status == Status::Removed)
+        .flat_map(|it| it.unsafe_code.iter().map(|c| (c.status, c.kind)))
+        .collect();
+    assert_eq!(removed, [(Status::Removed, UnsafeKind::Impl)]);
+    // The impl and the method that only calls `peek` touch no unsafe code.
+    assert!(changes("t::Buf::first").is_empty());
+}

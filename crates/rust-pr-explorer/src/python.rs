@@ -267,6 +267,7 @@ fn outline(text: &str) -> (Vec<Def>, String) {
                 first,
                 last,
                 nested: Vec::new(),
+                unsafe_sites: Vec::new(),
             });
             stack.push((defs.len() - 1, l.indent, kind == "class"));
             continue;

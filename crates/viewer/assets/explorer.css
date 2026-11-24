@@ -28,6 +28,8 @@
   --highlight: #ffe48a;
   --reviewed: #0b7285;
   --reviewed-bg: #e3f4f7;
+  --unsafe: #ffd33d;
+  --hazard: repeating-linear-gradient(-45deg, #f2c200 0 6px, #111111 6px 12px);
   --shadow: 0 1px 3px rgba(0, 0, 0, 0.12), 0 4px 14px rgba(0, 0, 0, 0.06);
   --code-font: "Iosevka", var(--mono);
   --code-size: 13px;
@@ -517,6 +519,23 @@ a.card-badge[data-drill]:hover { border-style: solid; }
    extracted helper) keep their "-" or "+" but get their own color and a
    rule on the left, so that they read as moved, not as new code. */
 .ln.mv { background: var(--moved-bg) !important; box-shadow: inset 2px 0 0 var(--moved); }
+/* Unsafe code: hazard stripes, the same in both themes, so that it looks
+   like nothing else on the page. */
+.src .ln.uns, .sbs .ln.uns { background-image: var(--hazard); background-size: 5px 100%; background-repeat: no-repeat; }
+.uns-note { float: right; margin-left: 16px; font: 700 11.5px/16px var(--sans); color: #111111; background: var(--unsafe); padding: 0 6px; border-radius: 3px; }
+.unsafe-tag { display: inline-block; font: 700 11px/16px var(--sans); padding: 0 6px; border-radius: 3px; white-space: nowrap; cursor: help; color: #111111; background: var(--unsafe); box-shadow: inset 0 0 0 1px #111111; margin-left: 4px; text-transform: uppercase; letter-spacing: .04em; }
+.unsafe-tag.gone { color: var(--muted); background: transparent; box-shadow: none; border: 1px dashed var(--border); text-transform: none; letter-spacing: 0; font-weight: 600; }
+.unsafe-box { margin: 12px 0 20px; padding: 14px 14px 8px; border: 1.5px solid var(--text); border-radius: 6px; background: var(--hazard) top left / 100% 7px no-repeat, var(--panel); }
+.unsafe-box.gone { border-color: var(--border); }
+.unsafe-box h2 { margin-top: 4px; }
+.unsafe-sign { display: inline-block; color: #111111; background: var(--unsafe); border-radius: 3px; padding: 0 5px; font-size: .9em; }
+.unsafe-row { padding: 6px 0; border-top: 1px solid var(--border); }
+.unsafe-row:first-of-type { border-top: none; }
+.unsafe-row .kind { margin-right: 6px; }
+.unsafe-why { margin: 2px 0 4px; padding-left: 18px; font-size: 13px; }
+.unsafe-why li::marker { content: "⚠ "; }
+.unsafe-why li.gone { color: var(--muted); }
+.unsafe-why li.gone::marker { content: "– "; }
 .ln.mv::before, .ln.mv .sg { color: var(--moved) !important; }
 .mv-note { float: right; margin-left: 16px; font: 12px var(--sans); color: var(--moved); }
 .d-mv { color: var(--moved); }

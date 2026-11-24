@@ -21,6 +21,7 @@ mod sigdiff;
 mod source;
 #[cfg(test)]
 mod tests;
+mod unsafety;
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
