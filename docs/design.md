@@ -49,7 +49,7 @@ crates/viewer            the page's front end (wasm, web-sys, pulldown-cmark)
   src/unsafety.rs        unsafe tags, the overview's unsafe box, source stripes
   src/risk.rs            the overview's "Review first" ranking
   src/graphs.rs          the overview's changed call graphs
-  src/files.rs           other changed files (Markdown sections, Python, YAML,
+  src/files.rs           changed files (Markdown sections, Python, YAML,
                          manifests, Rust code outside items)
   src/css.rs             CSS highlighting and selector boxes
 ```
