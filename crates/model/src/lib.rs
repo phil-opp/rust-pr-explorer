@@ -337,6 +337,23 @@ pub struct MovedLines {
     pub other_line: u32,
 }
 
+/// A name on a line with the same text in both versions that refers to
+/// something else in the PR's version: another item, or (`None` on one side)
+/// nothing that could be resolved.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct Retarget {
+    /// The line, counted in each side's version of `source` (as in
+    /// [`MovedLines::start`]).
+    pub old_line: u32,
+    pub line: u32,
+    /// The name's column (0-based, in chars) and its text, e.g. `helper`
+    /// or `super::helper`.
+    pub col: u32,
+    pub name: String,
+    pub old: Option<Ref>,
+    pub new: Option<Ref>,
+}
+
 /// An item as compared between base and head.
 #[derive(Serialize, Deserialize, Debug, Clone, Default)]
 pub struct Item {
@@ -381,6 +398,11 @@ pub struct Item {
     /// this one.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub moved_lines: Vec<MovedLines>,
+    /// Names that refer to something else than before on lines whose text
+    /// did not change, e.g. a call that now resolves to a new function of
+    /// the same name. `source` shows these lines as removed and added.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub retargeted: Vec<Retarget>,
     /// How the item's public API changed, if it is public on either side
     /// and its API changed.
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -545,6 +545,20 @@ impl Data {
         }
     }
 
+    /// A name's target by its path, linked when it is an item of the page.
+    pub fn ref_link(&self, r: &model::Ref) -> String {
+        let path = esc(self.short_path(&r.path));
+        match r.id.as_deref().and_then(|id| self.item(id)) {
+            Some(o) => format!(
+                r#"<a class="ref" data-id="{}" data-kind="{}" data-path="{}">{path}</a>"#,
+                esc(&o.info.id),
+                o.info.kind.css(),
+                esc(&o.info.id),
+            ),
+            None => format!("<code>{path}</code>"),
+        }
+    }
+
     pub fn display_name(&self, it: &Item) -> String {
         let i = &it.info;
         if i.kind == Kind::Mod && self.is_root(it) {
@@ -1006,8 +1020,29 @@ impl Data {
                 l.to_string()
             }
         };
-        let (ok, nk): (Vec<String>, Vec<String>) =
-            (old.iter().map(key).collect(), new.iter().map(key).collect());
+        // A line whose names now refer to other items (see
+        // `Item::retargeted`) differs from its old version, with the same
+        // text.
+        let retargeted_at = |old_side: bool, i: usize| {
+            it.retargeted
+                .iter()
+                .any(|r| (if old_side { r.old_line } else { r.line }) as usize == i)
+        };
+        let keys = |lines: &[&str], old_side: bool| -> Vec<String> {
+            lines
+                .iter()
+                .enumerate()
+                .map(|(i, l)| {
+                    let k = key(l);
+                    if retargeted_at(old_side, i) {
+                        format!("{k}\u{0}{}", if old_side { '-' } else { '+' })
+                    } else {
+                        k
+                    }
+                })
+                .collect()
+        };
+        let (ok, nk) = (keys(&old, true), keys(&new, false));
         // Rows: (old line index, new line index); one of them for added
         // or removed lines.
         let mut rows: Vec<(Option<usize>, Option<usize>)> = Vec::new();
@@ -1414,12 +1449,19 @@ impl Data {
                     + usize::from(n.is_some_and(|b| moved('+', b).is_some()))
             })
             .sum::<usize>();
+        // Names that refer to other items with the same text.
+        let retargeted = it.retargeted.len();
         let stats = format!(
-            r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>{}{}"#,
+            r#"<span class="d-add">+{added}</span> <span class="d-del">−{removed}</span>{}{}{}"#,
             if moved_count > 0 {
                 format!(r#" <span class="d-mv">({moved_count} moved)</span>"#)
             } else {
                 String::new()
+            },
+            match retargeted {
+                0 => String::new(),
+                1 => r#" <span class="d-mv">(a name refers to another item)</span>"#.to_string(),
+                n => format!(r#" <span class="d-mv">({n} names refer to other items)</span>"#),
             },
             // A formatting-only item says so below.
             match (opts.ignore_ws, !rf_new.is_empty() && !it.changes.cosmetic) {
@@ -1465,8 +1507,27 @@ impl Data {
             _ if added + removed > 0 => ("", format!("Source {stats} · {where_}")),
             _ => ("", format!("Source · {where_} · {} lines", it.source.len())),
         };
+        // What each retargeted name referred to and does now, above the
+        // code: the lines alone look unchanged.
+        let retarget_notes: String = it
+            .retargeted
+            .iter()
+            .map(|r| {
+                let target = |t: &Option<model::Ref>| match t {
+                    Some(t) => self.ref_link(t),
+                    None => "nothing that was resolved".to_string(),
+                };
+                format!(
+                    r#"<div class="rt-note">Line {}: <code>{}</code> now refers to {}, before to {}.</div>"#,
+                    new_start + r.line as usize,
+                    esc(&r.name),
+                    target(&r.new),
+                    target(&r.old)
+                )
+            })
+            .collect();
         let html = format!(
-            r#"<details class="src {}" {} {}><summary>{summary}</summary>{code}</details>"#,
+            r#"<details class="src {}" {} {}><summary>{summary}</summary>{retarget_notes}{code}</details>"#,
             // The marker is drawn around it; this only colors the summary.
             class.replace("m-", "src-"),
             if card {

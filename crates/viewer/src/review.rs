@@ -141,6 +141,9 @@ struct Review {
     /// The unit that a verdict was just given to without moving on (see
     /// [`set_stayed`]), with the links to where to go next.
     stayed: Option<(String, String)>,
+    /// For each item whose only change is names that refer to other items
+    /// (see [`retarget_key`]), the other items with the same change.
+    same: HashMap<String, Vec<String>>,
 }
 
 /// One separate change in an item's diff.
@@ -882,6 +885,12 @@ pub fn load(d: &Data) {
         .collect();
     let order = call_order(d, &units);
     let since = d.out.meta.pr.as_ref().is_some_and(|pr| pr.since.is_some());
+    let same = same_changes(
+        units
+            .iter()
+            .filter_map(|(id, _)| d.item(id))
+            .filter(|it| is_unit_item(it)),
+    );
     REVIEW.with(|r| {
         *r.borrow_mut() = Review {
             on,
@@ -905,9 +914,74 @@ pub fn load(d: &Data) {
                 .map(|pr| pr.saved_marks.clone())
                 .unwrap_or_default(),
             stayed: None,
+            same,
         }
     });
     apply_mode();
+}
+
+/// What an item's change is, if it is only names that now refer to other
+/// items (see `Item::retargeted`): each name's old and new target, sorted
+/// and without repeats. `None` if anything else changed, such as a line's
+/// text, the signature, the docs or its `unsafe` code.
+pub fn retarget_key(it: &Item) -> Option<Vec<(String, String)>> {
+    let c = &it.changes;
+    if it.status != Status::Changed
+        || it.retargeted.is_empty()
+        || c.signature
+        || c.docs
+        || c.cosmetic
+        || c.moved_from.is_some()
+        || !c.exports_added.is_empty()
+        || !c.exports_removed.is_empty()
+        || !it.unsafe_code.is_empty()
+    {
+        return None;
+    }
+    // Every changed line is a retargeted one, shown removed and added.
+    let lines = |tag: char| it.source.iter().filter(|l| l.0 == tag).count();
+    let (old, new): (HashSet<u32>, HashSet<u32>) =
+        it.retargeted.iter().map(|r| (r.old_line, r.line)).unzip();
+    if lines('-') != old.len() || lines('+') != new.len() {
+        return None;
+    }
+    let path = |r: &Option<model::Ref>| r.as_ref().map_or(String::new(), |r| r.path.clone());
+    let mut key: Vec<(String, String)> = it
+        .retargeted
+        .iter()
+        .map(|r| (path(&r.old), path(&r.new)))
+        .collect();
+    key.sort();
+    key.dedup();
+    Some(key)
+}
+
+/// Groups the items whose only change is the same set of retargeted
+/// names, by item: each with the others of its group.
+fn same_changes<'a>(items: impl IntoIterator<Item = &'a Item>) -> HashMap<String, Vec<String>> {
+    let mut groups: BTreeMap<Vec<(String, String)>, Vec<String>> = BTreeMap::new();
+    for it in items {
+        if let Some(key) = retarget_key(it) {
+            groups.entry(key).or_default().push(it.info.id.clone());
+        }
+    }
+    let mut out = HashMap::new();
+    for ids in groups.into_values().filter(|g| g.len() > 1) {
+        for id in &ids {
+            let others = ids.iter().filter(|o| *o != id).cloned().collect();
+            out.insert(id.clone(), others);
+        }
+    }
+    out
+}
+
+/// The other items with the same change as `id` (see [`same_changes`])
+/// that still need a review.
+pub fn open_same_change(id: &str) -> Vec<String> {
+    let all = REVIEW.with(|r| r.borrow().same.get(id).cloned().unwrap_or_default());
+    all.into_iter()
+        .filter(|o| mark(o) != Some(Mark::Done))
+        .collect()
 }
 
 /// The marks of a PR as one text, to take them to another page: in a
@@ -1299,6 +1373,15 @@ pub fn set_mark(d: &Data, id: &str, note: Option<Note>) {
     }
 }
 
+/// Approves the other items with the same change as `id` (see
+/// [`open_same_change`]), without a comment: one on `id` stays there,
+/// rather than being repeated once per item in a posted review.
+pub fn mark_same_change(d: &Data, id: &str) {
+    for other in open_same_change(id) {
+        set_mark(d, &other, Some(Note::default()));
+    }
+}
+
 /// Removes every mark of this PR.
 pub fn clear() {
     REVIEW.with(|r| {
@@ -1463,6 +1546,18 @@ fn snippet(text: &str) -> String {
 fn actions(id: &str) -> String {
     if hunk_item(id).is_some() {
         return r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve only this change (a, after n/p)">✓ Approve change</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change here (r, after n/p)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on this change (c, after n/p)">✎ Comment</button>"#.to_string();
+    }
+    let same = open_same_change(id).len();
+    if same > 0 {
+        let others = if same == 1 {
+            "1 other item".to_string()
+        } else {
+            format!("{same} other items")
+        };
+        return format!(
+            r#"<span class="rv-same" title="Their only change is the same: the same names now refer to the same other items.">Same change as {others}.</span><button class="rv-btn approve" data-rv-act="approve" data-rv-all title="Approve this item and the {same} others, and go on to the next item if Next ▸ led here (a)">✓ Approve all {all}</button><button class="rv-btn approve" data-rv-act="approve" title="Approve only this item">✓ Only this</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on this item (c)">✎ Comment</button>"#,
+            all = same + 1
+        );
     }
     let n = hunks_of(id).len();
     if n > 1 {
@@ -1659,6 +1754,70 @@ mod tests {
         it
     }
 
+    /// A test whose only change is that `helper` now calls `to`.
+    fn retargeted(id: &str, to: &str) -> Item {
+        let mut it = item(id, Kind::Fn, "c::tests", "src/lib.rs", 10, Status::Changed);
+        it.changes.body = true;
+        it.source = vec![
+            model::SourceLine(' ', "fn t() {".into()),
+            model::SourceLine('-', "    helper();".into()),
+            model::SourceLine('+', "    helper();".into()),
+            model::SourceLine(' ', "}".into()),
+        ];
+        let r = |p: &str| model::Ref {
+            id: Some(p.into()),
+            path: p.into(),
+        };
+        it.retargeted = vec![model::Retarget {
+            old_line: 1,
+            line: 1,
+            col: 4,
+            name: "helper".into(),
+            old: Some(r("c::helper")),
+            new: Some(r(to)),
+        }];
+        it
+    }
+
+    #[test]
+    fn items_with_the_same_retarget_only_are_one_group() {
+        let a = retargeted("c::tests::a", "c::tests::helper");
+        let b = retargeted("c::tests::b", "c::tests::helper");
+        // Calls another new helper: another change.
+        let other = retargeted("c::tests::c", "c::tests::other");
+        // The same retarget, plus a changed line.
+        let mut more = retargeted("c::tests::d", "c::tests::helper");
+        more.source
+            .insert(3, model::SourceLine('+', "    extra();".into()));
+        // The same retarget, plus new docs.
+        let mut docs = retargeted("c::tests::e", "c::tests::helper");
+        docs.changes.docs = true;
+        assert!(retarget_key(&more).is_none());
+        assert!(retarget_key(&docs).is_none());
+        let same = same_changes([&a, &b, &other, &more, &docs]);
+        assert_eq!(same["c::tests::a"], ["c::tests::b"]);
+        assert_eq!(same["c::tests::b"], ["c::tests::a"]);
+        assert_eq!(same.len(), 2);
+        // The buttons say that the verdict applies to the other one too,
+        // until it is reviewed.
+        REVIEW.with(|r| {
+            *r.borrow_mut() = Review {
+                same,
+                prints: [("c::tests::b".to_string(), 1)].into(),
+                ..Default::default()
+            }
+        });
+        assert!(actions("c::tests::a").contains("Same change as 1 other item."));
+        // Approving can cover both or only this one.
+        let html = actions("c::tests::a");
+        assert!(html.contains(r#"data-rv-all title="Approve this item and the 1 others"#));
+        assert!(html.contains("✓ Approve all 2</button>"));
+        assert!(html.contains("✓ Only this</button>"));
+        REVIEW.with(|r| r.borrow_mut().marks.insert("c::tests::b".into(), 1));
+        assert!(!actions("c::tests::a").contains("Same change"));
+        REVIEW.with(|r| *r.borrow_mut() = Review::default());
+    }
+
     /// Crate `c` with modules `b` and `a` (listed in that order in the
     /// data), changed items out of position order, an unchanged item and
     /// a changed file outside the analysis.
@@ -1820,6 +1979,7 @@ mod tests {
                 hunks,
                 saved: Vec::new(),
                 stayed: None,
+                same: HashMap::new(),
             }
         });
     }

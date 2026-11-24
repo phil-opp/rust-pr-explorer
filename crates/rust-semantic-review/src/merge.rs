@@ -2,7 +2,7 @@
 
 use crate::analyze::{Analysis, ItemData};
 use crate::semver;
-use model::{Changes, Item, Kind, Meta, Output, SigDiff, SourceLine, Status};
+use model::{Changes, Item, Kind, Meta, Output, Ref, Retarget, SigDiff, SourceLine, Status};
 use similar::{ChangeTag, TextDiff};
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -116,21 +116,43 @@ fn compare(ctx: &semver::Context, b: ItemData, h: ItemData, moved_from: Option<S
     } else {
         Status::Unchanged
     };
-    let source = if b.source == h.source {
+    // Lines with the same text can still differ in what their names refer
+    // to (which counts as a change above): those are shown as removed and
+    // added, with what changed in `retargeted`.
+    let diff = TextDiff::from_lines(&b.source, &h.source);
+    let equal: Vec<(usize, usize)> = diff
+        .iter_all_changes()
+        .filter(|c| c.tag() == ChangeTag::Equal)
+        .filter_map(|c| Some((c.old_index()?, c.new_index()?)))
+        .collect();
+    let retargeted = if status == Status::Changed {
+        retargets(&b, &h, &equal, same)
+    } else {
+        Vec::new()
+    };
+    let source = if b.source == h.source && retargeted.is_empty() {
         lines(&h.source, ' ')
     } else {
-        let diff = TextDiff::from_lines(&b.source, &h.source);
-        diff.iter_all_changes()
-            .map(|c| {
-                let tag = match c.tag() {
-                    ChangeTag::Equal => ' ',
-                    ChangeTag::Insert => '+',
-                    ChangeTag::Delete => '-',
-                };
-                SourceLine(tag, c.value().trim_end_matches('\n').to_string())
-            })
-            .collect()
+        let mut out = Vec::new();
+        for c in diff.iter_all_changes() {
+            let text = c.value().trim_end_matches('\n').to_string();
+            match c.tag() {
+                ChangeTag::Equal
+                    if retargeted
+                        .iter()
+                        .any(|r| Some(r.line as usize) == c.new_index()) =>
+                {
+                    out.push(SourceLine('-', text.clone()));
+                    out.push(SourceLine('+', text));
+                }
+                ChangeTag::Equal => out.push(SourceLine(' ', text)),
+                ChangeTag::Insert => out.push(SourceLine('+', text)),
+                ChangeTag::Delete => out.push(SourceLine('-', text)),
+            }
+        }
+        out
     };
+    let source_differs = b.source != h.source || !retargeted.is_empty();
     // Structured diffs of the full and the public (private fields hidden)
     // signatures.
     // Computed whenever the signature's meaning changed, which includes
@@ -183,7 +205,7 @@ fn compare(ctx: &semver::Context, b: ItemData, h: ItemData, moved_from: Option<S
         old_docs: docs.then(|| b.info.docs.clone()),
         old_line: Some(b.info.line),
         old_file: (b.info.file != h.info.file).then(|| b.info.file.clone()),
-        old_source_refs: if b.source != h.source {
+        old_source_refs: if source_differs {
             b.info.source_refs
         } else {
             BTreeMap::new()
@@ -199,6 +221,7 @@ fn compare(ctx: &semver::Context, b: ItemData, h: ItemData, moved_from: Option<S
         },
         source,
         moved_lines: Vec::new(),
+        retargeted,
         info: h.info,
         status,
         changes: Changes {
@@ -211,6 +234,69 @@ fn compare(ctx: &semver::Context, b: ItemData, h: ItemData, moved_from: Option<S
             exports_removed,
         },
     }
+}
+
+/// The names on lines with the same text in both versions (`equal`, as
+/// line indices of the base and head sources) that refer to different
+/// things: by `same`, which treats paths into a moved item's old and new
+/// module as equal.
+fn retargets(
+    b: &ItemData,
+    h: &ItemData,
+    equal: &[(usize, usize)],
+    same: impl Fn(&str, &str) -> bool,
+) -> Vec<Retarget> {
+    // The refs by (line index in the item's source, column).
+    let by_pos = |d: &ItemData| -> BTreeMap<(usize, usize), Ref> {
+        d.info
+            .source_refs
+            .iter()
+            .filter_map(|(k, r)| {
+                let (l, c) = k.split_once(':')?;
+                let l = l.parse::<usize>().ok()?.checked_sub(d.info.line)?;
+                Some(((l, c.parse().ok()?), r.clone()))
+            })
+            .collect()
+    };
+    let (old, new) = (by_pos(b), by_pos(h));
+    let head_lines: Vec<&str> = h.source.lines().collect();
+    let mut out = Vec::new();
+    for &(o, n) in equal {
+        let on_line = |m: &BTreeMap<(usize, usize), Ref>, l: usize| -> BTreeMap<usize, Ref> {
+            m.range((l, 0)..(l + 1, 0))
+                .map(|(&(_, c), r)| (c, r.clone()))
+                .collect()
+        };
+        let (mut olds, mut news) = (on_line(&old, o), on_line(&new, n));
+        let cols: std::collections::BTreeSet<usize> =
+            olds.keys().chain(news.keys()).copied().collect();
+        for col in cols {
+            let (was, now) = (olds.remove(&col), news.remove(&col));
+            if let (Some(w), Some(n)) = (&was, &now)
+                && same(&w.path, &n.path)
+            {
+                continue;
+            }
+            let name: String = head_lines
+                .get(n)
+                .map(|l| {
+                    l.chars()
+                        .skip(col)
+                        .take_while(|c| c.is_alphanumeric() || matches!(c, '_' | ':'))
+                        .collect()
+                })
+                .unwrap_or_default();
+            out.push(Retarget {
+                old_line: o as u32,
+                line: n as u32,
+                col: col as u32,
+                name: name.trim_end_matches(':').to_string(),
+                old: was,
+                new: now,
+            });
+        }
+    }
+    out
 }
 
 fn lines(text: &str, tag: char) -> Vec<SourceLine> {

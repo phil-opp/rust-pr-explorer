@@ -516,6 +516,8 @@ a.card-badge[data-drill]:hover { border-style: solid; }
 .ln.mv::before, .ln.mv .sg { color: var(--moved) !important; }
 .mv-note { float: right; margin-left: 16px; font: 12px var(--sans); color: var(--moved); }
 .d-mv { color: var(--moved); }
+.rt-note { margin: 4px 0 6px; font-size: 13px; color: var(--moved); overflow-wrap: anywhere; }
+.rt-note code { font-size: 12px; }
 /* Removed lines are marked by their background and "-" alone. A changed
    line paired with its new version also has its changed words marked. */
 .ln.del .wc { background: color-mix(in srgb, var(--removed) 28%, transparent); text-decoration: line-through 1.5px var(--removed); border-radius: 2px; }
@@ -802,6 +804,16 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .rv-finish a.rv-btn:hover { border-color: var(--link); }
 /* Buttons big enough to tap. */
 @media (hover: none) and (pointer: coarse) { .rv-editor button, .rv-finish button, .rv-finish a.rv-btn { padding: 8px 14px; } }
+/* The finish dialog's two ways to post, with the one that needs a terminal
+   first, except on a touch screen, where there usually is none. Each way has
+   a heading for either order. */
+.rv-finish .rv-touch { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  .rv-finish .rv-desk { display: none; }
+  .rv-finish .rv-touch { display: block; }
+  .rv-outs { display: flex; flex-direction: column; }
+  .rv-outs .rv-copy { order: -1; }
+}
 #modal-b button.primary { background: var(--reviewed); border-color: var(--reviewed); color: var(--bg); font-weight: 600; }
 .rv-ev { display: block; margin: 4px 0; cursor: pointer; }
 .rv-cmd { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 4px 8px; background: var(--bg-code); border-radius: 4px; font-size: 12px; }
@@ -839,6 +851,9 @@ pre .rt-row { max-width: min(760px, 100cqw); }
 .hunk-rv .rv-btn { font-size: 11px; padding: 0 6px; }
 .rv-scope { color: var(--muted); font-size: 12px; white-space: nowrap; }
 body:not(.reviewing) .rv-scope { display: none; }
+.rvc:has(> .rv-same) { flex-wrap: wrap; justify-content: flex-end; }
+.rv-same { flex-basis: 100%; color: var(--muted); font-size: 12px; text-align: right; }
+body:not(.reviewing) .rv-same { display: none; }
 .hunk-rv .rv-fold { display: none; }
 /* "GitHub ↗": opens an item or a change in the pull request's diff on
    GitHub. Outside review mode, a change's link floats at the right of its
@@ -926,7 +941,7 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
 /* The focused card is laid out like a page section, not placed on the
    canvas; what only the canvas can do (close it, open its relatives next
    to it) is left out, since the lists show the relatives. */
-.cg-focus { scroll-margin-top: 44px; }
+.cg-focus, .cg-above { scroll-margin-top: 44px; }
 .cg-focus .card { position: relative; left: auto !important; top: auto !important; width: auto; }
 .cg-focus .card-h .x, .cg-focus .card-badge.private,
 .cg-focus [data-act="callers"], .cg-focus [data-act="callees"], .cg-focus [data-act="uses"],

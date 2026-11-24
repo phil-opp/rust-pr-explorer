@@ -255,6 +255,15 @@ impl Analyzer {
         let mut crate_order = Vec::new();
         for krate in crates {
             if !an.crate_roots.insert(krate.name.clone()) {
+                an.warnings.push(format!(
+                    "{} is left out: another crate is also named `{}`",
+                    krate
+                        .root_file
+                        .strip_prefix(root)
+                        .unwrap_or(&krate.root_file)
+                        .display(),
+                    krate.name
+                ));
                 continue;
             }
             crate_order.push(krate.name.clone());

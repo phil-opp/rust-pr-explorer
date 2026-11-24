@@ -6,7 +6,8 @@
 # Writes `posted=false` to GITHUB_OUTPUT if commenting failed.
 #
 # Environment: GH_TOKEN, REPO, PR, POST (`true` to comment, else only the job
-# summary), URL, ARTIFACT_ID and SUMMARY of the page, SINCE_URL,
+# summary), URL, ARTIFACT_ID and SUMMARY of the page, COUNTS (counts.jq's
+# numbers for the page, for the list of breaking changes), SINCE_URL,
 # SINCE_ARTIFACT_ID and SINCE_SUMMARY of the page of the changes since the
 # previous comment (empty without one), HEAD, SINCE (the `since:` line of
 # the tool, empty without `--since`), PREVIOUS (the previous comment's
@@ -16,6 +17,9 @@
 # previous-analysis.sh).
 set -euo pipefail
 
+# The breaking changes, with links into the page (see breaking.jq).
+breaking=$(jq -r --arg url "$URL" -f "$(dirname "$0")/breaking.jq" <<< "${COUNTS:-null}")
+
 {
   echo "### Rust Semantic Review"
   echo
@@ -23,6 +27,10 @@ set -euo pipefail
   if [ -n "$SINCE_URL" ]; then
     echo
     echo "[Changes since ${PREVIOUS:0:7}]($SINCE_URL): $SINCE_SUMMARY"
+  fi
+  if [ -n "$breaking" ]; then
+    echo
+    echo "$breaking"
   fi
 } >> "$GITHUB_STEP_SUMMARY"
 if [ "$POST" != "true" ]; then exit 0; fi
@@ -95,6 +103,13 @@ if [ -n "$since" ]; then
 elif [ "$mode" = new ] && [[ "$SINCE" == unavailable* ]]; then
   body="$body
 - The changes since $PREVIOUS, the previous comment's commit, could not be shown ${SINCE#unavailable }."
+fi
+# For the whole PR, not only the changes since the previous comment: the
+# question is whether merging it breaks the API.
+if [ -n "$breaking" ]; then
+  body="$body
+
+$breaking"
 fi
 if [ "$mode" = update ] && [ "$PREVIOUS" != "$HEAD" ]; then
   body="$body

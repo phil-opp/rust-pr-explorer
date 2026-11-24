@@ -96,6 +96,7 @@ fi
 
 summarize() { jq -r -f "$GITHUB_ACTION_PATH/../action/summary.jq"; }
 SUMMARY=$(jq '.counts' "$dir/data.json" | summarize)
+COUNTS=$(jq -c '.counts' "$dir/data.json")
 page=$(artifact "rust-semantic-review-$PR-${HEAD:0:7}.html")
 if [ -z "$page" ]; then
   echo "::error::The analysis run has no page artifact for PR #$PR."
@@ -128,7 +129,7 @@ case "$SINCE" in
 esac
 
 COMMENT_ONLY=true POST=true RETENTION_DAYS='' \
-  URL=$URL ARTIFACT_ID=$ARTIFACT_ID SUMMARY=$SUMMARY \
+  URL=$URL ARTIFACT_ID=$ARTIFACT_ID SUMMARY=$SUMMARY COUNTS=$COUNTS \
   SINCE=$SINCE SINCE_URL=$SINCE_URL SINCE_ARTIFACT_ID=$SINCE_ARTIFACT_ID SINCE_SUMMARY=$SINCE_SUMMARY \
   PREVIOUS=$PREVIOUS PREVIOUS_ID=$PREVIOUS_ID PREVIOUS_NODE_ID=$PREVIOUS_NODE_ID PREVIOUS_STATE=$PREVIOUS_STATE \
   "$GITHUB_ACTION_PATH/../action/post-comment.sh"

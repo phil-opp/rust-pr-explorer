@@ -31,6 +31,8 @@ use std::collections::{BTreeSet, HashMap};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 #[derive(Debug, Default)]
 pub struct Stats {
@@ -45,6 +47,13 @@ pub struct Stats {
     /// Workspaces that failed to load, with the error: their items keep
     /// the syntactic results.
     pub failed: Vec<String>,
+    /// Threads that resolved the calls.
+    pub threads: usize,
+    /// Seconds spent loading the workspaces, resolving the calls, and
+    /// determining the public API and describing external items.
+    pub load_secs: f64,
+    pub calls_secs: f64,
+    pub rest_secs: f64,
 }
 
 /// What a call site refers to.
@@ -72,7 +81,11 @@ pub fn refine(
     analysis: &mut Analysis,
 ) -> Result<Stats> {
     let root = std::fs::canonicalize(root)?;
-    let mut stats = Stats::default();
+    let threads = threads();
+    let mut stats = Stats {
+        threads,
+        ..Stats::default()
+    };
     let mut texts = Texts::default();
     // Where each analyzed item's name is, to map results back to items.
     let mut by_name_pos: HashMap<(String, LineCol), String> = HashMap::new();
@@ -86,7 +99,8 @@ pub fn refine(
     let mut api_done: BTreeSet<String> = BTreeSet::new();
     for dir in manifest_dirs {
         let dir = std::fs::canonicalize(dir)?;
-        let (host, vfs) = match load(&dir, trust, target_dir) {
+        let started = Instant::now();
+        let (host, vfs) = match load(&dir, trust, target_dir, threads) {
             Ok(loaded) => loaded,
             Err(e) => {
                 let rel = dir
@@ -99,14 +113,7 @@ pub fn refine(
                 continue;
             }
         };
-        let ra = host.analysis();
-        let call_config = CallHierarchyConfig {
-            exclude_tests: true,
-            ra_fixture: RaFixtureConfig::default(),
-        };
-        let goto_config = GotoDefinitionConfig {
-            ra_fixture: RaFixtureConfig::default(),
-        };
+        let loaded = Instant::now();
         let ids: Vec<String> = analysis
             .items
             .iter()
@@ -115,107 +122,32 @@ pub fn refine(
             })
             .map(|(id, _)| id.clone())
             .collect();
-        for id in ids {
-            let item = &analysis.items[&id];
-            let rel = item.info.file.clone();
-            let Some(file_id) = file_id(&vfs, &root.join(&rel)) else {
-                continue;
-            };
-            let Some(text) = texts.get(&root, &rel).map(str::to_string) else {
-                continue;
-            };
-            let position = |pos: LineCol| FilePosition {
-                file_id,
-                offset: TextSize::from(to_offset(&text, pos) as u32),
-            };
-            let result = catch_unwind(AssertUnwindSafe(|| {
-                ra.outgoing_calls(&call_config, position(item.name_pos.unwrap()))
-            }));
-            let Ok(Ok(Some(calls))) = result else {
+        let ctx = Resolver {
+            vfs: &vfs,
+            root: &root,
+            by_name_pos: &by_name_pos,
+            analysis,
+        };
+        let resolved = ctx.resolve_all(&host, &ids, threads);
+        for (id, r) in ids.into_iter().zip(resolved) {
+            let Some(r) = r else {
                 continue;
             };
             done.insert(id.clone());
             stats.functions += 1;
-
-            // Where each call goes, by the range of its call site.
-            let mut ranges: Vec<(LineCol, LineCol, Target)> = Vec::new();
-            let mut targets: BTreeSet<String> = BTreeSet::new();
-            for call in calls {
-                let target = target_of(&vfs, &root, &mut texts, &by_name_pos, &call.target);
-                if let Target::Item(t) = &target {
-                    targets.insert(t.clone());
-                }
-                for range in call.ranges {
-                    if range.file_id == file_id {
-                        let start = to_linecol(&text, range.range.start().into());
-                        let end = to_linecol(&text, range.range.end().into());
-                        ranges.push((start, end, target.clone()));
-                    }
-                }
-            }
-            // Check every syntactic call site; ask "go to definition" for
-            // those the call hierarchy doesn't list (e.g. inside macros).
-            let sites = item.call_sites.clone();
-            let mut site_refs: BTreeMap<String, Ref> = BTreeMap::new();
-            let mut unresolved = 0;
-            for site in &sites {
-                let listed = ranges
-                    .iter()
-                    .find(|(start, end, _)| *start <= site.pos && site.pos < *end)
-                    .map(|(.., t)| t.clone());
-                let target = listed.or_else(|| {
-                    let result = catch_unwind(AssertUnwindSafe(|| {
-                        ra.goto_definition(position(site.pos), &goto_config)
-                    }));
-                    let Ok(Ok(Some(info))) = result else {
-                        return None;
-                    };
-                    let found: Vec<Target> = info
-                        .info
-                        .iter()
-                        .map(|nav| target_of(&vfs, &root, &mut texts, &by_name_pos, nav))
-                        .collect();
-                    // Several definitions (e.g. ambiguous macro code): unknown.
-                    (found.len() == 1).then(|| found[0].clone())
-                });
-                match target {
-                    Some(Target::Item(t)) => {
-                        stats.resolved_sites += 1;
-                        let callable = analysis
-                            .items
-                            .get(&t)
-                            .is_some_and(|i| i.info.kind.is_callable());
-                        if callable {
-                            if site.method {
-                                site_refs.insert(
-                                    format!("{}:{}", site.pos.line, site.pos.column),
-                                    Ref {
-                                        id: Some(t.clone()),
-                                        path: t.clone(),
-                                    },
-                                );
-                            }
-                            targets.insert(t);
-                        }
-                    }
-                    Some(Target::Other) => stats.resolved_sites += 1,
-                    None => {
-                        stats.unresolved_sites += 1;
-                        unresolved += 1;
-                    }
-                }
-            }
-            targets.remove(&id);
+            stats.resolved_sites += r.resolved_sites;
+            stats.unresolved_sites += r.unresolved as usize;
             let item = analysis.items.get_mut(&id).unwrap();
-            item.info.calls = targets.into_iter().map(|to| Call { to }).collect();
-            item.info.unresolved_calls = unresolved;
-            item.info.source_refs.extend(site_refs);
+            item.info.calls = r.calls.into_iter().map(|to| Call { to }).collect();
+            item.info.unresolved_calls = r.unresolved;
+            item.info.source_refs.extend(r.site_refs);
             // A function called is no longer only "used".
             let calls = item.info.calls.clone();
             item.info
                 .uses
                 .retain(|u| !calls.iter().any(|c| c.to == u.to));
         }
+        let called = Instant::now();
         crate::public_api::apply(
             &crate::public_api::Ctx {
                 db: host.raw_database(),
@@ -226,7 +158,20 @@ pub fn refine(
             analysis,
             &mut api_done,
         );
-        describe_externals(&ra, &vfs, &root, &mut texts, analysis, &goto_config);
+        let goto_config = GotoDefinitionConfig {
+            ra_fixture: RaFixtureConfig::default(),
+        };
+        describe_externals(
+            &host.analysis(),
+            &vfs,
+            &root,
+            &mut texts,
+            analysis,
+            &goto_config,
+        );
+        stats.load_secs += (loaded - started).as_secs_f64();
+        stats.calls_secs += (called - loaded).as_secs_f64();
+        stats.rest_secs += called.elapsed().as_secs_f64();
     }
     // rust-analyzer sees the code behind `#[cfg(test)]` too; it is never
     // part of the public API.
@@ -247,6 +192,191 @@ pub fn refine(
     }
     stats.externals = analysis.externals.len();
     Ok(stats)
+}
+
+/// How many threads resolve the calls: `RUST_SEMANTIC_REVIEW_THREADS`, or
+/// one per CPU core (at most 8).
+///
+/// The threads share one rust-analyzer database, so more threads use
+/// barely more memory: what rust-analyzer computes for one function it
+/// keeps for all. The cap is a guess: it was only measured up to 4 cores,
+/// and the threads wait for each other more often the more there are.
+fn threads() -> usize {
+    std::env::var("RUST_SEMANTIC_REVIEW_THREADS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or_else(|| std::thread::available_parallelism().map_or(1, |n| n.get().min(8)))
+}
+
+/// What rust-analyzer says about one function's calls.
+struct Resolved {
+    /// The analyzed functions it calls.
+    calls: BTreeSet<String>,
+    /// Method call sites with their targets, by `line:column`.
+    site_refs: BTreeMap<String, Ref>,
+    resolved_sites: usize,
+    unresolved: u32,
+}
+
+/// Resolves functions' calls in one loaded workspace.
+struct Resolver<'a> {
+    vfs: &'a Vfs,
+    root: &'a Path,
+    by_name_pos: &'a HashMap<(String, LineCol), String>,
+    analysis: &'a Analysis,
+}
+
+impl Resolver<'_> {
+    /// The calls of each of `ids`, in that order (`None` where
+    /// rust-analyzer had no answer). `threads` threads take the functions
+    /// one at a time, each with its own snapshot of the database.
+    fn resolve_all(
+        &self,
+        host: &AnalysisHost,
+        ids: &[String],
+        threads: usize,
+    ) -> Vec<Option<Resolved>> {
+        let next = AtomicUsize::new(0);
+        // The database snapshots are made here: the host can't be shared
+        // between threads.
+        let work = |ra: ra_ap_ide::Analysis| {
+            let mut texts = Texts::default();
+            let mut out = Vec::new();
+            loop {
+                let i = next.fetch_add(1, Ordering::Relaxed);
+                let Some(id) = ids.get(i) else {
+                    return out;
+                };
+                out.push((i, self.resolve(&ra, &mut texts, id)));
+            }
+        };
+        let mut results: Vec<Option<Resolved>> = Vec::new();
+        results.resize_with(ids.len(), || None);
+        let parts = if threads <= 1 {
+            vec![work(host.analysis())]
+        } else {
+            std::thread::scope(|s| {
+                let handles: Vec<_> = (0..threads)
+                    .map(|_| {
+                        let ra = host.analysis();
+                        s.spawn(|| work(ra))
+                    })
+                    .collect();
+                // A panic outside `catch_unwind` (not one of
+                // rust-analyzer's) is a bug of this tool: pass it on.
+                handles
+                    .into_iter()
+                    .map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+                    .collect()
+            })
+        };
+        for (i, r) in parts.into_iter().flatten() {
+            results[i] = r;
+        }
+        results
+    }
+
+    /// Asks rust-analyzer what the function `id` calls. Every call site
+    /// found by the syntactic pass is checked, including method calls and
+    /// calls inside macro invocations.
+    fn resolve(&self, ra: &ra_ap_ide::Analysis, texts: &mut Texts, id: &str) -> Option<Resolved> {
+        let (vfs, root, by_name_pos) = (self.vfs, self.root, self.by_name_pos);
+        let item = &self.analysis.items[id];
+        let call_config = CallHierarchyConfig {
+            exclude_tests: true,
+            ra_fixture: RaFixtureConfig::default(),
+        };
+        let goto_config = GotoDefinitionConfig {
+            ra_fixture: RaFixtureConfig::default(),
+        };
+        let rel = &item.info.file;
+        let file_id = file_id(vfs, &root.join(rel))?;
+        let text = texts.get(root, rel)?.to_string();
+        let position = |pos: LineCol| FilePosition {
+            file_id,
+            offset: TextSize::from(to_offset(&text, pos) as u32),
+        };
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            ra.outgoing_calls(&call_config, position(item.name_pos.unwrap()))
+        }));
+        let Ok(Ok(Some(calls))) = result else {
+            return None;
+        };
+
+        // Where each call goes, by the range of its call site.
+        let mut ranges: Vec<(LineCol, LineCol, Target)> = Vec::new();
+        let mut targets: BTreeSet<String> = BTreeSet::new();
+        for call in calls {
+            let target = target_of(vfs, root, texts, by_name_pos, &call.target);
+            if let Target::Item(t) = &target {
+                targets.insert(t.clone());
+            }
+            for range in call.ranges {
+                if range.file_id == file_id {
+                    let start = to_linecol(&text, range.range.start().into());
+                    let end = to_linecol(&text, range.range.end().into());
+                    ranges.push((start, end, target.clone()));
+                }
+            }
+        }
+        // Check every syntactic call site; ask "go to definition" for
+        // those the call hierarchy doesn't list (e.g. inside macros).
+        let mut site_refs: BTreeMap<String, Ref> = BTreeMap::new();
+        let (mut resolved_sites, mut unresolved) = (0, 0);
+        for site in &item.call_sites {
+            let listed = ranges
+                .iter()
+                .find(|(start, end, _)| *start <= site.pos && site.pos < *end)
+                .map(|(.., t)| t.clone());
+            let target = listed.or_else(|| {
+                let result = catch_unwind(AssertUnwindSafe(|| {
+                    ra.goto_definition(position(site.pos), &goto_config)
+                }));
+                let Ok(Ok(Some(info))) = result else {
+                    return None;
+                };
+                let found: Vec<Target> = info
+                    .info
+                    .iter()
+                    .map(|nav| target_of(vfs, root, texts, by_name_pos, nav))
+                    .collect();
+                // Several definitions (e.g. ambiguous macro code): unknown.
+                (found.len() == 1).then(|| found[0].clone())
+            });
+            match target {
+                Some(Target::Item(t)) => {
+                    resolved_sites += 1;
+                    let callable = self
+                        .analysis
+                        .items
+                        .get(&t)
+                        .is_some_and(|i| i.info.kind.is_callable());
+                    if callable {
+                        if site.method {
+                            site_refs.insert(
+                                format!("{}:{}", site.pos.line, site.pos.column),
+                                Ref {
+                                    id: Some(t.clone()),
+                                    path: t.clone(),
+                                },
+                            );
+                        }
+                        targets.insert(t);
+                    }
+                }
+                Some(Target::Other) => resolved_sites += 1,
+                None => unresolved += 1,
+            }
+        }
+        targets.remove(id);
+        Some(Resolved {
+            calls: targets,
+            site_refs,
+            resolved_sites,
+            unresolved,
+        })
+    }
 }
 
 /// Describes the items outside the analyzed crates that the code names
@@ -465,7 +595,12 @@ fn target_of(
     }
 }
 
-fn load(dir: &Path, trust: Trust, target_dir: Option<&Path>) -> Result<(AnalysisHost, Vfs)> {
+fn load(
+    dir: &Path,
+    trust: Trust,
+    target_dir: Option<&Path>,
+    threads: usize,
+) -> Result<(AnalysisHost, Vfs)> {
     let target_dir_config = match target_dir.map(|d| Utf8PathBuf::from_path_buf(d.to_path_buf())) {
         Some(Ok(d)) => TargetDirectoryConfig::Directory(d),
         Some(Err(d)) => anyhow::bail!("target directory is not UTF-8: {}", d.display()),
@@ -496,8 +631,13 @@ fn load(dir: &Path, trust: Trust, target_dir: Option<&Path>) -> Result<(Analysis
         } else {
             ProcMacroServerChoice::None
         },
-        prefill_caches: false,
-        num_worker_threads: std::thread::available_parallelism().map_or(1, |n| n.get()),
+        // Without this, the first functions' calls make one thread compute
+        // each crate's name resolution while the other threads wait for it.
+        // Prefilling computes it for independent crates in parallel (and
+        // also builds symbol and import indexes, which the tool doesn't
+        // use). With one thread there is nothing to gain.
+        prefill_caches: threads > 1,
+        num_worker_threads: threads,
         proc_macro_processes: usize::from(trusted),
     };
     discover_sysroot(dir, &cargo);

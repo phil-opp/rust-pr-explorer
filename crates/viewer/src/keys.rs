@@ -207,7 +207,9 @@ fn verdict(app: &mut App, v: Verdict) {
     if v == Verdict::Approve {
         // Keeps a comment written earlier.
         let text = review::note(&id).text;
-        crate::save_verdict(app, &id, v, text);
+        // Like the first approve button: for an item with the same change
+        // as others, "Approve all".
+        crate::save_verdict(app, &id, v, text, true);
     } else {
         crate::open_editor(app, &id, v);
     }

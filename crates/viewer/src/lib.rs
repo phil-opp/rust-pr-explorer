@@ -580,10 +580,10 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
     }
     if let Some(b) = dom::closest(el, "[data-impact]") {
         let id = dom::data(&b, "impact").unwrap_or_default();
-        // On a phone: the item in the call view, whose callers lead up
+        // On a phone: the item's callers in the call view, which lead up
         // to the public API.
         if narrow() {
-            calls::focus(app, &id);
+            calls::show_callers(app, &id);
         } else {
             canvas::show_impact(app, &id);
         }
@@ -750,14 +750,15 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
             }
         } else if dom::closest(el, "[data-rv-since]").is_some() {
             show_since_review(app, &id);
-        } else if let Some(act) = dom::closest(el, "[data-rv-act]")
-            .and_then(|b| dom::data(&b, "rv-act"))
-            .and_then(|a| review::Verdict::from_name(&a))
+        } else if let Some(btn) = dom::closest(el, "[data-rv-act]")
+            && let Some(act) =
+                dom::data(&btn, "rv-act").and_then(|a| review::Verdict::from_name(&a))
         {
             if act == review::Verdict::Approve {
                 // Keeps a comment written earlier.
                 let text = review::note(&id).text;
-                save_verdict(app, &id, act, text);
+                let all = dom::data(&btn, "rv-all").is_some();
+                save_verdict(app, &id, act, text, all);
             } else {
                 open_editor(app, &id, act);
             }
@@ -879,10 +880,13 @@ fn load_marks(app: &mut App, loaded: Result<String, String>) {
     }
 }
 
-/// Gives a unit a verdict and moves on to the next unreviewed one.
+/// Gives a unit a verdict and moves on to the next unreviewed one, or
+/// stays on it when the review steps didn't go there (see `stay`).
 /// For a hunk: moves on to the item's next hunk without a verdict, and
 /// when there is none, gives the item the verdict its hunks add up to.
-fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String) {
+/// With `same`, an approval also approves the open items with the same
+/// change (see `review::mark_same_change`).
+fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String, same: bool) {
     // Only a unit that the review steps (Next ▸, a key, the verdict
     // before) went to moves on to the next one. One that the reviewer
     // opened themselves, e.g. from a call graph, stays, with links to
@@ -912,6 +916,9 @@ fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String)
             };
             review::set_mark(&app.d, &item, Some(note));
         }
+        if same && review::note(&item).verdict == review::Verdict::Approve {
+            review::mark_same_change(&app.d, &item);
+        }
         pages::render_sidebar(app);
         if guided {
             go_next(app, Some(item), true);
@@ -919,6 +926,9 @@ fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String)
             stay(app, &item);
         }
         return;
+    }
+    if same && verdict == review::Verdict::Approve {
+        review::mark_same_change(&app.d, id);
     }
     pages::render_sidebar(app);
     if guided {
@@ -1046,7 +1056,7 @@ fn save_from_editor(app: &mut App, verdict: review::Verdict) {
         return;
     }
     close_modal();
-    save_verdict(app, &id, verdict, text.trim().to_string());
+    save_verdict(app, &id, verdict, text.trim().to_string(), false);
 }
 
 /// The verdict and summary chosen in the "Finish review" dialog.
