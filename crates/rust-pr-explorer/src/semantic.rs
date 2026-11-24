@@ -22,12 +22,15 @@ use ra_ap_ide::{
 use ra_ap_ide_db::ra_fixture::RaFixtureConfig;
 use ra_ap_load_cargo::{LoadCargoConfig, ProcMacroServerChoice, load_workspace_at};
 use ra_ap_paths::{AbsPathBuf, Utf8PathBuf};
-use ra_ap_project_model::{CargoConfig, CargoFeatures, RustLibSource, TargetDirectoryConfig};
+use ra_ap_project_model::{
+    CargoConfig, CargoFeatures, RustLibSource, Sysroot, TargetDirectoryConfig,
+};
 use ra_ap_vfs::{Vfs, VfsPath};
 use std::collections::BTreeMap;
 use std::collections::{BTreeSet, HashMap};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 #[derive(Debug, Default)]
 pub struct Stats {
@@ -491,8 +494,28 @@ fn load(dir: &Path, trust: Trust, target_dir: Option<&Path>) -> Result<(Analysis
         num_worker_threads: std::thread::available_parallelism().map_or(1, |n| n.get()),
         proc_macro_processes: usize::from(trusted),
     };
+    discover_sysroot(dir, &cargo);
     let (db, vfs, _) = load_workspace_at(dir, &cargo, &load, &|_| {})?;
     Ok((AnalysisHost::with_database(db), vfs))
+}
+
+/// Finds the toolchain's sysroot for `dir`, one load at a time.
+///
+/// When the toolchain has no `rust-src` component, rust-analyzer installs
+/// it with `rustup component add rust-src` while it discovers the sysroot.
+/// A second load in the same process at the same time (the tests run
+/// several in parallel) would find the component missing or half-installed
+/// and silently load without the standard library: then nothing from `std`
+/// resolves, nor any method called on a value of a `std` type. Discovering
+/// the sysroot here under a lock lets the install finish first; the load's
+/// own discovery afterwards finds the component in place.
+fn discover_sysroot(dir: &Path, cargo: &CargoConfig) {
+    static LOCK: Mutex<()> = Mutex::new(());
+    let Some(dir) = dir.to_str().and_then(|d| AbsPathBuf::try_from(d).ok()) else {
+        return;
+    };
+    let _guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    Sysroot::discover(&dir, &cargo.extra_env);
 }
 
 fn file_id(vfs: &Vfs, path: &Path) -> Option<ra_ap_vfs::FileId> {
