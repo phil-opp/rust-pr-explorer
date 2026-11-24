@@ -741,7 +741,7 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
     }
     if dom::closest(el, "#rv-load").is_some() {
         match review::saved_marks().as_slice() {
-            [one] => load_marks(app, &one.data.clone()),
+            [one] => load_marks(app, carry::import_saved(&one.data)),
             _ => open_modal("Your review marks", &carry::dialog_html()),
         }
         return true;
@@ -751,12 +751,12 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
             .and_then(|i| i.parse().ok())
             .unwrap_or(usize::MAX);
         if let Some(m) = review::saved_marks().get(i) {
-            load_marks(app, &m.data.clone());
+            load_marks(app, carry::import_saved(&m.data));
         }
         return true;
     }
     if dom::closest(el, "#rv-paste-load").is_some() {
-        load_marks(app, &textarea_value("rv-paste"));
+        load_marks(app, carry::import_text(&textarea_value("rv-paste")));
         return true;
     }
     if dom::closest(el, "#rv-copy-marks").is_some() {
@@ -775,15 +775,9 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
     false
 }
 
-/// Loads marks from a text (see `carry`) and shows them.
-fn load_marks(app: &mut App, text: &str) {
-    // A review's data is the base64 alone.
-    let text = if text.contains(model::MARKS_MARKER) {
-        text.to_string()
-    } else {
-        format!("{}{text}", model::MARKS_MARKER)
-    };
-    match carry::import_text(&text) {
+/// Loads marks (see `carry`) and shows them.
+fn load_marks(app: &mut App, loaded: Result<String, String>) {
+    match loaded {
         Ok(msg) => {
             close_modal();
             review::load(&app.d);

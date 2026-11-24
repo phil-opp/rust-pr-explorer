@@ -599,7 +599,7 @@ pub struct PrMeta {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub threads: Vec<ReviewThread>,
     /// Review marks that reviewers saved in their reviews of the PR (see
-    /// [`MARKS_MARKER`]): the latest of each reviewer, so that a page
+    /// [`REVIEW_MARKS_HEADER`]): the latest of each reviewer, so that a page
     /// built after new commits can offer them again.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub saved_marks: Vec<SavedMarks>,
@@ -613,18 +613,34 @@ pub struct SavedMarks {
     /// When, as GitHub gives it (ISO 8601).
     pub at: String,
     pub url: String,
-    /// The marks, as the viewer wrote them (base64 of JSON).
+    /// The marks: the lines after [`REVIEW_MARKS_HEADER`].
     pub data: String,
 }
 
-/// What starts the review marks that the viewer adds, hidden in an HTML
-/// comment, to a review it posts: `<!-- rust-pr-explorer-marks v1 DATA -->`
-/// with the marks as base64. The same text without the comment is what the
-/// viewer copies to paste on another page.
+/// The first line of the review marks that the viewer adds to a review it
+/// posts, in a code block in a collapsed `<details>` at the end of the
+/// review's text. One line per mark follows (see the viewer's `carry`).
+pub const REVIEW_MARKS_HEADER: &str = "rust-pr-explorer review marks v1";
+
+/// The lines of review marks in a review's text: those after
+/// [`REVIEW_MARKS_HEADER`], up to the end of its code block.
+pub fn review_marks_in(text: &str) -> Option<String> {
+    let mut lines = text.lines().map(|l| l.trim_end_matches('\r'));
+    lines.find(|l| l.trim() == REVIEW_MARKS_HEADER)?;
+    let marks: Vec<&str> = lines
+        .take_while(|l| !l.trim_start().starts_with("```"))
+        .filter(|l| !l.trim().is_empty())
+        .collect();
+    (!marks.is_empty()).then(|| marks.join("\n"))
+}
+
+/// What starts review marks copied to paste on another page, followed by
+/// the marks as base64 JSON (with the reviewed versions and comments,
+/// which a review leaves out).
 pub const MARKS_MARKER: &str = "rust-pr-explorer-marks v1 ";
 
-/// The marks data (base64) after the marker in a text, with any line
-/// breaks taken out.
+/// The base64 after [`MARKS_MARKER`] in a text, with any line breaks taken
+/// out.
 pub fn marks_in(text: &str) -> Option<String> {
     let start = text.find(MARKS_MARKER)? + MARKS_MARKER.len();
     let data: String = text[start..]

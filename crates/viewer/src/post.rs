@@ -891,7 +891,7 @@ pub fn finish_html(d: &Data) -> String {
 <p class="sub">This page has no access to GitHub and holds no token. Copy the command and run it in a terminal: it posts the review with the <a href="https://cli.github.com" target="_blank" rel="noopener">GitHub CLI</a>, using your own login. It works in bash, zsh and fish.</p>
 <p id="rv-what">{what}</p>
 <div class="rv-row"><button data-rv-out="cmd" class="primary">Copy command</button><button data-rv-out="json">Copy JSON</button></div>
-<p class="sub">The review also carries your marks, hidden, so that the page of a later explorer comment can load them.</p>
+<p class="sub">The review ends with your marks, in a collapsed “Review marks” section, so that the page of a later explorer comment can load them. It lists what you reviewed and your verdicts; your comments are in the review already.</p>
 <p class="sub">The comments go on the commit this page shows ({rev}). If the PR got new commits, GitHub shows them where those lines are now, or as outdated.{custom}</p>"#,
             what = posts_html(&s.comments, "", suggested),
             rev = esc(&pr.head_rev),

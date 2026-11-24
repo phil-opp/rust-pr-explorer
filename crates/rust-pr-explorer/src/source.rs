@@ -744,7 +744,7 @@ fn parse_saved_marks(json: &[u8]) -> Result<Vec<model::SavedMarks>> {
             let (Some(user), Some(at)) = (r.user, r.submitted_at) else {
                 continue;
             };
-            let Some(data) = r.body.as_deref().and_then(model::marks_in) else {
+            let Some(data) = r.body.as_deref().and_then(model::review_marks_in) else {
                 continue;
             };
             let newer = latest.get(&user.login).is_none_or(|m| m.at <= at);
@@ -1398,32 +1398,36 @@ mod tests {
                 r#"{{"user":{{"login":"{login}"}},"body":"{body}","submitted_at":"{at}","html_url":"https://github.com/o/r/pull/1#r-{at}"}}"#
             )
         };
+        let block = |marks: &str| {
+            format!(
+                r"<details><summary>Review marks</summary>\n\n```text\nrust-pr-explorer review marks v1\n{marks}\n```\n\n</details>"
+            )
+        };
+        let deleted = format!(
+            r#"{{"user":null,"body":"{}","submitted_at":"2026-01-05T00:00:00Z","html_url":""}}"#,
+            block("mark 5 x")
+        );
         let json = format!(
             "[{},{},{}][{},{}]",
-            review(
-                "a",
-                "2026-01-01T00:00:00Z",
-                "<!-- rust-pr-explorer-marks v1 QUFB -->"
-            ),
+            review("a", "2026-01-01T00:00:00Z", &block("mark 1 a::f")),
             review("b", "2026-01-02T00:00:00Z", "Looks good"),
             review(
                 "b",
                 "2026-01-03T00:00:00Z",
-                r"x\n\n<!-- rust-pr-explorer-marks v1 QkJC\nQkI= -->"
+                &format!(r"x\r\n\r\n{}", block(r"mark 2 b::g\r\nmark 3 b::h"))
             ),
-            review(
-                "a",
-                "2026-01-04T00:00:00Z",
-                "<!-- rust-pr-explorer-marks v1 Q0ND -->"
-            ),
-            r#"{"user":null,"body":"<!-- rust-pr-explorer-marks v1 RERE -->","submitted_at":"2026-01-05T00:00:00Z","html_url":""}"#,
+            review("a", "2026-01-04T00:00:00Z", &block("mark 4 a::f")),
+            deleted,
         );
         let marks = parse_saved_marks(json.as_bytes()).unwrap();
         let got: Vec<(&str, &str)> = marks
             .iter()
             .map(|m| (m.login.as_str(), m.data.as_str()))
             .collect();
-        assert_eq!(got, [("a", "Q0ND"), ("b", "QkJCQkI=")]);
+        assert_eq!(
+            got,
+            [("a", "mark 4 a::f"), ("b", "mark 2 b::g\nmark 3 b::h")]
+        );
     }
 
     #[test]

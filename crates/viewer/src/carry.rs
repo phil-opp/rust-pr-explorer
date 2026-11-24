@@ -1,21 +1,23 @@
 //! Taking review marks to another page. Each explorer comment's page is
 //! served from its own address, and browsers keep local storage per
 //! address, so a later comment's page starts without the marks made on an
-//! earlier one. Marks travel as text instead: hidden in the review that
-//! **Finish review…** posts (the action reads them back into the next
-//! page), or copied on one page and pasted on another.
+//! earlier one. Marks travel as text instead: in the review that **Finish
+//! review…** posts (the action reads them back into the next page), or
+//! copied on one page and pasted on another.
 //!
-//! The text is [`model::MARKS_MARKER`] and the marks' JSON (see
-//! `review::export`) as base64, which survives being pasted through chats
-//! and can't end the HTML comment it is hidden in.
+//! In a review, the marks are readable lines (see `review::review_lines`)
+//! in a code block, in a collapsed `<details>` at the end of the review's
+//! text. Copied marks also hold the reviewed versions and the comments, as
+//! [`model::MARKS_MARKER`] and JSON in base64, which survives being pasted
+//! through chats.
 
 use crate::code::esc;
 use crate::review;
-use model::{MARKS_MARKER, marks_in};
+use model::{MARKS_MARKER, REVIEW_MARKS_HEADER, marks_in, review_marks_in};
 
-/// The longest marks that go into a posted review, as base64. GitHub takes
-/// up to 65536 characters for the review's text, which also holds the
-/// summary and the comments that fit on no line.
+/// The longest marks that go into a posted review. GitHub takes up to
+/// 65536 characters for the review's text, which also holds the summary
+/// and the comments that fit on no line.
 const REVIEW_LIMIT: usize = 40_000;
 
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
@@ -58,36 +60,52 @@ pub fn unbase64(text: &str) -> Option<Vec<u8>> {
 
 /// This PR's marks as text to copy, `None` without marks.
 pub fn copy_text() -> Option<String> {
-    let json = review::export(true)?;
+    let json = review::export(review::Export::Copy)?;
     Some(format!("{MARKS_MARKER}{}", base64(json.as_bytes())))
 }
 
-/// The marks to hide in a posted review, empty without marks or if they
-/// are too long. Without the reviewed versions: those are most of the
-/// text (the whole source of every reviewed item), and the command that
-/// posts the review would get long. A stale mark loaded from a review
-/// can't show what changed since then; the page of the changes since the
-/// last explorer comment does.
+/// The marks for a posted review, empty without marks or if they are too
+/// long. A stale mark loaded from a review can't show what changed since
+/// then; the page of the changes since the last explorer comment does.
 pub fn for_review() -> String {
-    review::export(false)
-        .map(|json| base64(json.as_bytes()))
-        .filter(|data| data.len() <= REVIEW_LIMIT)
-        .map(|data| format!("<!-- {MARKS_MARKER}{data} -->"))
-        .unwrap_or_default()
+    let Some(lines) = review::export(review::Export::Review) else {
+        return String::new();
+    };
+    if lines.len() > REVIEW_LIMIT {
+        return String::new();
+    }
+    // A fence longer than any run of backticks in the lines.
+    let longest = lines.split(|c| c != '`').map(str::len).max().unwrap_or(0);
+    let fence = "`".repeat(longest.max(2) + 1);
+    format!(
+        "<details><summary>Review marks (Rust PR Explorer)</summary>\n\n\
+         What this review covered, so that the explorer's page for later commits can show it.\n\n\
+         {fence}text\n{REVIEW_MARKS_HEADER}\n{lines}\n{fence}\n\n</details>"
+    )
 }
 
-/// Loads marks from a text: copied from another page, or a review's.
-/// Says what happened.
+/// Loads marks from a text: copied from another page, or a posted
+/// review's. Says what happened.
 pub fn import_text(text: &str) -> Result<String, String> {
-    let data = marks_in(text).ok_or("No review marks found in the text.")?;
-    let json = unbase64(&data)
-        .and_then(|b| String::from_utf8(b).ok())
-        .ok_or("The marks in the text are damaged.")?;
-    Ok(match review::import(&json)? {
+    let added = if let Some(lines) = review_marks_in(text) {
+        review::import_review(&lines)?
+    } else {
+        let data = marks_in(text).ok_or("No review marks found in the text.")?;
+        let json = unbase64(&data)
+            .and_then(|b| String::from_utf8(b).ok())
+            .ok_or("The marks in the text are damaged.")?;
+        review::import(&json)?
+    };
+    Ok(match added {
         0 => "No new marks: this page already has them.".to_string(),
         1 => "Loaded 1 mark.".to_string(),
         n => format!("Loaded {n} marks."),
     })
+}
+
+/// Loads the marks saved in a review (see `model::SavedMarks`).
+pub fn import_saved(data: &str) -> Result<String, String> {
+    import_text(&format!("{REVIEW_MARKS_HEADER}\n{data}"))
 }
 
 /// When a review was posted, as the browser shows dates.
@@ -161,7 +179,16 @@ mod tests {
     }
 
     #[test]
-    fn marks_are_found_in_a_review() {
+    fn review_marks_are_found_again() {
+        let block = "<details><summary>Review marks (Rust PR Explorer)</summary>\n\n````text\nrust-pr-explorer review marks v1\nmark 1 a::f\nmark 2 file:x```y\n````\n\n</details>";
+        assert_eq!(
+            review_marks_in(&format!("Looks good.\n\n{block}")).unwrap(),
+            "mark 1 a::f\nmark 2 file:x```y"
+        );
+    }
+
+    #[test]
+    fn marks_are_found_in_a_copy() {
         let body = format!(
             "Looks good.\n\n<!-- {MARKS_MARKER}{} -->",
             base64(b"{\"v\":1}")

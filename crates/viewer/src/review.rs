@@ -911,7 +911,9 @@ pub fn load(d: &Data) {
 #[derive(Serialize, Deserialize)]
 struct Payload {
     v: u32,
-    /// The PR's storage key, so that marks don't go to another PR.
+    /// The PR's storage key, so that pasted marks don't go to another PR.
+    /// Not in a review, which belongs to its PR.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     key: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     marks: String,
@@ -931,30 +933,127 @@ pub fn has_marks() -> bool {
     })
 }
 
-/// The saved marks of this PR as JSON, `None` when there are none. With
-/// `versions`, also the reviewed versions (for **Show changes**), which
-/// can make it much longer.
-pub fn export(versions: bool) -> Option<String> {
+/// Where an [`export`] goes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Export {
+    /// Into a posted review, as readable lines (see [`review_lines`]).
+    Review,
+    /// To copy and paste on another page: everything, as JSON.
+    Copy,
+}
+
+/// The saved marks of this PR, `None` when there are none.
+pub fn export(to: Export) -> Option<String> {
     reread();
     REVIEW.with(|r| {
         let r = r.borrow();
         if r.marks.is_empty() && r.edges.is_empty() {
             return None;
         }
-        let p = Payload {
-            v: 1,
-            key: r.key.clone(),
-            marks: encode(&r.marks),
-            edges: encode_edges(&r.edges),
-            notes: r.notes.clone(),
-            versions: if versions {
-                r.versions.clone()
-            } else {
-                BTreeMap::new()
-            },
-        };
-        serde_json::to_string(&p).ok()
+        match to {
+            Export::Copy => serde_json::to_string(&Payload {
+                v: 1,
+                key: r.key.clone(),
+                marks: encode(&r.marks),
+                edges: encode_edges(&r.edges),
+                notes: r.notes.clone(),
+                versions: r.versions.clone(),
+            })
+            .ok(),
+            Export::Review => Some(review_lines(&r.marks, &r.edges, &r.notes)),
+        }
     })
+}
+
+/// The marks for a posted review, one per line:
+///
+/// - `mark HASH ID`: a unit or hunk, with the hash of the diff it had.
+/// - `change full|since FROM TO ID`: a reviewed change of a unit, on the
+///   page of the whole PR or of the changes since an earlier commit (see
+///   [`Edge`]); `-` for a side without the unit.
+/// - `verdict changes|comment ID`: a verdict other than an approval.
+///
+/// Without what the review itself holds: the PR, and the comments (which a
+/// later review must not post again). Without the reviewed versions (for
+/// **Show changes**) too: they are the whole source of every reviewed item
+/// and would make the command that posts the review long.
+fn review_lines(
+    marks: &BTreeMap<String, u64>,
+    edges: &BTreeMap<String, Vec<Edge>>,
+    notes: &BTreeMap<String, Note>,
+) -> String {
+    let mut out = Vec::new();
+    for (id, h) in marks {
+        out.push(format!("mark {h:016x} {id}"));
+    }
+    for (id, list) in edges {
+        for e in list {
+            let page = if e.full { "full" } else { "since" };
+            out.push(format!("change {page} {} {} {id}", e.from, e.to));
+        }
+    }
+    for (id, n) in notes.iter().filter(|(_, n)| n.verdict != Verdict::Approve) {
+        out.push(format!("verdict {} {id}", n.verdict.name()));
+    }
+    // An id with a line break would break the format.
+    out.retain(|l| !l.contains(['\n', '\r']));
+    out.join("\n")
+}
+
+/// Reads the lines of [`review_lines`]; unknown lines are skipped.
+fn parse_review_lines(text: &str) -> Payload {
+    let mut p = Payload {
+        v: 1,
+        key: String::new(),
+        marks: String::new(),
+        edges: String::new(),
+        notes: BTreeMap::new(),
+        versions: BTreeMap::new(),
+    };
+    for l in text.lines().map(str::trim) {
+        let Some((kind, rest)) = l.split_once(' ') else {
+            continue;
+        };
+        match kind {
+            "mark" => {
+                p.marks.push_str(rest);
+                p.marks.push('\n');
+            }
+            "change" => {
+                let Some((page, rest)) = rest.split_once(' ') else {
+                    continue;
+                };
+                let page = match page {
+                    "full" => 'f',
+                    "since" => 's',
+                    _ => continue,
+                };
+                p.edges.push_str(&format!("{page} {rest}\n"));
+            }
+            "verdict" => {
+                let Some((v, id)) = rest.split_once(' ') else {
+                    continue;
+                };
+                if let Some(verdict) = Verdict::from_name(v) {
+                    p.notes.insert(
+                        id.to_string(),
+                        Note {
+                            verdict,
+                            text: String::new(),
+                        },
+                    );
+                }
+            }
+            _ => {}
+        }
+    }
+    p
+}
+
+/// Adds the marks of a posted review (see [`review_lines`]) like
+/// [`import`].
+pub fn import_review(text: &str) -> Result<usize, String> {
+    merge(parse_review_lines(text))
 }
 
 /// Adds the marks of an [`export`] to the saved ones, where this page has
@@ -967,10 +1066,14 @@ pub fn import(json: &str) -> Result<usize, String> {
     if p.v != 1 {
         return Err("These marks are from a newer version of the explorer.".to_string());
     }
+    merge(p)
+}
+
+fn merge(p: Payload) -> Result<usize, String> {
     reread();
     let added = REVIEW.with(|r| {
         let mut r = r.borrow_mut();
-        if p.key != r.key {
+        if !p.key.is_empty() && p.key != r.key {
             return Err(format!(
                 "These marks are for {}, not for this page's {}.",
                 p.key, r.key
@@ -1969,6 +2072,43 @@ mod tests {
         assert_eq!(decode_edges(&encode_edges(&m)), m);
         // Damaged lines are skipped.
         assert_eq!(decode_edges("x a b t::f\nf a\n").len(), 0);
+    }
+
+    #[test]
+    fn review_lines_round_trip() {
+        let mut marks = BTreeMap::new();
+        marks.insert("t::f".to_string(), 0x1234);
+        marks.insert("file:docs/a b.md".to_string(), u64::MAX);
+        marks.insert("bad\nid".to_string(), 1);
+        let mut edges = BTreeMap::new();
+        edges.insert(
+            "t::f".to_string(),
+            vec![edge("-", "00ff", true), edge("00ff", "1234", false)],
+        );
+        let mut notes = BTreeMap::new();
+        let note = |verdict, text: &str| Note {
+            verdict,
+            text: text.into(),
+        };
+        notes.insert("t::f".to_string(), note(Verdict::Changes, "Rename it."));
+        notes.insert("t::g".to_string(), note(Verdict::Approve, ""));
+        let text = review_lines(&marks, &edges, &notes);
+        assert_eq!(
+            text,
+            "mark ffffffffffffffff file:docs/a b.md\n\
+             mark 0000000000001234 t::f\n\
+             change full - 00ff t::f\n\
+             change since 00ff 1234 t::f\n\
+             verdict changes t::f"
+        );
+        let p = parse_review_lines(&format!("{text}\nsomething else\n"));
+        marks.remove("bad\nid");
+        assert_eq!(decode(&p.marks), marks);
+        assert_eq!(decode_edges(&p.edges), edges);
+        // The verdict, without the comment, which the review has.
+        assert_eq!(p.notes.len(), 1);
+        assert_eq!(p.notes["t::f"], note(Verdict::Changes, ""));
+        assert!(p.key.is_empty());
     }
 
     #[test]
