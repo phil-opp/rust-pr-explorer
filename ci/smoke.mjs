@@ -167,6 +167,24 @@ try {
       await page.screenshot({ path: `${out_dir}/${scheme}-review-off.png` });
       await check_contrast(page, scheme, "review mode off");
     }
+
+    // The theme in the settings overrides the system's, also after a
+    // reload, until "System" is picked again. Checked once, with the system
+    // in dark mode, after the light background is known.
+    if (scheme === "dark") {
+      const bg = () => page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+      const pick = async (theme) => {
+        if (!(await page.locator("#settings").isVisible())) await page.click("#settings-btn");
+        await page.check(`#settings input[name="set-theme"][value="${theme}"]`);
+      };
+      await pick("light");
+      if ((await bg()) !== backgrounds.light) fail("picking the light theme doesn't show it");
+      await page.reload();
+      await page.waitForFunction(() => document.querySelector("#sidebar")?.children.length > 0);
+      if ((await bg()) !== backgrounds.light) fail("the light theme is not kept after a reload");
+      await pick("system");
+      if ((await bg()) !== backgrounds.dark) fail("picking the system theme doesn't show it again");
+    }
     await context.close();
   }
 } finally {
