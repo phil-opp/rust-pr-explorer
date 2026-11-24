@@ -31,13 +31,15 @@ inputs:
       Post a comment on the PR that links the page. Every push that changes
       the PR gets a new comment, which also links a page of the changes
       since the previous comment's commit; a push that only merges the base
-      branch or rebases onto it updates the previous comment. With `false`,
-      the link is only in the job summary. With `workflow-run`, this run
-      only reads the previous comment and uploads the data for the comment
-      as the `rust-semantic-review-comment` artifact, and a second workflow
-      triggered by `workflow_run` posts it with the comment-only action
-      `phil-opp/rust-semantic-review/comment` (see the README): for PRs from
-      forks, whose token is read-only.
+      branch or rebases onto it updates the previous comment. If the token
+      can't comment (on PRs from forks and by Dependabot it is read-only),
+      the data for the comment is uploaded as the
+      `rust-semantic-review-comment` artifact instead, and a workflow
+      triggered by `workflow_run` can post it with the comment-only action
+      `phil-opp/rust-semantic-review/comment` (see the README). With
+      `workflow-run`, this run never comments and always uploads the data,
+      so it only needs `pull-requests: read`. With `false`, the link is
+      only in the job summary.
     default: "true"
   syntax-only:
     description: Skip rust-analyzer (faster, but method calls stay unresolved).
@@ -299,7 +301,7 @@ runs:
         fi
         summarize() { jq -r -f "$GITHUB_ACTION_PATH/action/summary.jq" "$1"; }
         head=$(jq -r '.meta.pr.head_commit // ""' "$dir/analysis.json")
-        if [ "$COMMENT" = "workflow-run" ]; then
+        if [ "$COMMENT" != "false" ]; then
           # What the comment-only action (`comment/`) needs besides what it
           # reads from the API itself. It treats all of it as untrusted.
           mkdir -p "$dir/comment"
@@ -325,7 +327,7 @@ runs:
             echo "previous-node-id=$(cat "$dir/previous-node-id")"
             echo "previous-state=$(cat "$dir/previous.json")"
           fi
-          if [ "$COMMENT" = "workflow-run" ]; then echo "comment-dir=$dir/comment"; fi
+          if [ "$COMMENT" != "false" ]; then echo "comment-dir=$dir/comment"; fi
         } >> "$GITHUB_OUTPUT"
     - name: Cache the analysis' target directory
       if: steps.check.outputs.trust == 'true' && inputs.cache == 'true' && inputs.cache-target == 'true' && inputs.save-cache == 'true' && steps.target.outputs.cache-hit != 'true'
@@ -351,15 +353,8 @@ runs:
         path: ${{ steps.run.outputs.since-page }}
         archive: false
         retention-days: ${{ inputs.retention-days }}
-    - name: Upload the data for the comment
-      if: steps.run.outputs.comment-dir != ''
-      uses: actions/upload-artifact@v7
-      with:
-        # The comment-only action looks for it by this name.
-        name: rust-semantic-review-comment
-        path: ${{ steps.run.outputs.comment-dir }}
-        retention-days: ${{ inputs.retention-days }}
     - name: Link the page
+      id: link
       if: steps.run.outputs.page != ''
       shell: bash
       env:
@@ -382,3 +377,14 @@ runs:
         SINCE_SUMMARY: ${{ steps.run.outputs.since-summary }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: '"$GITHUB_ACTION_PATH/action/post-comment.sh"'
+    - name: Upload the data for the comment
+      # With `workflow-run`, and with `true` when this run's token could not
+      # comment (a PR from a fork or by Dependabot): then a workflow with
+      # the comment-only action posts it, if the repository has one.
+      if: steps.run.outputs.comment-dir != '' && (inputs.comment == 'workflow-run' || steps.link.outputs.posted == 'false')
+      uses: actions/upload-artifact@v7
+      with:
+        # The comment-only action looks for it by this name.
+        name: rust-semantic-review-comment
+        path: ${{ steps.run.outputs.comment-dir }}
+        retention-days: ${{ inputs.retention-days }}

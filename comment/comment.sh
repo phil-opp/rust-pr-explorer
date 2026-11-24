@@ -37,7 +37,9 @@ artifact() {
 
 data=$(artifact rust-semantic-review-comment)
 if [ -z "$data" ]; then
-  echo "::notice::The analysis run has no rust-semantic-review-comment artifact (does it set comment: workflow-run?): no comment."
+  # With `comment: true`, the analysis run only uploads it if it could not
+  # comment itself.
+  echo "::notice::The analysis run has no rust-semantic-review-comment artifact: it posted the comment itself, or it doesn't comment."
   exit 0
 fi
 if [ "$(jq '.size_in_bytes' <<< "$data")" -gt 65536 ]; then
@@ -125,7 +127,7 @@ case "$SINCE" in
   *) SINCE= ;;
 esac
 
-POST=true RETENTION_DAYS='' \
+COMMENT_ONLY=true POST=true RETENTION_DAYS='' \
   URL=$URL ARTIFACT_ID=$ARTIFACT_ID SUMMARY=$SUMMARY \
   SINCE=$SINCE SINCE_URL=$SINCE_URL SINCE_ARTIFACT_ID=$SINCE_ARTIFACT_ID SINCE_SUMMARY=$SINCE_SUMMARY \
   PREVIOUS=$PREVIOUS PREVIOUS_ID=$PREVIOUS_ID PREVIOUS_NODE_ID=$PREVIOUS_NODE_ID PREVIOUS_STATE=$PREVIOUS_STATE \
