@@ -91,7 +91,7 @@ pub struct State {
     /// The unit last shown by "next unreviewed", where the next search
     /// continues.
     rv_current: Option<String>,
-    /// The hunk of `rv_current` that `j` and `k` last moved to, which the
+    /// The hunk of `rv_current` that `n` and `p` last moved to, which the
     /// verdict keys then act on.
     rv_hunk: Option<String>,
 }
@@ -205,6 +205,7 @@ pub fn set_view(app: &mut App, view: View) {
     }
     pages::render_sidebar(app);
     pages::sync_header_title();
+    keys::mark_current(app);
     nav::record(app);
 }
 
@@ -286,6 +287,7 @@ fn install_listeners() {
                 on_click(app, &el, &ev);
                 canvas::after_change(app);
             });
+            mark_current_later();
         }
     });
     // Not passive: starting a card drag prevents text selection.
@@ -405,7 +407,7 @@ fn install_listeners() {
     });
     // Not passive: Ctrl+Enter in the comment editor prevents the newline.
     dom::listen_with(&doc, "keydown", false, false, |ev| {
-        // Review keys (`n`, `a`, `j`, `?`, …), unless typing, and Ctrl+Z
+        // Review keys (`j`, `a`, `n`, `?`, …), unless typing, and Ctrl+Z
         // on the canvas.
         if let Some(k) = ev.dyn_ref::<KeyboardEvent>()
             && with_app(|app| {
@@ -416,6 +418,7 @@ fn install_listeners() {
             }) == Some(true)
         {
             ev.prevent_default();
+            mark_current_later();
             return;
         }
         // Ctrl+Enter in the comment editor saves with its verdict.
@@ -428,6 +431,7 @@ fn install_listeners() {
         {
             ev.prevent_default();
             with_app(|app| save_from_editor(app, v));
+            mark_current_later();
             return;
         }
         if ev
@@ -1036,6 +1040,16 @@ fn row_on_page(link: &Element, id: &str) -> Option<Element> {
         .find(|row| dom::data(row, "id").as_deref() == Some(id))
 }
 
+/// Outlines the current review unit once the views have drawn what a
+/// key or click changed (the canvas draws some of it a frame later).
+fn mark_current_later() {
+    dom::raf(|| {
+        dom::raf(|| {
+            with_app(|app| keys::mark_current(app));
+        })
+    });
+}
+
 /// Scrolls the row of a review control into view and highlights it.
 fn reveal(control: &Element) {
     // Inside a closed group (generated files, for example): open it.
@@ -1048,8 +1062,7 @@ fn reveal(control: &Element) {
         }
         up = el.parent_element();
     }
-    let row = dom::closest(control, ".hunk-rv, .irow, .impl-line, .ientry, .card")
-        .unwrap_or_else(|| control.clone());
+    let row = keys::row_of(control);
     let opts = web_sys::ScrollIntoViewOptions::new();
     opts.set_block(web_sys::ScrollLogicalPosition::Start);
     opts.set_behavior(web_sys::ScrollBehavior::Smooth);

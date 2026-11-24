@@ -230,7 +230,6 @@ code { font-size: .92em; }
 .export s { text-decoration-color: var(--removed); }
 /* An unchanged signature, shown for reference: muted, no code background. */
 .sigbox.m-ref .sig { background: transparent; box-shadow: inset 0 0 0 1px var(--border); color: var(--muted); }
-.sigbox.m-ref .sig .ref, .sigbox.m-ref .sig .kw { opacity: .8; }
 .mark.m-del .docs, .mark.m-del .export { opacity: .75; text-decoration: line-through; text-decoration-color: var(--removed); }
 .dblk-old { font-size: 12.5px; color: var(--muted); margin: 0 0 4px; }
 .dblk-old summary { cursor: pointer; }
@@ -793,6 +792,12 @@ body:not(.reviewing) .rv-group { display: none; }
 .card-rv:has(.rvc.done:only-child) { justify-content: flex-start; }
 body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .rv-flash { animation: rv-flash 1.4s ease-out; }
+/* The unit the review keys act on (see keys.rs). An outline, so that it
+   adds to a reviewed row's check bar and a card's own outline. */
+.reviewing .rv-cur { outline: 2px solid var(--link); outline-offset: 2px; border-radius: 4px; }
+.reviewing .card.rv-cur { outline-width: 3px; }
+/* Keyboard focus, the same in every browser and theme. */
+:focus-visible { outline: 2px solid var(--link); outline-offset: 2px; }
 @keyframes rv-flash { from { box-shadow: 0 0 0 4px var(--highlight); } to { box-shadow: 0 0 0 0 transparent; } }
 .pr-desc { margin: 12px 0 4px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
 .pr-desc > summary { cursor: pointer; padding: 6px 12px; font-weight: 600; }
@@ -809,6 +814,7 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .since-facts li .dim { margin-right: 4px; }
 /* The comment editor and the "Finish review" dialog. */
 #modal-box:has(.rv-editor, .rv-finish) { width: min(760px, 94vw); }
+#modal-box:has(.keys) { width: min(640px, 94vw); }
 .rv-editor textarea, .rv-finish textarea { width: 100%; box-sizing: border-box; font: 14px var(--sans); padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); resize: vertical; }
 .rv-finish #rv-out { font: 12px var(--mono); margin-top: 8px; }
 .rv-editor .sub, .rv-finish .sub { color: var(--muted); font-size: 13px; margin: 6px 0; }
@@ -899,6 +905,8 @@ body:not(.reviewing) .hunk-rv:not(:has(.rvc.done, .rvc.stale)) { display: none; 
 .keys { border-collapse: collapse; margin-top: 8px; }
 .keys td { padding: 4px 12px 4px 0; vertical-align: top; }
 .keys td:first-child { white-space: nowrap; }
+.keys th { padding: 12px 12px 4px 0; text-align: left; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.keys tr:first-child th { padding-top: 0; }
 kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px solid var(--border); border-bottom-width: 2px; border-radius: 4px; background: var(--bg-alt); font-family: var(--mono); font-size: 12px; text-align: center; }
 
 /* Call view (see calls.rs): one item's card, its callers above and its
