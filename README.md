@@ -103,6 +103,8 @@ On a PR from a fork, the token GitHub gives the workflow is read-only, so the pa
 
 ## What you see
 
+The browser's Back and Forward buttons move between what you looked at: each tab you switch to, each item a link jumped to further down a page, and each item opened on the canvas or in the call view. Back returns to where the page was scrolled. Stepping through the review with **Next ▸**, `j` or `k` adds one entry, not one per step, so that Back returns to where the steps started. The address shows the current place (`#/module/…`, `#/overview/item/…`), so a link to it opens the page there.
+
 ### Overview
 
 Lists only the public items that were added, changed or removed, nested by module, with their rustdoc-style signature and docs. A type whose methods changed appears as context with the changed members below it. Items are listed where rustdoc documents them: at their definition path when that is public, otherwise at a re-export, marked "re-export of …" (a `#[doc(inline)]` re-export first, a `#[doc(no_inline)]` one last). Items marked `#[doc(hidden)]`, or reachable only through hidden modules or hidden `pub use`s, are not part of the public API; an item that becomes hidden shows as "no longer public". Items of other crates that a crate re-exports (`pub use serde::Serialize;`) are part of its API too: they are listed as re-exports with the other crate's docs, so adding, removing or retargeting such a `pub use` is an API change. Internal changes are summarized per module, with a link to each module's internal call graph, and with their impact (see below).
