@@ -505,7 +505,7 @@ pub fn render_overview(app: &App) {
             warnings_html(d)
         }
     } else {
-        let unsafe_html = crate::unsafety::overview_html(d) + &crate::risk::overview_html(d);
+        let unsafe_html = crate::unsafety::overview_html(d);
         let semver = semver_summary(d);
         let public = if public_html.is_empty() && semver.is_empty() {
             String::new()
@@ -569,18 +569,38 @@ fn semver_summary(d: &Data) -> String {
     use crate::bump::Level;
     use model::ApiLevel;
     use std::collections::BTreeMap;
-    let mut counts = [0usize; 3];
+    // Breaking, allowed breaking, to check by hand, non-breaking.
+    let mut counts = [0usize; 4];
     // The most severe level per crate.
     let mut crates: BTreeMap<&str, Level> = BTreeMap::new();
+    // Crates whose allowed breaking changes are left out of the version
+    // they need.
+    let mut allowed: Vec<&str> = Vec::new();
+    let mut breaking_items: Vec<&Item> = Vec::new();
     for it in d.items().filter(|it| d.in_public_api(it) && changed(it)) {
         if let Some(api) = &it.api {
+            let krate = it.info.id.split("::").next().unwrap_or(&it.info.id);
             let (i, level) = match api.level {
-                ApiLevel::Breaking => (0, Level::Breaking),
-                ApiLevel::Unknown => (1, Level::Unknown),
-                ApiLevel::Compatible => (2, Level::Compatible),
+                ApiLevel::Breaking if d.breaking_allowed(it) => {
+                    if !allowed.contains(&krate) {
+                        allowed.push(krate);
+                    }
+                    counts[1] += 1;
+                    continue;
+                }
+                ApiLevel::Breaking => {
+                    breaking_items.push(it);
+                    (0, Level::Breaking)
+                }
+                ApiLevel::Unknown => (2, Level::Unknown),
+                ApiLevel::Compatible => (3, Level::Compatible),
             };
             counts[i] += 1;
-            let krate = it.info.id.split("::").next().unwrap_or(&it.info.id);
+            // A crate that allows breaking changes doesn't follow SemVer:
+            // the version it needs isn't for this page to say.
+            if d.breaking_allowed(it) {
+                continue;
+            }
             let worst = crates.entry(krate).or_insert(level);
             *worst = match (*worst, level) {
                 (Level::Breaking, _) | (_, Level::Breaking) => Level::Breaking,
@@ -589,8 +609,8 @@ fn semver_summary(d: &Data) -> String {
             };
         }
     }
-    let [breaking, unknown, compatible] = counts;
-    if breaking + unknown + compatible == 0 {
+    let [breaking, allowed_n, unknown, compatible] = counts;
+    if breaking + allowed_n + unknown + compatible == 0 {
         // A failed run of cargo-semver-checks still says why.
         return semver_checks_html(d);
     }
@@ -600,23 +620,59 @@ fn semver_summary(d: &Data) -> String {
             crate::bump::sentence(name, d.out.meta.versions.get(*name)?, *level)
         })
         .collect();
-    let bump = if !versions.is_empty() {
+    // The levels in crates that follow SemVer.
+    let level_in_rules = |l: Level| crates.values().any(|v| *v == l);
+    let rules = if !versions.is_empty() {
         format!(
             r#"<span title="Compared with the version on the base branch. If that one isn't released yet, the release may need less.">By Cargo's SemVer rules, {}</span>"#,
             versions.join(" ")
         )
-    } else if breaking > 0 {
+    } else if level_in_rules(Level::Breaking) {
         "By Cargo's SemVer rules, this needs a major version bump (minor before 1.0).".to_string()
-    } else if unknown > 0 {
+    } else if level_in_rules(Level::Unknown) {
         "By Cargo's SemVer rules, this needs at least a minor version bump, depending on the changes to check by hand.".to_string()
-    } else {
+    } else if level_in_rules(Level::Compatible) {
         "By Cargo's SemVer rules, this needs a minor version bump (patch before 1.0).".to_string()
+    } else {
+        String::new()
     };
+    let code_list = |names: &[&str]| {
+        names
+            .iter()
+            .map(|n| format!("<code>{}</code>", esc(n)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut notes = Vec::new();
+    if !allowed.is_empty() {
+        notes.push(format!(
+            "Breaking changes are allowed in {} (<code>allow-breaking-changes</code> in its <code>Cargo.toml</code>).",
+            code_list(&allowed)
+        ));
+    }
+    // The setting counts from the base: one the PR adds applies to later
+    // PRs only.
+    let mut added: Vec<&str> = d
+        .out
+        .meta
+        .versions
+        .iter()
+        .filter(|(_, v)| v.allow_breaking_head && !v.allow_breaking)
+        .map(|(n, _)| n.as_str())
+        .collect();
+    added.sort();
+    if !added.is_empty() {
+        notes.push(format!(
+            "This PR allows breaking changes in {}; that applies once it is merged, not to its own changes.",
+            code_list(&added)
+        ));
+    }
     let part = |n: usize, what: &str, css: &str| {
         (n > 0).then(|| format!(r#"<span class="api api-{css}">{n} {what}</span>"#))
     };
     let parts: Vec<String> = [
         part(breaking, "breaking", "breaking"),
+        part(allowed_n, "breaking (allowed)", "allowed"),
         part(unknown, "to check by hand", "unknown"),
         part(compatible, "non-breaking", "compatible"),
     ]
@@ -624,10 +680,48 @@ fn semver_summary(d: &Data) -> String {
     .flatten()
     .collect();
     format!(
-        r#"<div class="semver-sum">{} <span class="dim">{bump} Hover a label for why.</span></div>{}"#,
+        r#"<div class="semver-sum">{} <span class="dim">{rules} {} Hover a label for why.</span></div>{}{}"#,
         parts.join(" "),
+        notes.join(" "),
+        breaking_list(d, &mut breaking_items),
         semver_checks_html(d),
     )
+}
+
+/// Every breaking change, by its public path, each a link to its row
+/// below: the list to go through before anything else.
+fn breaking_list(d: &Data, items: &mut [&Item]) -> String {
+    if items.is_empty() {
+        return String::new();
+    }
+    items.sort_by(|a, b| d.reading_order(a, b));
+    let rows: String = items
+        .iter()
+        .map(|it| {
+            let path = d
+                .public_path(it)
+                .map(str::to_string)
+                .unwrap_or_else(|| d.display_name(it));
+            let why = it
+                .api
+                .as_ref()
+                .and_then(|a| a.reasons.first())
+                .map(|r| format!(r#" <span class="dim">{}</span>"#, crate::code::note_html(r)))
+                .unwrap_or_default();
+            // An impl's name already says "impl".
+            let kind = if it.info.kind == Kind::Impl {
+                String::new()
+            } else {
+                format!(r#"<span class="kind">{}</span>"#, it.info.kind.label())
+            };
+            format!(
+                r#"<li>{kind}<a data-goto-item="{}"><code>{}</code></a>{why}</li>"#,
+                esc(&it.info.id),
+                crate::review::item_tag(&it.info.id, &path),
+            )
+        })
+        .collect();
+    format!(r#"<ul class="breaking-list">{rows}</ul>"#)
 }
 
 /// How cargo-semver-checks was run, and what it found that no item shows.

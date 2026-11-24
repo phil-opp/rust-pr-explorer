@@ -116,6 +116,7 @@ mod tests {
             base: Some(base.into()),
             head: Some(head.into()),
             publish: true,
+            ..Default::default()
         }
     }
 

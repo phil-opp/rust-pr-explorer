@@ -1496,11 +1496,37 @@ fn crate_versions_follow_the_workspace_and_publish() {
         base: Some(base.into()),
         head: Some(head.into()),
         publish,
+        ..Default::default()
     };
     assert_eq!(versions["t"], v("0.1.0", "0.1.0", true));
     assert_eq!(versions["member_crate"], v("1.4.2", "2.0.0", false));
     // Binaries have no API.
     assert_eq!(versions.len(), 2, "{versions:?}");
+}
+
+#[test]
+fn breaking_changes_can_be_allowed_per_crate() {
+    let tree = |allowed: bool| {
+        let dir = write_crate(&[("src/lib.rs", "")]);
+        let meta = if allowed {
+            "[package.metadata.rust-semantic-review]\nallow-breaking-changes = true\n"
+        } else {
+            ""
+        };
+        std::fs::write(
+            dir.path().join("Cargo.toml"),
+            format!("[package]\nname = \"t\"\nversion = \"0.1.0\"\n{meta}"),
+        )
+        .unwrap();
+        dir
+    };
+    let (yes, no) = (tree(true), tree(false));
+    let v = crate::source::crate_versions(yes.path(), yes.path());
+    assert!(v["t"].allow_breaking && v["t"].allow_breaking_head);
+    // Only the base's setting counts: a PR that adds it is noted, not
+    // trusted.
+    let v = crate::source::crate_versions(no.path(), yes.path());
+    assert!(!v["t"].allow_breaking && v["t"].allow_breaking_head);
 }
 
 #[test]
