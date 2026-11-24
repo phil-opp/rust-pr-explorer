@@ -34,9 +34,10 @@ jobs:
 |---|---|---|
 | `comment` | `true` | Post a comment that links the page (and a page of the changes since the previous comment). |
 | `syntax-only` | `false` | Skip rust-analyzer: faster, but method calls stay unresolved. |
-| `trust-project-code` | `false` | Run the PR's build scripts and proc macros, so calls into generated code resolve. Refused under `pull_request_target`. |
+| `trust-project-code` | `auto` | Run the PR's build scripts and proc macros, so calls into generated code resolve. `auto`: on under `pull_request`, off when another event analyzes a PR. Refused under `pull_request_target`. |
 | `semver-checks` | `false` | Also run cargo-semver-checks. Builds the PR's code; refused under `pull_request_target`. |
 | `cache` / `save-cache` | `true` / on the default branch | Cache the built tool / also its dependencies. |
+| `cache-target` | `false` | In trusted mode, also cache the analysis' target directory: much faster, but can take several GB. |
 | `retention-days` | repository setting | How long the page is kept. |
 | `pr`, `repository` | the triggering PR | Analyze another pull request. |
 

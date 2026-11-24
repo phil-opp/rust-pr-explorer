@@ -52,11 +52,21 @@ inputs:
       Let rust-analyzer run the PR's build scripts and procedural macros, so
       that calls into generated code resolve too. This runs the PR's code
       with the job's token, like a CI job that runs the PR's tests does.
-      Refused under `pull_request_target`, whose token can write also on
-      PRs from forks (see the README). The cargo target directory of the
-      analysis is cached like the build's dependencies (see `cache` and
-      `save-cache`); on a push without a PR, the action fills it from the
-      checked out repository.
+      `auto` (the default) turns it on under `pull_request`, whose token is
+      read-only on PRs from forks, and off when another event analyzes a PR
+      (e.g. `workflow_dispatch` with `pr`). Under `pull_request_target`,
+      whose token can write and which has the repository's secrets also on
+      PRs from forks, an explicit `true` is refused.
+      Without a cached target directory (see `cache-target`), trusted runs
+      build the PR's dependencies' build scripts and proc macros every time.
+    default: auto
+  cache-target:
+    description: >-
+      In trusted mode, also cache the analysis' cargo target directory like
+      the build's dependencies (see `save-cache`); on a push without a PR,
+      the action fills it from the checked out repository. Makes trusted
+      runs much faster, but the cache can be several GB for a large
+      workspace, out of the repository's 10 GB of cache storage.
     default: "false"
   cache:
     description: >-
@@ -92,17 +102,40 @@ runs:
   using: composite
   steps:
     - name: Check the inputs
-      if: inputs.trust-project-code == 'true' || inputs.semver-checks == 'true'
+      id: check
       shell: bash
       env:
         EVENT: ${{ github.event_name }}
+        TRUST: ${{ inputs.trust-project-code }}
+        SEMVER_CHECKS: ${{ inputs.semver-checks }}
+        PR: ${{ inputs.pr }}
       run: |
+        case "$TRUST" in
+          true | false | auto) ;;
+          *) echo "::error::trust-project-code must be true, false or auto, not '$TRUST'"; exit 1 ;;
+        esac
         # `pull_request_target` gives the job secrets and a token that can
         # write, also on PRs from forks: the PR's code must not run there.
         if [ "$EVENT" = "pull_request_target" ]; then
-          echo "::error::trust-project-code and semver-checks run the PR's code, so they are refused under pull_request_target."
-          exit 1
+          if [ "$TRUST" = "true" ] || [ "$SEMVER_CHECKS" = "true" ]; then
+            echo "::error::trust-project-code and semver-checks run the PR's code, so they are refused under pull_request_target."
+            exit 1
+          fi
         fi
+        # `auto`: on under `pull_request`, whose token is read-only on PRs
+        # from forks, and without a PR (on a push, the warm-up analyzes the
+        # repository's own code). Off when another event analyzes a PR, e.g.
+        # `pull_request_target`, or `workflow_dispatch` with `pr`: the
+        # token may write there.
+        if [ "$TRUST" = "auto" ]; then
+          if [ "$EVENT" = "pull_request" ] || [ -z "$PR" ]; then
+            TRUST=true
+          else
+            echo "::notice::trust-project-code is off: under $EVENT the token may be able to write, so the PR's code is not run unless trust-project-code is true. Calls into generated code stay unresolved."
+            TRUST=false
+          fi
+        fi
+        echo "trust=$TRUST" >> "$GITHUB_OUTPUT"
     # The toolchain for the analysis: rust-analyzer needs cargo and the
     # standard library's source, also when the tool itself comes from the
     # cache. Building the tool uses this repository's `rust-toolchain.toml`,
@@ -179,7 +212,7 @@ runs:
         tool: cargo-semver-checks
     - name: Restore the analysis' target directory
       id: target
-      if: inputs.trust-project-code == 'true' && inputs.cache == 'true'
+      if: steps.check.outputs.trust == 'true' && inputs.cache == 'true' && inputs.cache-target == 'true'
       uses: actions/cache/restore@v5
       with:
         path: ${{ steps.key.outputs.target }}
@@ -195,9 +228,9 @@ runs:
         COMMENT: ${{ inputs.comment }}
         SYNTAX_ONLY: ${{ inputs.syntax-only }}
         SEMVER_CHECKS: ${{ inputs.semver-checks }}
-        TRUST: ${{ inputs.trust-project-code }}
+        TRUST: ${{ steps.check.outputs.trust }}
         TARGET: ${{ steps.key.outputs.target }}
-        FILL_TARGET: ${{ inputs.cache == 'true' && inputs.save-cache == 'true' && steps.target.outputs.cache-hit != 'true' }}
+        FILL_TARGET: ${{ inputs.cache == 'true' && inputs.cache-target == 'true' && inputs.save-cache == 'true' && steps.target.outputs.cache-hit != 'true' }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         TOOL: ${{ steps.key.outputs.dir }}/rust-semantic-review
       run: |
@@ -317,7 +350,7 @@ runs:
           fi
         } >> "$GITHUB_OUTPUT"
     - name: Cache the analysis' target directory
-      if: inputs.trust-project-code == 'true' && inputs.cache == 'true' && inputs.save-cache == 'true' && steps.target.outputs.cache-hit != 'true'
+      if: steps.check.outputs.trust == 'true' && inputs.cache == 'true' && inputs.cache-target == 'true' && inputs.save-cache == 'true' && steps.target.outputs.cache-hit != 'true'
       uses: actions/cache/save@v5
       with:
         path: ${{ steps.key.outputs.target }}
