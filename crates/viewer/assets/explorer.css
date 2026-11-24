@@ -298,6 +298,7 @@ a.ref:hover { text-decoration: underline; }
 /* Section explanations live in a hover tooltip instead of an intro paragraph. */
 .help { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; border: 1px solid var(--border); border-radius: 50%; font: 600 10px var(--sans); color: var(--muted); cursor: help; vertical-align: middle; }
 .h-note { font: 400 13px var(--sans); color: var(--muted); margin-left: 6px; }
+.page h3.files-group { font: 600 14px var(--sans); margin: 18px 0 6px; color: var(--muted); }
 .crumbs { font-family: var(--mono); font-size: 14px; margin-bottom: 8px; }
 .crumbs a { color: var(--mod); }
 
