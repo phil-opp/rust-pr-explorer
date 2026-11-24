@@ -82,7 +82,7 @@ Build time: the built tool is cached under a hash of its sources, so once a run 
 
 To keep the action out of the repository's cache storage (10 GB per repository, shared with other workflows), set `cache: false`: every run then builds the tool from scratch, about 7 minutes. `save-cache: false` caches only the built tool (about 12 MB) and not the dependencies (about 200 MB).
 
-Who can open the page: anyone logged in to GitHub with access to the repository, the same people who can see the workflow run. It expires with the run's artifacts (90 days unless the repository sets otherwise, or the `retention-days` input).
+Who can open the page: anyone logged in to GitHub with access to the repository. In a public repository anyone can read the comment, but GitHub serves artifacts only to people who are signed in. The page expires with the run's artifacts (90 days unless the repository sets otherwise, or the `retention-days` input). The comment shows the date when the workflow has `actions: read` permission (to read the artifact's expiry) or sets `retention-days`.
 
 Inputs: `comment: false` leaves out the comment, `syntax-only: true` skips rust-analyzer, `semver-checks: true` adds cargo-semver-checks (see below), and `pr` and `repository` pick another pull request (by default the one that triggered the workflow). The `page-url` output is the link.
 

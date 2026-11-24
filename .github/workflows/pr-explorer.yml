@@ -18,6 +18,8 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  # Only to show in the comment when the pages expire.
+  actions: read
 
 # A new push to a PR cancels the PR's running job. Runs on `main` are never
 # cancelled: when merges come faster than a cold build (about 7 minutes),
