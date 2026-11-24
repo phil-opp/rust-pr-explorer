@@ -794,6 +794,16 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .rv-finish a.rv-btn:hover { border-color: var(--link); }
 /* Buttons big enough to tap. */
 @media (hover: none) and (pointer: coarse) { .rv-editor button, .rv-finish button, .rv-finish a.rv-btn { padding: 8px 14px; } }
+/* The finish dialog's two ways to post, with the one that needs a terminal
+   first, except on a touch screen, where there usually is none. Each way has
+   a heading for either order. */
+.rv-finish .rv-touch { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  .rv-finish .rv-desk { display: none; }
+  .rv-finish .rv-touch { display: block; }
+  .rv-outs { display: flex; flex-direction: column; }
+  .rv-outs .rv-copy { order: -1; }
+}
 #modal-b button.primary { background: var(--reviewed); border-color: var(--reviewed); color: var(--bg); font-weight: 600; }
 .rv-ev { display: block; margin: 4px 0; cursor: pointer; }
 .rv-cmd { flex: 1; min-width: 0; overflow-x: auto; white-space: nowrap; padding: 4px 8px; background: var(--bg-code); border-radius: 4px; font-size: 12px; }

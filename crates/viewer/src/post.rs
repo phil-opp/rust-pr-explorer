@@ -900,7 +900,7 @@ pub fn finish_html(d: &Data) -> String {
         .collect();
     let post = match &d.out.meta.pr {
         Some(pr) => format!(
-            r#"<h4>Post it to the pull request</h4>
+            r#"<h4 class="rv-desk">Post it to the pull request</h4><h4 class="rv-touch">Or post it from a terminal</h4>
 <p class="sub">This page has no access to GitHub and holds no token. Copy the command and run it in a terminal: it posts the review with the <a href="https://cli.github.com" target="_blank" rel="noopener">GitHub CLI</a>, using your own login. It works in bash, zsh and fish.</p>
 <p id="rv-what">{what}</p>
 <div class="rv-row"><button data-rv-out="cmd" class="primary">Copy command</button><button data-rv-out="json">Copy JSON</button></div>
@@ -919,8 +919,10 @@ pub fn finish_html(d: &Data) -> String {
         None => r#"<p class="sub">This page doesn't show a GitHub pull request, so the review can only be copied as Markdown.</p>"#.to_string(),
     };
     // Without a terminal, as on a phone: copy the Markdown and go to the
-    // PR to paste it. A link, so that the browser opens it as part of the
-    // tap (a page opened later from script can be blocked as a pop-up).
+    // PR to paste it. On a touch screen, this comes before the command (see
+    // `.rv-outs` in the CSS), since a phone has no terminal. A link, so that
+    // the browser opens it as part of the tap (a page opened later from
+    // script can be blocked as a pop-up).
     let (open_link, open_note) = match &d.out.meta.pr {
         Some(pr) => {
             let url = format!("https://github.com/{}/pull/{}", pr.repo, pr.number);
@@ -945,11 +947,20 @@ pub fn finish_html(d: &Data) -> String {
 <h4>Summary</h4>
 <textarea id="rv-body" rows="4" placeholder="Leave a comment for the whole review (optional)"></textarea>
 {comments}
-{post}
-<h4>Or copy it as a comment</h4>
+<div{outs}>
+<div class="rv-post">{post}</div>
+<div class="rv-copy">
+<h4 class="rv-desk">Or copy it as a comment</h4><h4 class="rv-touch">Copy it as a comment</h4>
 <div class="rv-row"><button data-rv-out="md">Copy as Markdown</button>{open}</div>{open_note}
 <textarea id="rv-out" class="hidden" rows="8" readonly></textarea>
+</div>
+</div>
 </div>"#,
+        outs = if d.out.meta.pr.is_some() {
+            r#" class="rv-outs""#
+        } else {
+            ""
+        },
         open = open_link,
         open_note = open_note,
         facts = facts.join(", "),
