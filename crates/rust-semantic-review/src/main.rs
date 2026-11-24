@@ -510,6 +510,14 @@ fn analyze_side(root: &Path, how: &Settings, label: &str) -> (analyze::Analysis,
                     "{label}: {} functions, {} call sites resolved, {} unresolved, {} external items described",
                     stats.functions, stats.resolved_sites, stats.unresolved_sites, stats.externals
                 );
+                eprintln!(
+                    "{label}: loaded in {:.0} s, calls resolved in {:.0} s ({} thread{}), public API and external items in {:.0} s",
+                    stats.load_secs,
+                    stats.calls_secs,
+                    stats.threads,
+                    if stats.threads == 1 { "" } else { "s" },
+                    stats.rest_secs,
+                );
                 let mut note = match how.trust {
                     source::Trust::Untrusted => "rust-analyzer".to_string(),
                     source::Trust::Trusted => {
