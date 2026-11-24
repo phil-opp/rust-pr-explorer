@@ -1,9 +1,16 @@
 //! Lock files compared package by package: `Cargo.lock`, and the Python
 //! lock files in the same TOML shape (`uv.lock`, `poetry.lock`), whose
 //! packages are `[[package]]` tables with a `name` and a `version`.
+//!
+//! For `Cargo.lock`, the dependency lists tell which packages are the
+//! workspace's own, which are its direct dependencies and which depend on
+//! each package. A crate's description, repository, changelog and whether
+//! it runs code at build time come from its sources, if Cargo downloaded
+//! them for the analysis: nothing is fetched here.
 
-use model::LockChange;
+use model::{CrateInfo, DepKind, LockChange};
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::{Path, PathBuf};
 
 /// The lock files this module reads, by file name.
 pub fn is_lock(path: &str) -> bool {
@@ -19,11 +26,52 @@ struct Locked {
     checksum: Option<String>,
 }
 
-/// The locked versions of each package, or `None` if the file doesn't
-/// parse.
-fn packages(text: &str) -> Option<BTreeMap<String, Vec<Locked>>> {
+/// A parsed lock file.
+#[derive(Default)]
+struct Lock {
+    /// The locked versions of each package.
+    packages: BTreeMap<String, Vec<Locked>>,
+    /// For `Cargo.lock`: the packages that depend on each package, by
+    /// name.
+    dependents: BTreeMap<String, BTreeSet<String>>,
+}
+
+impl Lock {
+    /// A `Cargo.lock` package without a source is the workspace's own or
+    /// a path dependency.
+    fn local(&self, name: &str) -> bool {
+        self.packages
+            .get(name)
+            .is_some_and(|l| l.iter().any(|p| p.source.is_none()))
+    }
+
+    fn dep_kind(&self, name: &str) -> DepKind {
+        if self.local(name) {
+            DepKind::Local
+        } else if self
+            .dependents
+            .get(name)
+            .is_some_and(|d| d.iter().any(|d| self.local(d)))
+        {
+            DepKind::Direct
+        } else {
+            DepKind::Transitive
+        }
+    }
+
+    fn crates_io(&self, name: &str) -> bool {
+        self.packages.get(name).is_some_and(|l| {
+            l.iter()
+                .any(|p| p.source.as_deref().is_some_and(crates_io_source))
+        })
+    }
+}
+
+/// The lock file's packages, or `None` if the file doesn't parse.
+fn packages(text: &str) -> Option<Lock> {
     let t: toml::Table = text.parse().ok()?;
     let mut out: BTreeMap<String, Vec<Locked>> = BTreeMap::new();
+    let mut dependents: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
     for p in t.get("package")?.as_array()? {
         let Some(p) = p.as_table() else { continue };
         let (Some(name), Some(version)) = (
@@ -61,23 +109,50 @@ fn packages(text: &str) -> Option<BTreeMap<String, Vec<Locked>>> {
             source,
             checksum,
         });
+        // `Cargo.lock`: "name", or "name version" or "name version
+        // (source)" when it is locked in several versions.
+        for d in p
+            .get("dependencies")
+            .and_then(|v| v.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|d| d.as_str())
+        {
+            if let Some(dep) = d.split_whitespace().next() {
+                dependents
+                    .entry(dep.to_string())
+                    .or_default()
+                    .insert(name.to_string());
+            }
+        }
     }
-    Some(out)
+    Some(Lock {
+        packages: out,
+        dependents,
+    })
+}
+
+/// The sources of crates.io in `Cargo.lock`.
+fn crates_io_source(s: &str) -> bool {
+    s == "registry+https://github.com/rust-lang/crates.io-index"
+        || s == "sparse+https://index.crates.io/"
 }
 
 /// Sources of the default registries, which aren't worth showing.
 fn default_source(s: &str) -> bool {
-    s == "registry+https://github.com/rust-lang/crates.io-index"
-        || s == "sparse+https://index.crates.io/"
-        || s == "registry https://pypi.org/simple"
+    crates_io_source(s) || s == "registry https://pypi.org/simple"
 }
 
-/// The packages whose locked versions, sources or checksums changed, by
-/// name. Empty if either version doesn't parse.
-pub fn compare(old: &str, new: &str) -> Vec<LockChange> {
-    let (Some(a), Some(b)) = (packages(old), packages(new)) else {
+/// The packages of the lock file at `path` whose locked versions, sources
+/// or checksums changed, by name. Empty if either version doesn't parse.
+/// [`add_info`] adds what the crates' sources say, once Cargo has
+/// downloaded them.
+pub fn compare(path: &str, old: &str, new: &str) -> Vec<LockChange> {
+    let cargo = path.rsplit('/').next() == Some("Cargo.lock");
+    let (Some(lock_a), Some(lock_b)) = (packages(old), packages(new)) else {
         return Vec::new();
     };
+    let (a, b) = (&lock_a.packages, &lock_b.packages);
     let names: BTreeSet<&String> = a.keys().chain(b.keys()).collect();
     let mut out = Vec::new();
     for name in names {
@@ -116,7 +191,20 @@ pub fn compare(old: &str, new: &str) -> Vec<LockChange> {
             // show.
             continue;
         }
+        // A removed package is described as it was.
+        let side = if n.is_empty() { &lock_a } else { &lock_b };
         out.push(LockChange {
+            dep: cargo.then(|| side.dep_kind(name)),
+            dependents: if cargo {
+                side.dependents
+                    .get(name.as_str())
+                    .map(|d| d.iter().cloned().collect())
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            },
+            crates_io: cargo && side.crates_io(name),
+            info: None,
             name: name.clone(),
             old: ov,
             new: nv,
@@ -134,6 +222,106 @@ pub fn compare(old: &str, new: &str) -> Vec<LockChange> {
         });
     }
     out
+}
+
+/// The directories that Cargo extracts crates.io packages into:
+/// `$CARGO_HOME/registry/src/index.crates.io-…/`.
+pub fn registry_sources() -> Vec<PathBuf> {
+    let Some(home) = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cargo")))
+    else {
+        return Vec::new();
+    };
+    let Ok(dirs) = std::fs::read_dir(home.join("registry/src")) else {
+        return Vec::new();
+    };
+    let mut out: Vec<PathBuf> = dirs
+        .flatten()
+        .filter(|e| {
+            let name = e.file_name();
+            let name = name.to_string_lossy();
+            // The sparse index, and the git index Cargo used before 1.70.
+            name.starts_with("index.crates.io-") || name.starts_with("github.com-")
+        })
+        .map(|e| e.path())
+        .collect();
+    out.sort();
+    out
+}
+
+/// Fills in `info` of each crates.io package from the manifest of its
+/// newest locked version (the removed version for a removed package), if
+/// one of `sources` has it.
+pub fn add_info(changes: &mut [LockChange], sources: &[PathBuf]) {
+    for c in changes.iter_mut().filter(|c| c.crates_io) {
+        let Some(version) = c.new.last().or(c.old.last()) else {
+            continue;
+        };
+        let dir = format!("{}-{version}", c.name);
+        c.info = sources
+            .iter()
+            .map(|s| s.join(&dir))
+            .find_map(|d| crate_info(&d));
+    }
+}
+
+/// Files a crate's changelog is usually in, in order of preference.
+const CHANGELOGS: [&str; 8] = [
+    "CHANGELOG.md",
+    "CHANGES.md",
+    "RELEASES.md",
+    "HISTORY.md",
+    "NEWS.md",
+    "CHANGELOG",
+    "CHANGELOG.txt",
+    "CHANGES",
+];
+
+/// What the extracted package in `dir` says about itself.
+fn crate_info(dir: &Path) -> Option<CrateInfo> {
+    let manifest: toml::Table = std::fs::read_to_string(dir.join("Cargo.toml"))
+        .ok()?
+        .parse()
+        .ok()?;
+    let package = manifest.get("package")?.as_table()?;
+    let text = |key: &str| {
+        package
+            .get(key)
+            .and_then(|v| v.as_str())
+            .map(|s| s.split_whitespace().collect::<Vec<_>>().join(" "))
+            .filter(|s| !s.is_empty())
+    };
+    let files: Vec<String> = std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_file()))
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    let changelog = CHANGELOGS
+        .iter()
+        .find_map(|c| files.iter().find(|f| f.eq_ignore_ascii_case(c)))
+        .cloned();
+    // Cargo builds `build.rs` unless the manifest names another script or
+    // says `build = false`.
+    let build_script = match package.get("build") {
+        Some(toml::Value::Boolean(b)) => *b,
+        Some(toml::Value::String(_)) => true,
+        _ => files.iter().any(|f| f == "build.rs"),
+    };
+    let lib = manifest.get("lib").and_then(|l| l.as_table());
+    let proc_macro = lib.is_some_and(|l| {
+        ["proc-macro", "proc_macro"]
+            .iter()
+            .any(|k| l.get(*k).and_then(|v| v.as_bool()) == Some(true))
+    });
+    Some(CrateInfo {
+        description: text("description"),
+        repository: text("repository").filter(|r| r.starts_with("https://")),
+        changelog,
+        build_script,
+        proc_macro,
+    })
 }
 
 #[cfg(test)]
@@ -171,7 +359,7 @@ mod tests {
             ),
         ]
         .concat();
-        let c = compare(&old, &new);
+        let c = compare("Cargo.lock", &old, &new);
         let rows: Vec<(&str, Vec<&str>, Vec<&str>)> = c
             .iter()
             .map(|l| {
@@ -199,6 +387,100 @@ mod tests {
             Some("git+https://example.com/regex#abc")
         );
         assert_eq!(c[3].new_source, None);
+        // `serde` is a dependency of the workspace's `app`; `old`, `log`
+        // and `syn` of nothing local.
+        let kinds: Vec<Option<DepKind>> = c.iter().map(|l| l.dep).collect();
+        use DepKind::*;
+        assert_eq!(
+            kinds,
+            [
+                Some(Transitive),
+                Some(Transitive),
+                Some(Direct),
+                Some(Direct),
+                Some(Transitive)
+            ]
+        );
+        assert_eq!(c[2].dependents, ["app"]);
+        assert!(c[3].crates_io && !c[2].crates_io);
+    }
+
+    #[test]
+    fn transitive_and_local() {
+        let old = [
+            pkg("app", "0.1.0", "dependencies = [\"a\"]"),
+            pkg("a", "1.0.0", CRATES),
+        ]
+        .concat();
+        let new = [
+            pkg("app", "0.2.0", "dependencies = [\"a\"]"),
+            pkg(
+                "a",
+                "1.1.0",
+                &format!("{CRATES}dependencies = [\"b 2.0.0\"]"),
+            ),
+            pkg("b", "2.0.0", CRATES),
+        ]
+        .concat();
+        let c = compare("sub/Cargo.lock", &old, &new);
+        let rows: Vec<(&str, Option<DepKind>, Vec<&str>)> = c
+            .iter()
+            .map(|l| {
+                (
+                    l.name.as_str(),
+                    l.dep,
+                    l.dependents.iter().map(|s| s.as_str()).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rows,
+            [
+                ("a", Some(DepKind::Direct), vec!["app"]),
+                ("app", Some(DepKind::Local), vec![]),
+                ("b", Some(DepKind::Transitive), vec!["a"]),
+            ]
+        );
+        assert!(!c[1].crates_io);
+    }
+
+    #[test]
+    fn crate_metadata() {
+        let src = tempfile::tempdir().unwrap();
+        let dir = src.path().join("b-2.0.0");
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"b\"\nversion = \"2.0.0\"\ndescription = \"\"\"\nDoes\n  things\"\"\"\nrepository = \"https://github.com/x/b\"\n\n[lib]\nproc-macro = true\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("build.rs"), "fn main() {}").unwrap();
+        std::fs::write(dir.join("Changelog.md"), "").unwrap();
+        let mut c = compare(
+            "Cargo.lock",
+            "",
+            &[pkg("b", "2.0.0", CRATES), pkg("c", "1.0.0", CRATES)].concat(),
+        );
+        // An empty file doesn't parse as a lock file.
+        assert!(c.is_empty());
+        c = compare(
+            "Cargo.lock",
+            &pkg("x", "1.0.0", CRATES),
+            &[pkg("b", "2.0.0", CRATES), pkg("c", "1.0.0", CRATES)].concat(),
+        );
+        add_info(&mut c, &[src.path().to_path_buf()]);
+        assert_eq!(
+            c[0].info,
+            Some(CrateInfo {
+                description: Some("Does things".into()),
+                repository: Some("https://github.com/x/b".into()),
+                changelog: Some("Changelog.md".into()),
+                build_script: true,
+                proc_macro: true,
+            })
+        );
+        // Not downloaded.
+        assert_eq!((c[1].name.as_str(), &c[1].info), ("c", &None));
     }
 
     #[test]
@@ -210,6 +492,7 @@ mod tests {
         };
         let pypi = "{ registry = \"https://pypi.org/simple\" }";
         let c = compare(
+            "uv.lock",
             &uv("2.31.0", pypi),
             &uv("2.32.0", "{ git = \"https://x\" }"),
         );
@@ -223,7 +506,7 @@ mod tests {
                 "[[package]]\nname = \"click\"\nversion = \"{v}\"\ndescription = \"x\"\noptional = false\n\n[metadata]\nlock-version = \"2.0\"\n"
             )
         };
-        let c = compare(&poetry("8.1.7"), &poetry("8.1.8"));
+        let c = compare("poetry.lock", &poetry("8.1.7"), &poetry("8.1.8"));
         assert_eq!(
             (c[0].old.clone(), c[0].new.clone()),
             (vec!["8.1.7".to_string()], vec!["8.1.8".to_string()])

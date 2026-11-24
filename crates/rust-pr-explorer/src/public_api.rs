@@ -403,6 +403,7 @@ fn apply_crate(ctx: &Ctx, analysis: &mut Analysis, krate: hir::Crate, crate_id: 
                 doc_hidden: false,
                 call_sites: Vec::new(),
                 ext_sites,
+                unsafe_sites: Vec::new(),
             },
         );
     }
