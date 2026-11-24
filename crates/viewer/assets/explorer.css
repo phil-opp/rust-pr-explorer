@@ -891,6 +891,8 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
 .cg-mod { display: block; font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cg-n { font: 12px var(--mono); color: var(--muted); flex: none; }
 .cg-done { color: var(--added); flex: none; }
+.cg-more { width: 100%; min-height: 44px; border: none; border-radius: 0; background: var(--panel); color: var(--link); font-size: 14px; }
+.cg-more:hover { background: var(--bg-alt); }
 .cg-empty { color: var(--muted); font-size: 13px; padding: 4px 0; }
 .cg-callers h2::before, .cg-users h2::before { content: "↑ "; color: var(--muted); }
 .cg-callees h2::before { content: "↓ "; color: var(--muted); }
