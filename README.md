@@ -15,11 +15,8 @@ Everything is written in Rust, including the page's front end, which is compiled
 ## Usage
 
 ```sh
-# Once: the viewer is compiled to WebAssembly, and rust-analyzer needs the
-# standard library's source for type information.
-rustup target add wasm32-unknown-unknown
-rustup component add rust-src
-
+# rustup installs the toolchain from `rust-toolchain.toml`, with the wasm target
+# for the viewer.
 cargo build --release
 # Optional: a smaller page (the viewer's wasm about a fifth smaller), at the cost of compiling
 # Binaryen's wasm-opt (C++) from source once, about 5 more minutes.
