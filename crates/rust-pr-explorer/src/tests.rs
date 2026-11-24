@@ -865,20 +865,27 @@ fn repeated_includes_are_limited() {
 
 #[test]
 fn embedded_data_cannot_end_its_script_element() {
-    let json = serde_json::to_string("Strips `<!--<script>` prefixes. </script>").unwrap();
+    use base64::Engine;
+    use std::io::Read;
+    let json =
+        serde_json::to_string("Strips `<!--<script>` prefixes. </script> {{TITLE}}").unwrap();
     let page = crate::render_page("t", &json);
     let start = page
-        .find(r#"<script id="data" type="application/json">"#)
+        .find(r#"<script id="data" type="application/gzip">"#)
         .unwrap();
     let end = start + page[start..].find("</script>").unwrap();
     let data = &page[start..end];
     assert!(!data[1..].contains('<'), "{data}");
-    // Still the same JSON.
+    // Still the same JSON, once unpacked.
     let inner = &data[data.find('>').unwrap() + 1..];
-    assert_eq!(
-        serde_json::from_str::<String>(inner).unwrap(),
-        "Strips `<!--<script>` prefixes. </script>"
-    );
+    let gz = base64::engine::general_purpose::STANDARD
+        .decode(inner)
+        .unwrap();
+    let mut unpacked = String::new();
+    flate2::read::GzDecoder::new(&gz[..])
+        .read_to_string(&mut unpacked)
+        .unwrap();
+    assert_eq!(unpacked, json);
 }
 
 /// In `git` mode, files come from a worktree: symlinks committed to the
