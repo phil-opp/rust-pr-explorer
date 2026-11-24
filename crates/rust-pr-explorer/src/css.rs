@@ -9,6 +9,7 @@
 //! brackets and nesting, and never fails. Native CSS nesting (`&`) is
 //! resolved into full selectors.
 
+use crate::parts::next_kept;
 use model::{PropChange, PropValue, Status, StyleChange};
 use std::collections::BTreeMap;
 
@@ -443,7 +444,17 @@ fn no_effect_note(win: &Decl, old: &[Decl], new: &[Decl]) -> String {
     "A declaration was removed; the value that applies is the same.".into()
 }
 
-fn changes(a: &Parsed, b: &Parsed) -> Vec<(usize, StyleChange)> {
+/// The changes by selector, each with where it sorts: its first line in
+/// the new version, or for a removed one that of the selector that
+/// followed it (see [`next_kept`]).
+fn changes(a: &Parsed, b: &Parsed) -> Vec<((usize, bool), StyleChange)> {
+    let first_line = |k| b.sheet[k].rules.first().copied().unwrap_or(0);
+    let removed_at: BTreeMap<&(Vec<String>, String), usize> = a
+        .order
+        .iter()
+        .zip(next_kept(&a.order, |k| b.sheet.contains_key(k)))
+        .map(|(k, next)| (k, next.map_or(usize::MAX, first_line)))
+        .collect();
     let mut out = Vec::new();
     let keys = b
         .order
@@ -467,11 +478,22 @@ fn changes(a: &Parsed, b: &Parsed) -> Vec<(usize, StyleChange)> {
         let empty = Entry::default();
         let (oo, oe) = effective(old.unwrap_or(&empty));
         let (no, ne) = effective(new.unwrap_or(&empty));
-        let names: Vec<&String> = no
+        // Removed properties where they were among the others.
+        let kept = |n: &String| ne.contains_key(n);
+        let mut names: Vec<(usize, bool, &String)> = no
             .iter()
-            .chain(oo.iter().filter(|n| !ne.contains_key(*n)))
+            .map(|n| (ne[n].0.line, true, n))
+            .chain(
+                oo.iter()
+                    .zip(next_kept(&oo, kept))
+                    .filter(|(n, _)| !kept(n))
+                    .map(|(n, next)| (next.map_or(usize::MAX, |x| ne[x].0.line), false, n)),
+            )
             .collect();
-        for name in names {
+        if new.is_some() {
+            names.sort_by_key(|&(line, kept, _)| (line, kept));
+        }
+        for (_, _, name) in names {
             let (o, n) = (oe.get(name), ne.get(name));
             let value = |d: &Decl| PropValue {
                 value: d.value.clone(),
@@ -510,7 +532,11 @@ fn changes(a: &Parsed, b: &Parsed) -> Vec<(usize, StyleChange)> {
             continue;
         }
         let line = change.rules.first().copied().unwrap_or(0);
-        let order = if new.is_some() { line } else { usize::MAX };
+        let order = if new.is_some() {
+            (line, true)
+        } else {
+            (removed_at[key], false)
+        };
         out.push((order, change));
     }
     out.sort_by_key(|c| c.0);
@@ -519,7 +545,8 @@ fn changes(a: &Parsed, b: &Parsed) -> Vec<(usize, StyleChange)> {
 
 /// What changed in a stylesheet, selector by selector. Selectors with the
 /// same changes in the same context (from one rule for `.a, .b`) share
-/// one entry. In the order of the new version, removed ones last.
+/// one entry. In the order of the new version, removed ones where they
+/// were.
 pub fn compare(old: &str, new: &str) -> Vec<StyleChange> {
     let (a, b) = (parse(old), parse(new));
     let mut out: Vec<StyleChange> = Vec::new();
@@ -679,5 +706,33 @@ mod tests {
         assert_eq!(c[0].context, ["@media print"]);
         assert_eq!(c[1].status, Status::Removed);
         assert_eq!(rows(&c[1]), [("color".into(), s("red"), None)]);
+    }
+
+    #[test]
+    fn removed_selectors_and_properties_stay_where_they_were() {
+        let old = ".a { color: red; }\n.gone { color: red; }\n.b {\n  padding: 0;\n  margin: 0;\n  color: red;\n}\n";
+        let new =
+            ".a { color: blue; }\n.b {\n  margin: 1px;\n  color: red;\n}\n.c { color: red; }\n";
+        let c = compare(old, new);
+        let got: Vec<(&str, Status)> = c
+            .iter()
+            .map(|c| (c.selectors[0].as_str(), c.status))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (".a", Status::Changed),
+                (".gone", Status::Removed),
+                (".b", Status::Changed),
+                (".c", Status::Added),
+            ]
+        );
+        assert_eq!(
+            rows(&c[2]),
+            [
+                ("padding".into(), s("0"), None),
+                ("margin".into(), s("0"), s("1px")),
+            ]
+        );
     }
 }
