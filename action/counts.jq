@@ -1,5 +1,7 @@
 # The numbers of the comment's summary, from the analysis' JSON: the changed
-# Rust items (not modules), how many of them are public, and the other
+# Rust items (not modules) outside tests, how many of them are public, the
+# changed test items (tests, test-only code and everything in integration
+# test targets), so that a well-tested PR doesn't look large, and the other
 # changed files: those the page lists as files, not as items (non-Rust
 # files, and Rust files with changes outside every item). `semver` is null
 # without cargo-semver-checks, "error" if it could not check the PR, else
@@ -13,8 +15,10 @@
 def kind_label:
   {method: "method", trait_method: "method", assoc_const: "const",
    type_alias: "type", assoc_type: "type"}[.] // .;
+def is_test: (.test // false) or (.test_only // false) or (.id // "" | startswith("test:"));
 (.meta.versions // {}) as $versions
-| [.items[] | select(.kind != "mod" and .status != "unchanged")] as $items
+| [.items[] | select(.kind != "mod" and .status != "unchanged")] as $changed
+| [$changed[] | select(is_test | not)] as $items
 | ([.items[]
    | select(.status != "unchanged"
        and ((.public // false) or ((.changes.exports_removed // []) | length > 0))
@@ -33,6 +37,7 @@ def kind_label:
 | ($breaking_items + $unmatched) as $breaking
 | {
     items: ($items | length),
+    tests: ([$changed[] | select(is_test)] | length),
     public: ($items | map(select((.public_paths // []) | length > 0)) | length),
     files: ([.files[] | select((.analyzed // false | not) or (.outside_items // 0) > 0)] | length),
     semver: (if .semver_checks == null then null
