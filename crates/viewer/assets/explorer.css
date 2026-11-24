@@ -852,6 +852,9 @@ pre .rt-row { max-width: min(760px, 100cqw); }
 .hunk-rv .rv-btn { font-size: 11px; padding: 0 6px; }
 .rv-scope { color: var(--muted); font-size: 12px; white-space: nowrap; }
 body:not(.reviewing) .rv-scope { display: none; }
+.rvc:has(> .rv-same) { flex-wrap: wrap; justify-content: flex-end; }
+.rv-same { flex-basis: 100%; color: var(--muted); font-size: 12px; text-align: right; }
+body:not(.reviewing) .rv-same { display: none; }
 .hunk-rv .rv-fold { display: none; }
 /* "GitHub ↗": opens an item or a change in the pull request's diff on
    GitHub. Outside review mode, a change's link floats at the right of its

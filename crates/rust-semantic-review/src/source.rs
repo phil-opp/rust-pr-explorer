@@ -1032,6 +1032,8 @@ pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
         })
         .collect();
     let mut crates = Vec::new();
+    // The libraries, by their index in `crates`, with their package's name.
+    let mut libs: Vec<(usize, String)> = Vec::new();
     for manifest in manifests {
         let Ok(text) = std::fs::read_to_string(&manifest) else {
             continue;
@@ -1096,6 +1098,7 @@ pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
             == Some(true);
         let lib_name = lib_name.replace('-', "_");
         if has_lib {
+            libs.push((crates.len(), name.replace('-', "_")));
             crates.push(CrateSrc {
                 name: lib_name.clone(),
                 root_file: lib_path,
@@ -1132,7 +1135,35 @@ pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
             });
         }
     }
+    rename_duplicate_libs(&mut crates, &libs);
     crates
+}
+
+/// Two packages may give their libraries the same name: dora's `dora-cli`
+/// and its PyO3 twin `dora-cli-api-python` both build `dora_cli`. Items and
+/// crate versions are kept by crate name, so only one of them can have it:
+/// the one whose package has that name, since that is the one other
+/// packages' dependencies name. The others are named after their package
+/// (if that name is free), instead of being left out.
+fn rename_duplicate_libs(crates: &mut [CrateSrc], libs: &[(usize, String)]) {
+    let mut by_name: BTreeMap<String, Vec<&(usize, String)>> = BTreeMap::new();
+    for lib in libs {
+        by_name
+            .entry(crates[lib.0].name.clone())
+            .or_default()
+            .push(lib);
+    }
+    for (name, group) in by_name.into_iter().filter(|(_, g)| g.len() > 1) {
+        let keeper = group
+            .iter()
+            .position(|(_, package)| *package == name)
+            .unwrap_or(0);
+        for (k, (index, package)) in group.into_iter().enumerate() {
+            if k != keeper && !crates.iter().any(|c| c.name == *package) {
+                crates[*index].name = package.clone();
+            }
+        }
+    }
 }
 
 /// The library crates' versions in both trees, by crate name.
