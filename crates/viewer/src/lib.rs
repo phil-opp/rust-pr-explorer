@@ -21,6 +21,7 @@ mod nav;
 mod pages;
 mod post;
 mod review;
+mod risk;
 mod route;
 mod settings;
 mod sha256;
