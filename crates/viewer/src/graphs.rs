@@ -586,7 +586,7 @@ fn graph_html(d: &Data, i: usize, g: &Graph) -> String {
                 .map(String::as_str),
         );
     format!(
-        r#"<div class="irow cgraph"><div class="ihead"><span class="kind">fn</span><span class="cg-roots">{head}{more_roots}</span><span class="dim">{count}</span><span class="rv-group">{}</span></div>
+        r#"<div class="irow cgraph" id="cgraph-{i}"><div class="ihead"><span class="kind">fn</span><span class="cg-roots">{head}{more_roots}</span><span class="dim">{count}</span><span class="rv-group">{}</span></div>
         <div class="iacts"><button data-cgraph="{i}" title="{}">{}</button></div>
         {}<ul class="cg-tree">{shown}</ul>{folded}{}{}</div>"#,
         crate::review::group_html(ids),
@@ -702,6 +702,16 @@ pub fn overview_html(d: &Data) -> String {
         ),
         extra("Removed", &gs.removed, ""),
     )
+}
+
+/// The index of the graph that lists item `id`: as a function, or among
+/// the types and constants or the changed tests it uses.
+pub fn graph_of(d: &Data, id: &str) -> Option<usize> {
+    graphs(d).graphs.iter().position(|g| {
+        g.rows.iter().any(|r| r.id == id)
+            || g.types.iter().any(|t| t == id)
+            || g.tests.iter().any(|t| t == id)
+    })
 }
 
 /// The functions of the `i`th graph, for the canvas.

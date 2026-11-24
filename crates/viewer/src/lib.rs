@@ -734,7 +734,21 @@ fn show_module_graph(app: &mut App, m: &str) {
 fn on_review_click(app: &mut App, el: &Element) -> bool {
     if let Some(c) = dom::closest(el, ".rvc") {
         let id = dom::data(&c, "rv").unwrap_or_default();
-        if dom::closest(el, "[data-rv-since]").is_some() {
+        // The links of the "Next:" row open their item as any link does.
+        if dom::closest(el, "a.ref[data-id]").is_some() {
+            return false;
+        }
+        if dom::closest(el, "[data-rv-go-next]").is_some() {
+            go_next(app, Some(id), false);
+        } else if let Some(b) = dom::closest(el, "[data-rv-go-graph]") {
+            let i = dom::data(&b, "rv-go-graph").unwrap_or_default();
+            if app.s.view != View::Overview {
+                set_view(app, View::Overview);
+            }
+            if let Some(g) = dom::by_id(&format!("cgraph-{i}")) {
+                reveal(&g);
+            }
+        } else if dom::closest(el, "[data-rv-since]").is_some() {
             show_since_review(app, &id);
         } else if let Some(act) = dom::closest(el, "[data-rv-act]")
             .and_then(|b| dom::data(&b, "rv-act"))
@@ -869,6 +883,16 @@ fn load_marks(app: &mut App, loaded: Result<String, String>) {
 /// For a hunk: moves on to the item's next hunk without a verdict, and
 /// when there is none, gives the item the verdict its hunks add up to.
 fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String) {
+    // Only a unit that the review steps (Next ▸, a key, the verdict
+    // before) went to moves on to the next one. One that the reviewer
+    // opened themselves, e.g. from a call graph, stays, with links to
+    // where to go next; also for its next hunks.
+    let unit = review::hunk_item(id).unwrap_or_else(|| id.to_string());
+    let guided = app.s.rv_current.as_deref() == Some(unit.as_str())
+        && review::stayed().as_deref() != Some(unit.as_str());
+    if !guided {
+        review::set_stayed(Some((unit.clone(), String::new())));
+    }
     review::set_mark(&app.d, id, Some(review::Note { verdict, text }));
     if let Some(item) = review::hunk_item(id) {
         app.s.rv_current = Some(item.clone());
@@ -889,11 +913,100 @@ fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String)
             review::set_mark(&app.d, &item, Some(note));
         }
         pages::render_sidebar(app);
-        go_next(app, Some(item), true);
+        if guided {
+            go_next(app, Some(item), true);
+        } else {
+            stay(app, &item);
+        }
         return;
     }
     pages::render_sidebar(app);
-    go_next(app, Some(id.to_string()), true);
+    if guided {
+        go_next(app, Some(unit), true);
+    } else {
+        stay(app, &unit);
+    }
+}
+
+/// After a verdict on a unit that the review steps didn't go to: makes it
+/// the current unit and shows where to go next in its control.
+fn stay(app: &mut App, unit: &str) {
+    app.s.rv_current = Some(unit.to_string());
+    app.s.rv_hunk = None;
+    let next = next_steps_html(&app.d, unit);
+    review::set_stayed(Some((unit.to_string(), next)));
+    keys::mark_current(app);
+}
+
+/// Where to go after reviewing `unit` without moving on: its changed
+/// callers and callees that still need a review, the next unreviewed unit
+/// in review order, and the overview's call graph that lists it.
+fn next_steps_html(d: &Data, unit: &str) -> String {
+    const MAX: usize = 3;
+    let open = |id: &&str| {
+        *id != unit
+            && matches!(
+                review::mark(id),
+                Some(review::Mark::Open | review::Mark::Stale)
+            )
+    };
+    let link = |id: &str| {
+        let kind = d.item(id).map_or("fn", |it| it.info.kind.css());
+        format!(
+            r#"<a class="ref" data-id="{}" data-kind="{kind}"><code>{}</code></a>"#,
+            esc(id),
+            esc(&d.display_name_of(id))
+        )
+    };
+    let group = |label: &str, ids: Vec<&str>| {
+        let mut seen = std::collections::HashSet::new();
+        let ids: Vec<&str> = ids.into_iter().filter(|id| seen.insert(*id)).collect();
+        if ids.is_empty() {
+            return String::new();
+        }
+        let more = match ids.len() {
+            n if n > MAX => format!(r#" <span class="dim">+{} more</span>"#, n - MAX),
+            _ => String::new(),
+        };
+        let links: Vec<String> = ids.iter().take(MAX).map(|id| link(id)).collect();
+        format!(
+            r#"<span class="rv-go"><span class="dim">{label}</span> {}{more}</span>"#,
+            links.join(", ")
+        )
+    };
+    let callers: Vec<&str> = d
+        .callers
+        .get(unit)
+        .map(|c| c.iter().map(String::as_str).filter(open).collect())
+        .unwrap_or_default();
+    let callees: Vec<&str> = d.item(unit).map_or(Vec::new(), |it| {
+        it.info
+            .calls
+            .iter()
+            .map(|c| c.to.as_str())
+            .filter(open)
+            .collect()
+    });
+    let mut parts = vec![group("Called by", callers), group("Calls", callees)];
+    if review::next_open(Some(unit)).is_some() {
+        parts.push(
+            r#"<button class="rv-go-btn" data-rv-go-next title="The next item that needs a review, in review order (j)">Next unreviewed ▸</button>"#
+                .to_string(),
+        );
+    }
+    if let Some(i) = graphs::graph_of(d, unit) {
+        parts.push(format!(
+            r#"<button class="rv-go-btn" data-rv-go-graph="{i}" title="The overview's call graph that lists this item">◂ Call graph</button>"#
+        ));
+    }
+    let parts: Vec<String> = parts.into_iter().filter(|p| !p.is_empty()).collect();
+    if parts.is_empty() {
+        return String::new();
+    }
+    format!(
+        r#"<span class="rv-next"><span class="rv-next-label">Next:</span>{}</span>"#,
+        parts.concat()
+    )
 }
 
 /// The dialog for writing a unit's comment.
@@ -1046,6 +1159,7 @@ fn show_since_review(app: &App, id: &str) {
 /// with the next unit the overview lists, on a module page it skips the
 /// files, and it says so when the tab has nothing left.
 fn go_next(app: &mut App, from: Option<String>, stay: bool) {
+    review::set_stayed(None);
     // The units this page lists, by their controls (items and files;
     // their hunks are reached from the item).
     let here: Vec<Element> = if matches!(app.s.view, View::Overview | View::Module) {
@@ -1104,6 +1218,7 @@ fn show_unit(app: &mut App, unit: &str, from: Option<&str>) {
 }
 
 fn show_unit_now(app: &mut App, unit: &str, from: Option<&str>) {
+    review::set_stayed(None);
     app.s.rv_current = Some(unit.to_string());
     app.s.rv_hunk = None;
     if matches!(app.s.view, View::Overview | View::Module)
