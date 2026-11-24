@@ -163,6 +163,9 @@ fn trait_item_default(source: &str, kind: Kind) -> Option<bool> {
 fn signature(b: &ItemData, h: &ItemData, sig_diff: Option<&SigDiff>, v: &mut Verdict) {
     let (old, new) = (&b.info.sig, &h.info.sig);
     if old == new {
+        if retargets_only_private_fields(b, h) {
+            return;
+        }
         v.breaking("a name in the signature now refers to a different item");
         return;
     }
@@ -213,6 +216,35 @@ fn signature(b: &ItemData, h: &ItemData, sig_diff: Option<&SigDiff>, v: &mut Ver
         Kind::Impl => v.unknown("impl header changed"),
         Kind::Mod | Kind::Variant => {}
     }
+}
+
+/// Whether every name of an unchanged signature that now refers to a
+/// different item appears only in private fields, which code outside the
+/// crate can't see. Names are compared by their last segment, so a name
+/// that also appears in the public part counts as public.
+fn retargets_only_private_fields(b: &ItemData, h: &ItemData) -> bool {
+    let (Some(old_public), Some(new_public)) = (&b.info.sig_public, &h.info.sig_public) else {
+        return false;
+    };
+    let public: HashSet<&str> = [old_public, new_public]
+        .into_iter()
+        .flat_map(|s| s.split(|c: char| !(c.is_alphanumeric() || c == '_')))
+        .filter(|w| !w.is_empty())
+        .collect();
+    let target = |d: &ItemData, name: &str| d.info.sig_refs.get(name).map(|r| r.path.clone());
+    let retargeted: Vec<&String> = b
+        .info
+        .sig_refs
+        .keys()
+        .chain(h.info.sig_refs.keys())
+        .filter(|name| target(b, name) != target(h, name))
+        .collect();
+    // Unchanged refs by name can still differ by position: then it can't
+    // be told where.
+    !retargeted.is_empty()
+        && retargeted
+            .iter()
+            .all(|name| !public.contains(name.rsplit("::").next().unwrap_or(name)))
 }
 
 /// `pub const X: T = …;` → `T`

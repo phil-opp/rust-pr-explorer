@@ -533,6 +533,28 @@ fn renamed_import_resolves_and_changing_target_is_a_change() {
     assert_eq!(f.info.sig_refs["Y"].id.as_deref(), Some("t::b::X"));
 }
 
+/// A name that now refers to another item breaks the API only where code
+/// outside the crate can see it: not in a private field.
+#[test]
+fn retargeted_private_field_is_not_breaking() {
+    let lib = |target: &str, field: &str| {
+        format!(
+            "mod a {{ pub struct X; }}\nmod b {{ pub struct X; }}\nuse {target}::X as Y;\npub struct S {{\n    {field}: Y,\n    pub n: u8,\n}}\n"
+        )
+    };
+    let api = |field: &str| {
+        let base = write_crate(&[("src/lib.rs", &lib("a", field))]);
+        let head = write_crate(&[("src/lib.rs", &lib("b", field))]);
+        let out = analyze_dirs(base.path(), head.path());
+        let s = &out.items["t::S"];
+        assert_eq!(s.status, Status::Changed);
+        assert!(s.changes.signature);
+        s.api.as_ref().map(|a| a.level)
+    };
+    assert_eq!(api("y"), None);
+    assert_eq!(api("pub y"), Some(model::ApiLevel::Breaking));
+}
+
 /// A test whose text is unchanged but whose call now resolves to a new
 /// helper of the same name (shadowing the glob-imported function) shows
 /// that line as changed, with what the name referred to before and now.
