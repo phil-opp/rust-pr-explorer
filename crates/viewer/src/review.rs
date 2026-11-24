@@ -138,6 +138,9 @@ struct Review {
     /// Marks that reviewers saved in their reviews of the PR, latest
     /// first.
     saved: Vec<model::SavedMarks>,
+    /// The unit that a verdict was just given to without moving on (see
+    /// [`set_stayed`]), with the links to where to go next.
+    stayed: Option<(String, String)>,
     /// For each item whose only change is names that refer to other items
     /// (see [`retarget_key`]), the other items with the same change.
     same: HashMap<String, Vec<String>>,
@@ -912,6 +915,7 @@ pub fn load(d: &Data) {
                 .as_ref()
                 .map(|pr| pr.saved_marks.clone())
                 .unwrap_or_default(),
+            stayed: None,
             same,
         }
     });
@@ -1462,6 +1466,24 @@ pub fn next_open_call(d: &Data, of: &str) -> Option<String> {
         .map(str::to_string)
 }
 
+/// Shows `next`, links to where to go next, in the control of the unit
+/// that was just reviewed without moving on, until another unit gets one
+/// or the review moves on (`None`).
+pub fn set_stayed(stayed: Option<(String, String)>) {
+    let old = REVIEW.with(|r| std::mem::replace(&mut r.borrow_mut().stayed, stayed.clone()));
+    for id in [old.map(|(id, _)| id), stayed.map(|(id, _)| id)]
+        .into_iter()
+        .flatten()
+    {
+        refresh(&id);
+    }
+}
+
+/// The unit that [`set_stayed`] last stayed on.
+pub fn stayed() -> Option<String> {
+    REVIEW.with(|r| r.borrow().stayed.as_ref().map(|(id, _)| id.clone()))
+}
+
 /// Whether a reviewed unit is shown whole again.
 pub fn is_unfolded(id: &str) -> bool {
     REVIEW.with(|r| r.borrow().unfolded.contains(id))
@@ -1505,9 +1527,9 @@ fn control_class(id: &str, m: Mark) -> String {
     )
 }
 
-/// The verdict buttons, as on GitHub. Approving moves on right away; the
+/// The verdict buttons, as on GitHub. Approving needs no comment; the
 /// other two ask for a comment first.
-const ACTIONS: &str = r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve and go to the next item (a)">✓ Approve</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Add a comment (c)">✎ Comment</button>"#;
+const ACTIONS: &str = r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve, and go on to the next item if Next ▸ led here (a)">✓ Approve</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Add a comment (c)">✎ Comment</button>"#;
 
 /// One line of a comment, shortened, for the button that edits it.
 fn snippet(text: &str) -> String {
@@ -1535,14 +1557,14 @@ fn actions(id: &str) -> String {
             format!("{same} other items")
         };
         return format!(
-            r#"<span class="rv-same" title="Their only change is the same: the same names now refer to the same other items.">Same change as {others}.</span><button class="rv-btn approve" data-rv-act="approve" data-rv-all title="Approve this item and the {same} others, and go to the next item (a)">✓ Approve all {all}</button><button class="rv-btn approve" data-rv-act="approve" title="Approve only this item">✓ Only this</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on this item (c)">✎ Comment</button>"#,
+            r#"<span class="rv-same" title="Their only change is the same: the same names now refer to the same other items.">Same change as {others}.</span><button class="rv-btn approve" data-rv-act="approve" data-rv-all title="Approve this item and the {same} others, and go on to the next item if Next ▸ led here (a)">✓ Approve all {all}</button><button class="rv-btn approve" data-rv-act="approve" title="Approve only this item">✓ Only this</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on this item (c)">✎ Comment</button>"#,
             all = same + 1
         );
     }
     let n = hunks_of(id).len();
     if n > 1 {
         return format!(
-            r#"<span class="rv-scope" title="These buttons give the whole item one verdict. Each change also has its own buttons.">Whole item ({n} changes):</span><button class="rv-btn approve" data-rv-act="approve" title="Approve the whole item and go to the next one (a)">✓ Approve item</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on the whole item (c)">✎ Comment</button>"#
+            r#"<span class="rv-scope" title="These buttons give the whole item one verdict. Each change also has its own buttons.">Whole item ({n} changes):</span><button class="rv-btn approve" data-rv-act="approve" title="Approve the whole item, and go on to the next one if Next ▸ led here (a)">✓ Approve item</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on the whole item (c)">✎ Comment</button>"#
         );
     }
     ACTIONS.to_string()
@@ -1567,9 +1589,16 @@ fn control_inner(id: &str, m: Mark) -> String {
                 Verdict::Changes => ("changes", "✗ Changes requested", "You requested changes"),
                 Verdict::Comment => ("commented", "✎ Commented", "You commented"),
             };
-            let unfolded = REVIEW.with(|r| r.borrow().unfolded.contains(id));
+            let (unfolded, next) = REVIEW.with(|r| {
+                let r = r.borrow();
+                let next = match &r.stayed {
+                    Some((s, next)) if s == id => next.clone(),
+                    _ => String::new(),
+                };
+                (r.unfolded.contains(id), next)
+            });
             format!(
-                r#"<button class="rv-chip {class}" data-rv-undo title="{what}. Click to remove the mark">{label}</button>{text}<button class="rv-edit" data-rv-edit title="Change the verdict or the comment">Edit</button><button class="rv-fold" data-rv-fold title="{}">{}</button>"#,
+                r#"<button class="rv-chip {class}" data-rv-undo title="{what}. Click to remove the mark">{label}</button>{text}<button class="rv-edit" data-rv-edit title="Change the verdict or the comment">Edit</button><button class="rv-fold" data-rv-fold title="{}">{}</button>{next}"#,
                 if unfolded {
                     "Fold the item back to one line"
                 } else {
@@ -1951,6 +1980,7 @@ mod tests {
                 unfolded: HashSet::new(),
                 hunks,
                 saved: Vec::new(),
+                stayed: None,
                 same: HashMap::new(),
             }
         });
