@@ -11,7 +11,9 @@
 # previous comment (empty without one), HEAD, SINCE (the `since:` line of
 # the tool, empty without `--since`), PREVIOUS (the previous comment's
 # commit), PREVIOUS_ID, PREVIOUS_NODE_ID and PREVIOUS_STATE (see
-# previous-comment.sh), RETENTION_DAYS and RUN_URL.
+# previous-comment.sh), RETENTION_DAYS, RUN_URL and RUN_ID (the run that
+# analyzed HEAD, whose saved analysis the next run can reuse, see
+# previous-analysis.sh).
 set -euo pipefail
 
 {
@@ -68,8 +70,8 @@ else
       '{$from, $to, $url, $summary} + (if $expires != "" then {$expires} else {} end)')
   fi
 fi
-state=$(jq -nc --arg head "$HEAD" --argjson since "${since:-null}" \
-  '{$head} + (if $since then {$since} else {} end)')
+state=$(jq -nc --arg head "$HEAD" --arg run "${RUN_ID:-}" --argjson since "${since:-null}" \
+  '{$head} + (if $run != "" then {run: ($run | tonumber)} else {} end) + (if $since then {$since} else {} end)')
 # Commit hashes are written out in full and not as code, so that GitHub
 # links them (shown shortened).
 body="<!-- rust-semantic-review $state -->

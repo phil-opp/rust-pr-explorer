@@ -20,7 +20,9 @@ mod syntax;
 
 /// A position in a source file: 1-based line, 0-based column in chars
 /// (the convention of `proc_macro2`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
 pub struct LineCol {
     pub line: usize,
     pub column: usize,
@@ -36,7 +38,7 @@ impl From<proc_macro2::LineColumn> for LineCol {
 }
 
 /// A place in a function body that looks like a call.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct CallSite {
     /// Position of the called name (the method name, or the last segment
     /// of a path).
@@ -62,7 +64,7 @@ pub enum Ns {
 }
 
 /// One item of one side (base or head) of the pull request.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct ItemData {
     pub info: ItemInfo,
     /// Signature text plus the targets of all names in it.
@@ -89,7 +91,8 @@ pub struct ItemData {
     pub unsafe_sites: Vec<crate::unsafety::Site>,
 }
 
-#[derive(Clone)]
+/// Serializable, so that a later run can reuse it (see `crate::reuse`).
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
 pub struct Analysis {
     pub items: BTreeMap<String, ItemData>,
     /// Items outside the analyzed crates that the code names, as

@@ -10,7 +10,7 @@ use model::{Status, UnsafeChange, UnsafeKind};
 use proc_macro2::{Delimiter, TokenStream, TokenTree};
 
 /// A piece of `unsafe` code on one side.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Site {
     pub kind: UnsafeKind,
     /// Its tokens, for comparing.

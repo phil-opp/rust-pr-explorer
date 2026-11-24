@@ -1624,3 +1624,37 @@ fn unsafe_code_is_tracked_per_item() {
     // The impl and the method that only calls `peek` touch no unsafe code.
     assert!(changes("t::Buf::first").is_empty());
 }
+
+/// A saved analysis, read back, gives the same comparison as analyzing
+/// the tree again, also from another directory (a later run checks the
+/// same tree out elsewhere).
+#[cfg(feature = "semantic")]
+#[test]
+fn a_reused_analysis_compares_like_a_fresh_one() {
+    let copy = |side: &str| {
+        let dir = tempfile::tempdir().unwrap();
+        let status = std::process::Command::new("cp")
+            .arg("-r")
+            .arg(fixture(side))
+            .arg(dir.path().join("tree"))
+            .status()
+            .unwrap();
+        assert!(status.success());
+        dir
+    };
+    let (first, second) = (copy("head"), copy("head"));
+    let (first, second) = (first.path().join("tree"), second.path().join("tree"));
+    let key = crate::reuse::Key::new("tree", &first, false, true);
+    let file = tempfile::tempdir().unwrap();
+    let path = file.path().join("head-analysis.json.gz");
+    crate::reuse::save(&path, &key, &(analyze_semantic(&first), "note".into())).unwrap();
+    let (loaded, note) = crate::reuse::load(&path, &key).unwrap();
+    assert_eq!(note, "note");
+
+    let base = analyze_semantic(&fixture("base"));
+    let compare = |head| {
+        let out = merge::merge(base.clone(), head, demo().meta);
+        serde_json::to_string(&out).unwrap()
+    };
+    assert_eq!(compare(loaded), compare(analyze_semantic(&second)));
+}

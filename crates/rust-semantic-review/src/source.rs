@@ -75,6 +75,9 @@ pub struct Checkout {
     pub git: Option<GitRange>,
     /// What changed since an earlier commit of the PR (`pr --since`).
     pub since: Option<Since>,
+    /// The git tree of the head, for PRs: an analysis of it can be reused
+    /// for any commit with the same tree (see [`crate::reuse`]).
+    pub head_tree: Option<String>,
     // Keeps temporary directories alive for as long as the checkout is used.
     _temp: Option<tempfile::TempDir>,
 }
@@ -114,6 +117,7 @@ impl Checkout {
             files,
             git: None,
             since: None,
+            head_tree: None,
             _temp: Some(temp),
         })
     }
@@ -206,6 +210,7 @@ impl Checkout {
                 prefix,
             }),
             since: None,
+            head_tree: None,
             _temp: Some(temp),
         })
     }
@@ -318,15 +323,17 @@ impl Checkout {
             )?;
         }
         let files = crate::files::changed_files(&base_dir, &head_dir, &[]);
+        let head_tree = git_output(&git_dir, &["rev-parse", &format!("{head_rev}^{{tree}}")])?;
         let since = since.map(|rev| {
             let dir = temp.path().join("since");
             let branch = format!("origin/{base_ref}");
             match since_checkout(&git_dir, &dir, rev, &branch, &base_rev, &head_rev) {
-                Ok(Some((prev, label))) => Since::Changes(SinceChanges {
+                Ok(Some((prev, label, tree))) => Since::Changes(SinceChanges {
                     files: crate::files::changed_files(&dir, &head_dir, &[]),
                     dir,
                     commit: prev,
                     label,
+                    tree,
                 }),
                 Ok(None) => Since::Nothing,
                 Err(e) => Since::Unavailable(format!("{e:#}")),
@@ -379,6 +386,7 @@ impl Checkout {
                 prefix: String::new(),
             }),
             since,
+            head_tree: Some(head_tree),
             _temp: Some(temp),
         })
     }
@@ -406,11 +414,14 @@ pub struct SinceChanges {
     pub label: String,
     /// Every file that differs between `dir` and the head.
     pub files: Vec<model::ChangedFile>,
+    /// The git tree that `dir` holds.
+    pub tree: String,
 }
 
 /// Checks out what the PR's `head` is compared with to show its changes
 /// since `rev`, an earlier commit of the PR, at `dir`. Returns the commit
-/// in full and a label, or `None` when nothing changed but the base branch.
+/// in full, a label and the checked out tree, or `None` when nothing
+/// changed but the base branch.
 ///
 /// A plain diff from `rev` would also show every change the base branch
 /// got in between, once the PR merged it or was rebased onto it. So the
@@ -424,7 +435,7 @@ fn since_checkout(
     branch: &str,
     base: &str,
     head: &str,
-) -> Result<Option<(String, String)>> {
+) -> Result<Option<(String, String, String)>> {
     // After a force push, the earlier commit is on no branch any more, but
     // GitHub still serves it by its full id.
     let prev = match rev_parse(git_dir, rev) {
@@ -524,7 +535,7 @@ fn since_checkout(
             &commit,
         ],
     )?;
-    Ok(Some((prev, label)))
+    Ok(Some((prev, label, tree)))
 }
 
 /// Settles the conflicts of `tree`, the earlier commit `prev` with the
@@ -1280,8 +1291,13 @@ mod tests {
             let dir = dirs.path().join(n.get().to_string());
             since_checkout(r, &dir, prev, "main", &base, &head)
                 .unwrap()
-                .map(|(commit, label)| {
+                .map(|(commit, label, tree)| {
                     assert_eq!(commit, prev);
+                    // The tree that is checked out at `dir`.
+                    assert_eq!(
+                        tree,
+                        git_output(&dir, &["rev-parse", "HEAD^{tree}"]).unwrap()
+                    );
                     let files = crate::files::changed_files(&dir, &r.join("."), &[".git"]);
                     let paths: Vec<String> = files.into_iter().map(|f| f.path).collect();
                     (paths, label)

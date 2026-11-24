@@ -102,6 +102,20 @@ inputs:
   retention-days:
     description: Days to keep the page. Empty uses the repository's setting (90 days by default).
     default: ""
+  reuse-analysis:
+    description: >-
+      Reuse the previous run's analysis of its head for the page of the
+      changes since the previous comment, instead of analyzing that commit
+      again, which takes as long as analyzing the head. Each run saves its
+      analysis as the `rust-semantic-review-analysis` artifact (kept like
+      the pages, see `retention-days`), and the next run downloads it,
+      which needs `actions: read`. It is only used if it is of the same
+      tree and was made by the same build of the tool with the same
+      settings and toolchain, and, for a PR from a fork, only if this run
+      trusts the project code: a fork's `pull_request` runs use the fork's
+      workflow, so it controls their artifacts. Otherwise, and if
+      anything goes wrong, that commit is analyzed again.
+    default: "true"
 
 outputs:
   page-url:
@@ -261,6 +275,7 @@ runs:
         FILL_TARGET: ${{ inputs.cache == 'true' && inputs.cache-target == 'true' && inputs.save-cache == 'true' && steps.target.outputs.cache-hit != 'true' }}
         HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         TOOL: ${{ steps.key.outputs.dir }}/rust-semantic-review
+        REUSE: ${{ inputs.reuse-analysis }}
       run: |
         trusted=()
         if [ "$TRUST" = "true" ]; then trusted=(--trust-project-code --target-dir "$TARGET"); fi
@@ -304,11 +319,26 @@ runs:
         if [ "$SYNTAX_ONLY" = "true" ]; then args+=(--syntax-only); fi
         # Runs the PR's code too (see "Check the inputs").
         if [ "$SEMVER_CHECKS" = "true" ]; then args+=(--semver-checks); fi
-        if [ -n "$prev" ] && [ "$prev" != "$HEAD_SHA" ]; then args+=(--since "$prev"); fi
+        if [ -n "$prev" ] && [ "$prev" != "$HEAD_SHA" ]; then
+          args+=(--since "$prev")
+          # The previous run's analysis of that commit, if it may be used
+          # (see action/previous-analysis.sh).
+          if [ "$REUSE" = "true" ]; then
+            PREVIOUS=$prev "$GITHUB_ACTION_PATH/action/previous-analysis.sh" "$dir"
+            if [ -f "$dir/since-analysis.json.gz" ]; then args+=(--since-analysis "$dir/since-analysis.json.gz"); fi
+          fi
+        fi
+        # For the next run's page of the changes since this one's comment.
+        if [ "$REUSE" = "true" ] && [ "$COMMENT" != "false" ]; then
+          mkdir -p "$dir/analysis"
+          args+=(--save-head-analysis "$dir/analysis/head-analysis.json.gz")
+        fi
         # Without trust-project-code and semver-checks, the PR's code is never
         # built or run.
         "$TOOL" pr "$REPO#$PR" -o "$page" --json "$dir/analysis.json" "${args[@]}" "${trusted[@]}" > "$dir/stdout"
         since=$(sed -n 's/^since: //p' "$dir/stdout" | tail -n1)
+        reused=$(sed -n 's/^since-analysis: //p' "$dir/stdout" | tail -n1)
+        if [ -n "$reused" ]; then echo "::notice::The previous run's analysis of $prev: $reused"; fi
 
         # A short summary for the comment (see action/counts.jq).
         jq -f "$GITHUB_ACTION_PATH/action/counts.jq" "$dir/analysis.json" > "$dir/counts.json"
@@ -344,6 +374,7 @@ runs:
             echo "previous-state=$(cat "$dir/previous.json")"
           fi
           if [ "$COMMENT" != "false" ]; then echo "comment-dir=$dir/comment"; fi
+          if [ -s "$dir/analysis/head-analysis.json.gz" ]; then echo "analysis=$dir/analysis/head-analysis.json.gz"; fi
         } >> "$GITHUB_OUTPUT"
     - name: Cache the analysis' target directory
       if: steps.check.outputs.trust == 'true' && inputs.cache == 'true' && inputs.cache-target == 'true' && inputs.save-cache == 'true' && steps.target.outputs.cache-hit != 'true'
@@ -369,6 +400,16 @@ runs:
         path: ${{ steps.run.outputs.since-page }}
         archive: false
         retention-days: ${{ inputs.retention-days }}
+    - name: Upload the analysis for the next run
+      if: steps.run.outputs.analysis != ''
+      uses: actions/upload-artifact@v7
+      with:
+        # previous-analysis.sh looks for it by this name.
+        name: rust-semantic-review-analysis
+        path: ${{ steps.run.outputs.analysis }}
+        # Gzipped already.
+        compression-level: 0
+        retention-days: ${{ inputs.retention-days }}
     - name: Link the page
       id: link
       if: steps.run.outputs.page != ''
@@ -392,6 +433,7 @@ runs:
         RETENTION_DAYS: ${{ inputs.retention-days }}
         SINCE_SUMMARY: ${{ steps.run.outputs.since-summary }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        RUN_ID: ${{ github.run_id }}
       run: '"$GITHUB_ACTION_PATH/action/post-comment.sh"'
     - name: Upload the data for the comment
       # With `workflow-run`, and with `true` when this run's token could not
