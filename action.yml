@@ -267,18 +267,17 @@ runs:
         "$TOOL" pr "$REPO#$PR" -o "$page" --json "$dir/analysis.json" "${args[@]}" "${trusted[@]}" > "$dir/stdout"
         since=$(sed -n 's/^since: //p' "$dir/stdout" | tail -n1)
 
-        # A one-line summary for the comment: changed items (not modules),
-        # how many of them are public, and changed files.
+        # A short summary for the comment: changed items (not modules), how
+        # many of them are public, and changed files. The page has the
+        # breakdown into added, changed and removed.
         summarize() {
           jq -r '
             [.items[] | select(.kind != "mod" and .status != "unchanged")] as $c
-            | ($c | map(select(.status == "added")) | length) as $a
-            | ($c | map(select(.status == "changed")) | length) as $ch
-            | ($c | map(select(.status == "removed")) | length) as $r
             | ($c | map(select((.public_paths // []) | length > 0)) | length) as $p
             | (.files | length) as $f
-            | if ($c | length) == 0 then "No Rust items changed; \($f) changed files."
-              else "\($c | length) changed items (\($a) added, \($ch) changed, \($r) removed), \($p) of them public, in \($f) changed files."
+            | (if $f == 1 then "1 file" else "\($f) files" end) as $files
+            | if ($c | length) == 0 then "no Rust items changed (\($files) changed)."
+              else "\($c | length) \(if ($c | length) == 1 then "item" else "items" end) changed (\($p) public) in \($files)."
               end
             + (if .semver_checks == null then ""
                elif .semver_checks.error != null then " cargo-semver-checks could not check this PR."
@@ -342,9 +341,26 @@ runs:
         PREVIOUS_STATE: ${{ steps.run.outputs.previous-state }}
         SINCE: ${{ steps.run.outputs.since }}
         SINCE_URL: ${{ steps.upload-since.outputs.artifact-url }}
+        ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        SINCE_ARTIFACT_ID: ${{ steps.upload-since.outputs.artifact-id }}
+        RETENTION_DAYS: ${{ inputs.retention-days }}
         SINCE_SUMMARY: ${{ steps.run.outputs.since-summary }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
+        # When an artifact expires: from the API (needs `actions: read`),
+        # else from the `retention-days` input; empty if neither works.
+        expiry() {
+          local at=
+          if [ -n "$1" ]; then
+            at=$(gh api "repos/$REPO/actions/artifacts/$1" --jq '.expires_at' 2>/dev/null) || at=
+          fi
+          if [ -z "$at" ] && [ -n "$RETENTION_DAYS" ]; then
+            at=$(date -u -d "+$RETENTION_DAYS days" +%Y-%m-%dT%H:%M:%SZ)
+          fi
+          printf '%s' "$at"
+        }
+        expires=$(expiry "$ARTIFACT_ID")
+
         # A new comment for every push that changed the PR, with the
         # changes since the previous comment's commit. A push that only
         # merged the base branch or rebased onto it (and a re-run) updates
@@ -357,36 +373,51 @@ runs:
           since=
           if [ "$SINCE" = "changes" ]; then
             since=$(jq -nc --arg from "$PREVIOUS" --arg to "$HEAD" --arg url "$SINCE_URL" \
-              --arg summary "$SINCE_SUMMARY" '{$from, $to, $url, $summary}')
+              --arg summary "$SINCE_SUMMARY" --arg expires "$(expiry "$SINCE_ARTIFACT_ID")" \
+              '{$from, $to, $url, $summary} + (if $expires != "" then {$expires} else {} end)')
           fi
         fi
         state=$(jq -nc --arg head "$HEAD" --argjson since "${since:-null}" \
           '{$head} + (if $since then {$since} else {} end)')
+        # Commit hashes are written out in full and not as code, so that
+        # GitHub links them (shown shortened).
         body="<!-- rust-pr-explorer $state -->
         ### Rust PR Explorer
 
-        - **[All changes]($URL)** up to \`${HEAD:0:7}\`: $SUMMARY"
+        - **[All changes]($URL)** up to $HEAD: $SUMMARY"
+        footer="Built by [this run]($RUN_URL)."
         if [ -n "$since" ]; then
           from=$(jq -r '.from' <<< "$since")
           to=$(jq -r '.to' <<< "$since")
           upto=
-          if [ "$to" != "$HEAD" ]; then upto=" up to \`${to:0:7}\`"; fi
+          if [ "$to" != "$HEAD" ]; then upto=" up to $to"; fi
           body="$body
-        - **[Changes since \`${from:0:7}\`]($(jq -r '.url' <<< "$since"))**$upto: $(jq -r '.summary' <<< "$since")
-
-        \`${from:0:7}\` is the commit the previous explorer comment showed. What the base branch changed since then (merged in or rebased onto) is left out."
+        - **[Changes since]($(jq -r '.url' <<< "$since"))** $from (previous comment)$upto: $(jq -r '.summary' <<< "$since")"
+          footer="$footer \"Changes since\" leaves out what the base branch brought in."
+          # The links expire with the earlier of the two artifacts.
+          since_expires=$(jq -r '.expires // ""' <<< "$since")
+          if [ -n "$since_expires" ] && { [ -z "$expires" ] || [[ "$since_expires" < "$expires" ]]; }; then
+            expires=$since_expires
+          fi
         elif [ "$mode" = new ] && [[ "$SINCE" == unavailable* ]]; then
           body="$body
-        - The changes since \`${PREVIOUS:0:7}\`, the commit the previous explorer comment showed, could not be shown ${SINCE#unavailable }."
+        - The changes since $PREVIOUS, the previous comment's commit, could not be shown ${SINCE#unavailable }."
         fi
         if [ "$mode" = update ] && [ "$PREVIOUS" != "$HEAD" ]; then
           body="$body
 
-        Updated for \`${HEAD:0:7}\`, which only merged the base branch or was rebased onto it."
+        Updated for $HEAD, which only merged the base branch or was rebased onto it."
+        fi
+        # Anyone can read the comment of a public repository, but GitHub
+        # serves artifacts only to people who are signed in.
+        if [ -n "$expires" ]; then
+          footer="$footer The pages need a GitHub login and expire on $(date -u -d "$expires" '+%-d %b %Y')."
+        else
+          footer="$footer The pages need a GitHub login and expire with the run's artifacts."
         fi
         body="$body
 
-        Built by [this run]($RUN_URL). The links need a GitHub login with access to this repository, and they expire with the run's artifacts."
+        <sub>$footer</sub>"
         {
           echo "### Rust PR Explorer"
           echo
