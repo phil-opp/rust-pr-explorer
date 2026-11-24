@@ -40,7 +40,7 @@ pub struct CrateSrc {
     pub publish: bool,
     /// The package allows breaking changes without a major version bump:
     /// `allow-breaking-changes = true` under
-    /// `[package.metadata.semantic-review]`, for crates that don't follow
+    /// `[package.metadata.rust-semantic-review]`, for crates that don't follow
     /// SemVer on purpose (internal crates).
     pub allow_breaking: bool,
 }
@@ -1079,7 +1079,7 @@ pub fn find_crates(root: &Path) -> Vec<CrateSrc> {
         };
         let allow_breaking = package
             .get("metadata")
-            .and_then(|m| m.get("semantic-review"))
+            .and_then(|m| m.get("rust-semantic-review"))
             .and_then(|m| m.get("allow-breaking-changes"))
             .and_then(|v| v.as_bool())
             == Some(true);

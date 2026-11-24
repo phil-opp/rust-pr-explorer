@@ -122,7 +122,7 @@ Under the counts, every breaking change is listed by its public path, with its f
 Crates that don't follow SemVer on purpose, such as internal crates, can allow breaking changes in their `Cargo.toml`:
 
 ```toml
-[package.metadata.semantic-review]
+[package.metadata.rust-semantic-review]
 allow-breaking-changes = true
 ```
 

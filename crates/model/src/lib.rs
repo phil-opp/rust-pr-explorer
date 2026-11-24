@@ -515,7 +515,7 @@ pub struct CrateVersion {
     pub publish: bool,
     /// The base's manifest allows breaking changes without a major version
     /// bump (`allow-breaking-changes` under
-    /// `[package.metadata.semantic-review]`). Taken from the base, so that
+    /// `[package.metadata.rust-semantic-review]`). Taken from the base, so that
     /// a PR can't silence the warning about its own breaking change.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub allow_breaking: bool,

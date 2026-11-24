@@ -1509,7 +1509,7 @@ fn breaking_changes_can_be_allowed_per_crate() {
     let tree = |allowed: bool| {
         let dir = write_crate(&[("src/lib.rs", "")]);
         let meta = if allowed {
-            "[package.metadata.semantic-review]\nallow-breaking-changes = true\n"
+            "[package.metadata.rust-semantic-review]\nallow-breaking-changes = true\n"
         } else {
             ""
         };
