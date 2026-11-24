@@ -271,17 +271,30 @@ runs:
         "$TOOL" pr "$REPO#$PR" -o "$page" --json "$dir/analysis.json" "${args[@]}" "${trusted[@]}" > "$dir/stdout"
         since=$(sed -n 's/^since: //p' "$dir/stdout" | tail -n1)
 
-        # A short summary for the comment: changed items (not modules), how
-        # many of them are public, and changed files. The page has the
-        # breakdown into added, changed and removed.
+        # A short summary for the comment: how many changes, how many of
+        # them are public, and in how many files. A change is what the page
+        # shows as one box, the same for every language: a changed Rust
+        # item (not a module), a changed part of another file (a Python
+        # function, a YAML key, a CSS rule, a dependency entry, a locked
+        # package, Rust code outside every item), or a whole file the page
+        # doesn't break down. The page has the breakdown by kind and status.
         summarize() {
           jq -r '
-            [.items[] | select(.kind != "mod" and .status != "unchanged")] as $c
-            | ($c | map(select((.public_paths // []) | length > 0)) | length) as $p
+            [.items[] | select(.kind != "mod" and .status != "unchanged")] as $items
+            | ($items | map(select((.public_paths // []) | length > 0)) | length) as $p
+            | ([.files[]
+                | select((.analyzed // false | not) or (.outside_items // 0) > 0)
+                | [(.parts // [] | map(select(.status != "unchanged"))),
+                   (.styles // [] | map(select(.status != "unchanged"))),
+                   (.manifest // []), (.lock // [])]
+                | map(length) | add
+                | if . > 0 then . else 1 end
+              ] | add // 0) as $other
+            | (($items | length) + $other) as $n
             | (.files | length) as $f
             | (if $f == 1 then "1 file" else "\($f) files" end) as $files
-            | if ($c | length) == 0 then "no Rust items changed (\($files) changed)."
-              else "\($c | length) \(if ($c | length) == 1 then "item" else "items" end) changed (\($p) public) in \($files)."
+            | if $n == 0 then "no changes."
+              else "\($n) \(if $n == 1 then "change" else "changes" end)\(if $p > 0 then " (\($p) public)" else "" end) in \($files)."
               end
             + (if .semver_checks == null then ""
                elif .semver_checks.error != null then " cargo-semver-checks could not check this PR."
