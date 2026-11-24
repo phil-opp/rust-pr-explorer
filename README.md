@@ -40,7 +40,7 @@ jobs:
 | `retention-days` | repository setting | How long the page is kept. |
 | `pr`, `repository` | the triggering PR | Analyze another pull request. |
 
-The page is uploaded as a workflow artifact, so only people signed in to GitHub with access to the repository can open it.
+The pages are stored as artifacts of the workflow run: opening one needs a GitHub login with access to the repository, and they expire with the run's artifacts (90 days unless the repository or `retention-days` sets otherwise).
 
 ## Command line
 
