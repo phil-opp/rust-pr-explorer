@@ -9,10 +9,11 @@ branding:
 inputs:
   github-token:
     description: >-
-      Token for cloning the repository, reading the PR's title, branches and
-      review threads, and writing the comment. Needs `contents: read`,
-      `pull-requests: read` for the review threads, and `pull-requests: write`
-      for the comment.
+      Token for cloning the repository, reading the PR's title, branches,
+      review threads and reviews (for the review marks saved in them), and
+      writing the comment. Needs `contents: read`, `pull-requests: read` for
+      the review threads and reviews, and `pull-requests: write` for the
+      comment.
     default: ${{ github.token }}
   pr:
     description: >-
@@ -225,11 +226,13 @@ runs:
             | select(.body | startswith("<!-- semantic-review") or startswith("<!-- rust-pr-explorer"))
             | select(.user.login == "github-actions[bot]"
                 or (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")))
-            | {id, body} | @json' > "$dir/comments.jsonl" \
+            | {id, node_id, bot: (.user.login == "github-actions[bot]"), body} | @json' > "$dir/comments.jsonl" \
             || echo "::warning::Could not read the PR's comments: every run posts a new one, without the changes since the last"
           if [ -s "$dir/comments.jsonl" ]; then
             tail -n1 "$dir/comments.jsonl" | jq -r '.body' > "$dir/previous.md"
             tail -n1 "$dir/comments.jsonl" | jq -r '.id' > "$dir/previous-id"
+            # Only the bot's own comments are hidden when a new one is posted.
+            tail -n1 "$dir/comments.jsonl" | jq -r 'if .bot then .node_id else "" end' > "$dir/previous-node-id"
             # `<!-- semantic-review {…} -->` (`<!-- rust-pr-explorer {…} -->`
             # before the rename), else a comment from before
             # that, which names its commit as "built for <sha>".
@@ -300,6 +303,7 @@ runs:
           fi
           if [ -f "$dir/previous-id" ]; then
             echo "previous-id=$(cat "$dir/previous-id")"
+            echo "previous-node-id=$(cat "$dir/previous-node-id")"
             echo "previous-state=$(cat "$dir/previous.json")"
           fi
         } >> "$GITHUB_OUTPUT"
@@ -340,6 +344,7 @@ runs:
         HEAD: ${{ steps.run.outputs.head }}
         PREVIOUS: ${{ steps.run.outputs.previous }}
         PREVIOUS_ID: ${{ steps.run.outputs.previous-id }}
+        PREVIOUS_NODE_ID: ${{ steps.run.outputs.previous-node-id }}
         PREVIOUS_STATE: ${{ steps.run.outputs.previous-state }}
         SINCE: ${{ steps.run.outputs.since }}
         SINCE_URL: ${{ steps.upload-since.outputs.artifact-url }}
@@ -406,4 +411,15 @@ runs:
         if [ -n "${failed:-}" ]; then
           # E.g. a PR from a fork, whose token is read-only.
           echo "::warning::Could not comment on the PR (does the token have pull-requests: write?): $result"
+        elif [ "$mode" = new ] && [ -n "$PREVIOUS_NODE_ID" ]; then
+          # Collapse the previous comment: the new one has the current
+          # numbers and links. Each new comment hides the one before it, so
+          # only the latest stays expanded.
+          gh api graphql -f id="$PREVIOUS_NODE_ID" -f query='
+            mutation($id: ID!) {
+              minimizeComment(input: { subjectId: $id, classifier: OUTDATED }) {
+                minimizedComment { isMinimized }
+              }
+            }' > /dev/null \
+            || echo "::warning::Could not hide the previous Semantic Review comment"
         fi

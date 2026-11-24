@@ -24,6 +24,10 @@ pub struct Data {
     mod_by_path: HashMap<String, String>,
     /// Where the PR's review threads are shown.
     pub placement: crate::threads::Placement,
+    /// For removed items: the head line of the item that followed them in
+    /// the base version (in the same file and module), if one is still
+    /// there, to sort them where they were.
+    removed_at: HashMap<String, Option<usize>>,
 }
 
 /// `m` is `s` or nested inside it.
@@ -84,7 +88,37 @@ impl Data {
             ext,
             mod_by_path: HashMap::new(),
             placement: Default::default(),
+            removed_at: HashMap::new(),
         };
+        // Kept items by file and module: (base line, head line), sorted.
+        let mut kept: HashMap<(&str, &str), Vec<(usize, usize)>> = HashMap::new();
+        for it in d.out.items.values() {
+            if !matches!(it.status, Status::Added | Status::Removed) {
+                let file = it.old_file.as_deref().unwrap_or(&it.info.file);
+                let old = it.old_line.unwrap_or(it.info.line);
+                kept.entry((file, &it.info.module))
+                    .or_default()
+                    .push((old, it.info.line));
+            }
+        }
+        for list in kept.values_mut() {
+            list.sort();
+        }
+        d.removed_at = d
+            .out
+            .items
+            .values()
+            .filter(|it| it.status == Status::Removed)
+            .map(|it| {
+                let next = kept
+                    .get(&(it.info.file.as_str(), it.info.module.as_str()))
+                    .and_then(|list| {
+                        let i = list.partition_point(|&(old, _)| old <= it.info.line);
+                        list.get(i).map(|&(_, new)| new)
+                    });
+                (it.info.id.clone(), next)
+            })
+            .collect();
         for it in d.out.items.values() {
             if it.info.kind == Kind::Mod {
                 for p in &it.info.public_paths {
@@ -357,16 +391,22 @@ impl Data {
     /// Reading order within a module: by position in the source, except
     /// that a type's impls and associated items come right after the type,
     /// wherever they are.
+    /// Removed items sort where they were in the base version: right
+    /// before the item that followed them there, or at the end.
     pub fn reading_order(&self, a: &Item, b: &Item) -> std::cmp::Ordering {
+        let pos = |it: &Item| match self.removed_at.get(&it.info.id) {
+            Some(next) => (next.unwrap_or(usize::MAX), false, it.info.line),
+            None => (it.info.line, true, 0),
+        };
         let key = |it: &Item| {
             let t = self.type_anchor(it);
             (
                 t.info.file.clone(),
-                t.info.line,
+                pos(t),
                 t.info.id.clone(),
                 t.info.id != it.info.id,
                 it.info.file.clone(),
-                it.info.line,
+                pos(it),
                 it.info.id.clone(),
             )
         };
@@ -1639,6 +1679,60 @@ mod tests {
         assert!(
             html.contains(r#"<code class="pm-ref">fix-parser</code>"#),
             "{html}"
+        );
+    }
+
+    #[test]
+    fn removed_items_sort_where_they_were() {
+        let item = |id: &str, file: &str, line: usize, old_line: Option<usize>, status| Item {
+            info: ItemInfo {
+                id: id.to_string(),
+                kind: Kind::Fn,
+                module: "c".to_string(),
+                file: file.to_string(),
+                line,
+                ..Default::default()
+            },
+            old_line,
+            status,
+            ..Default::default()
+        };
+        // Base: parse (1), validate (6), report (11). Head: read (1),
+        // trim (6), parse (11), report (16). A line diff pairs the old
+        // `parse` with `read` and `trim`, and would put `validate` before
+        // the new `parse`; it was between `parse` and `report`.
+        let lib = "src/lib.rs";
+        let items = [
+            item("c::read", lib, 1, None, Status::Added),
+            item("c::trim", lib, 6, None, Status::Added),
+            item("c::parse", lib, 11, Some(1), Status::Changed),
+            item("c::validate", lib, 6, None, Status::Removed),
+            item("c::report", lib, 16, Some(11), Status::Changed),
+            // In a deleted file: by their old lines.
+            item("c::z", "src/old.rs", 1, None, Status::Removed),
+            item("c::y", "src/old.rs", 5, None, Status::Removed),
+        ];
+        let d = Data::new(Output {
+            items: items
+                .iter()
+                .map(|it| (it.info.id.clone(), it.clone()))
+                .collect(),
+            ..data(PrMeta::default()).out
+        });
+        let mut list: Vec<&Item> = items.iter().collect();
+        list.sort_by(|a, b| d.reading_order(a, b));
+        let ids: Vec<&str> = list.iter().map(|it| it.info.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            [
+                "c::read",
+                "c::trim",
+                "c::parse",
+                "c::validate",
+                "c::report",
+                "c::z",
+                "c::y"
+            ]
         );
     }
 }
