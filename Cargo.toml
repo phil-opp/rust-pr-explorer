@@ -31,8 +31,12 @@ codegen-units = 1
 lto = true
 
 # Used by the GitHub Action (`action.yml`), which builds the tool once per
-# version and caches the binary. Like `release`: the tool's own crates used
-# to be left unoptimized here, which saved about 20 s of a 4.5 minute build
-# but made the analysis of a large workspace (dora) about 15% slower.
+# version and caches the binary, so a slower build pays off: on a large
+# workspace (dora, 4 cores), fat LTO and one codegen unit make the analysis
+# about 9% faster than `release`, for a cold build of about 7 instead of 4.5
+# minutes. The tool's own crates used to be left unoptimized here, which
+# saved about 20 s of the build but made the analysis about 15% slower.
 [profile.action]
 inherits = "release"
+lto = "fat"
+codegen-units = 1

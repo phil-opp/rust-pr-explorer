@@ -77,7 +77,7 @@ inputs:
     default: "false"
   cache:
     description: >-
-      Use the Actions cache for the built tool (about 12 MB), keyed by the
+      Use the Actions cache for the built tool (about 10 MB), keyed by the
       tool's sources, so the tool is only built once per version (about 7
       minutes). With `false`, nothing is read from or written to the cache,
       and every run builds the tool from scratch.
