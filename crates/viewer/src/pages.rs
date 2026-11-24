@@ -5,7 +5,6 @@ use crate::code::esc;
 use crate::data::{Data, changed, kind_order};
 use crate::dom;
 use model::{ChangedFile, Item, Kind, Status};
-use std::collections::BTreeMap;
 
 /// Whether the sidebar lists the modules. Without any Rust change, a tree of
 /// unchanged modules only gets in the way, so it shows only on the module
@@ -446,7 +445,6 @@ fn group_status(module: &Item) -> Option<Status> {
 /// Overview: how does the crate's public surface change?
 pub fn render_overview(app: &App) {
     let d = &app.d;
-    let all: Vec<&Item> = d.items().filter(|it| it.info.kind != Kind::Mod).collect();
     // Also unchanged items that cargo-semver-checks labeled, e.g. a type
     // that is no longer `Send` because of a change elsewhere.
     let is_pub = |it: &Item| d.in_public_api(it) && (changed(it) || it.api.is_some());
@@ -498,37 +496,6 @@ pub fn render_overview(app: &App) {
     }
 
     let public_html: String = d.roots().iter().map(|r| mod_block(d, r, &is_pub)).collect();
-    let mut internal: BTreeMap<String, Vec<&Item>> = BTreeMap::new();
-    for it in all.iter().filter(|it| !d.in_public_api(it) && changed(it)) {
-        internal
-            .entry(d.mod_of(it).to_string())
-            .or_default()
-            .push(it);
-    }
-    for list in internal.values_mut() {
-        list.sort_by(|a, b| d.reading_order(a, b));
-    }
-    let internal_html: String = internal
-        .iter()
-        .map(|(m, list)| {
-            format!(
-                r#"<div class="irow"><div class="ihead"><a data-mod="{}" class="title-name"><span class="k-mod">{}</span></a>
-                <span class="dim">{} changed item{} not in the public API: {}</span><span class="rv-group">{}</span></div>
-                <div class="iacts"><button data-graph="{}">Internal call graph ▸</button></div>{}</div>"#,
-                esc(m),
-                esc(&d.mod_label(m)),
-                list.len(),
-                if list.len() > 1 { "s" } else { "" },
-                list.iter()
-                    .map(|it| crate::review::item_tag(&it.info.id, &d.display_name(it)))
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                crate::review::group_html(list.iter().map(|it| it.info.id.as_str())),
-                esc(m),
-                crate::impact::list_html(d, list),
-            )
-        })
-        .collect();
     // Sections without changes are left out. Without any Rust change, only
     // the analysis warnings remain, and only if no sidebar shows them.
     let rust_html = if !d.rust_changed() {
@@ -548,20 +515,7 @@ pub fn render_overview(app: &App) {
                 help_html("Changed items that other crates can use.")
             )
         };
-        let internal = if internal_html.is_empty() {
-            String::new()
-        } else {
-            format!(
-                r#"<h2>Internal changes {}{}</h2>{internal_html}"#,
-                help_html("Changed items that other crates can't use."),
-                if public.is_empty() {
-                    r#" <span class="h-note">public API unchanged</span>"#
-                } else {
-                    ""
-                }
-            )
-        };
-        unsafe_html + &public + &internal
+        unsafe_html + &crate::graphs::overview_html(d) + &public
     };
     let meta = &d.out.meta;
     let html = format!(

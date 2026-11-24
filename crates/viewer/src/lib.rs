@@ -13,6 +13,7 @@ mod css;
 mod data;
 mod dom;
 mod files;
+mod graphs;
 mod impact;
 mod js;
 mod keys;
@@ -591,6 +592,20 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
     }
     if let Some(b) = dom::closest(el, "[data-open]") {
         open_item(app, &dom::data(&b, "open").unwrap_or_default());
+        return;
+    }
+    if let Some(b) = dom::closest(el, "[data-cgraph]") {
+        let i = dom::data(&b, "cgraph")
+            .and_then(|i| i.parse().ok())
+            .unwrap_or(0);
+        let ids = graphs::graph_items(&app.d, i);
+        if narrow() {
+            if let Some(root) = ids.first() {
+                calls::focus(app, root);
+            }
+        } else {
+            canvas::show_items(app, &ids);
+        }
         return;
     }
     if let Some(b) = dom::closest(el, "[data-graph]") {
