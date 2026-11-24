@@ -1,0 +1,37 @@
+name: Rust Semantic Review comment
+
+# Posts the comment for each run of rust-semantic-review.yml on a pull
+# request, also on PRs from forks, whose runs get a read-only token.
+#
+# `workflow_run` runs this file and the checkout as they are on the default
+# branch, with a token that can write: nothing of the PR is checked out or
+# run here. The comment-only action takes only checked data from the
+# analysis run's artifact (see comment/comment.sh).
+on:
+  workflow_run:
+    workflows: [Rust Semantic Review]
+    types: [completed]
+
+permissions:
+  # To read the analysis run's artifacts and when they expire.
+  actions: read
+  pull-requests: write
+
+# One at a time per PR branch, in order, so that a comment is never posted
+# twice for the same previous one.
+concurrency:
+  group: rust-semantic-review-comment-${{ github.event.workflow_run.head_repository.full_name }}-${{ github.event.workflow_run.head_branch }}
+
+jobs:
+  comment:
+    if: github.event.workflow_run.event == 'pull_request' && github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      # The default branch, for the local action below.
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            action
+            comment
+      - uses: ./comment

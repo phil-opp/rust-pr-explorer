@@ -32,7 +32,7 @@ To keep the action out of the repository's cache storage (10 GB per repository, 
 
 Who can open the page: anyone logged in to GitHub with access to the repository. In a public repository anyone can read the comment, but GitHub serves artifacts only to people who are signed in. The page expires with the run's artifacts (90 days unless the repository sets otherwise, or the `retention-days` input). The comment shows the date when the workflow has `actions: read` permission (to read the artifact's expiry) or sets `retention-days`.
 
-Inputs: `comment: false` leaves out the comment, `syntax-only: true` skips rust-analyzer, `semver-checks: true` adds cargo-semver-checks (see below), and `pr` and `repository` pick another pull request (by default the one that triggered the workflow). The `page-url` output is the link.
+Inputs: `comment: false` leaves out the comment, `comment: workflow-run` leaves it to a second workflow (see [Pull requests from forks](#pull-requests-from-forks)), `syntax-only: true` skips rust-analyzer, `semver-checks: true` adds cargo-semver-checks (see below), and `pr` and `repository` pick another pull request (by default the one that triggered the workflow). The `page-url` output is the link.
 
 Under `pull_request`, the action runs in trusted mode by default (`trust-project-code: auto`): it passes `--trust-project-code`, so calls into code that build scripts and proc macros generate resolve too. That runs the PR's code with the job's token, as a CI job that runs the PR's tests does. Under `pull_request` that is no new risk: a PR from a fork gets a read-only token and no secrets, and a PR from a branch of the repository can change the workflow itself anyway. On a self-hosted runner, that means the build scripts of PRs from forks run on that machine, as they do for any CI job that builds PRs; set `trust-project-code: false` if the runner doesn't already run PR code. When another event analyzes a PR (e.g. `workflow_dispatch` with the `pr` input), whose token may be able to write, `auto` turns it off with a notice; an explicit `true` turns it on there. Under `pull_request_target`, whose token can write and which has the repository's secrets also on PRs from forks, the action refuses `true`. With `trust-project-code: false` the action never builds or runs the PR's code.
 
@@ -50,3 +50,18 @@ Trusted mode builds the build scripts and proc macros of the PR's dependencies, 
 Installing the prebuilt binary adds a few seconds. For a small crate it is cheap; for a crate with heavy dependencies it roughly doubles the analysis. It is independent of `trust-project-code`.
 
 On a PR from a fork, the token GitHub gives the workflow is read-only, so the page is built and uploaded but the comment fails with a warning; the link is still in the job summary.
+
+### Pull requests from forks
+
+With `comment: workflow-run`, the action reads the previous comment as usual but doesn't post: it uploads what the comment needs as the `rust-semantic-review-comment` artifact (the PR number, the analyzed commit, the previous comment's commit, the outcome of `--since`, and the numbers of the summaries). A second workflow, triggered by `workflow_run` when the first one completes, posts the comment with the comment-only action `phil-opp/rust-semantic-review/comment` (see the README for both workflows). `workflow_run` runs the workflow file from the default branch, with a token that can write also when the first run was for a fork. The comment-only action never checks out or runs the PR's code, and it builds nothing: it only uses `gh`, `jq` and `unzip`.
+
+Under `pull_request`, a PR from a fork can change the first workflow and the action, so everything in its artifacts is untrusted. The comment-only action:
+
+- posts only for runs of `pull_request` events that succeeded;
+- takes the PR number from the artifact, but only posts if that PR's head is the run's commit (`workflow_run.head_sha`) in the run's head repository, which also skips the comment of a run that a newer push overtook;
+- accepts the commits only as full hashes and the counts only as numbers, and writes the summaries itself from those numbers;
+- links the pages by the IDs of the artifacts of that run, found by their names, never by a URL from the artifact;
+- finds the previous comment itself, the same way the action does (only Rust Semantic Review comments by the bot or by people with write access), and uses the page of the changes since then only if the analysis started from the same commit;
+- keeps only letters, digits and a few punctuation characters of the reason why the changes since the previous comment couldn't be shown, so that it can't add links, mentions or markup.
+
+Updating the previous comment on a push that only merged the base branch, and hiding the previous comment when a new one is posted, work as with `comment: true`. Both need the workflow's bot to have posted the earlier comments, so switching to this setup keeps working with the comments posted before. Give the second workflow a `concurrency` group per PR branch (as this repository's `.github/workflows/rust-semantic-review-comment.yml` does), so that two runs don't both post a new comment after the same previous one. A `workflow_run` workflow only runs once it is on the default branch, so the PR that adds it gets no comment.

@@ -32,7 +32,12 @@ inputs:
       the PR gets a new comment, which also links a page of the changes
       since the previous comment's commit; a push that only merges the base
       branch or rebases onto it updates the previous comment. With `false`,
-      the link is only in the job summary.
+      the link is only in the job summary. With `workflow-run`, this run
+      only reads the previous comment and uploads the data for the comment
+      as the `rust-semantic-review-comment` artifact, and a second workflow
+      triggered by `workflow_run` posts it with the comment-only action
+      `phil-opp/rust-semantic-review/comment` (see the README): for PRs from
+      forks, whose token is read-only.
     default: "true"
   syntax-only:
     description: Skip rust-analyzer (faster, but method calls stay unresolved).
@@ -109,7 +114,12 @@ runs:
         TRUST: ${{ inputs.trust-project-code }}
         SEMVER_CHECKS: ${{ inputs.semver-checks }}
         PR: ${{ inputs.pr }}
+        COMMENT: ${{ inputs.comment }}
       run: |
+        case "$COMMENT" in
+          true | false | workflow-run) ;;
+          *) echo "::error::comment must be true, false or workflow-run, not '$COMMENT'"; exit 1 ;;
+        esac
         case "$TRUST" in
           true | false | auto) ;;
           *) echo "::error::trust-project-code must be true, false or auto, not '$TRUST'"; exit 1 ;;
@@ -251,38 +261,12 @@ runs:
         dir="$RUNNER_TEMP/rust-semantic-review"
         mkdir -p "$dir"
 
-        # The latest Rust Semantic Review comment on the PR, if any, says which commit
-        # it showed: the page of the changes since then starts there.
-        # Only comments by the workflow's bot or by people with write
-        # access count, so that nobody else can pick that commit (or the
-        # links that are carried over from it).
+        # The latest Rust Semantic Review comment on the PR, if any, says which
+        # commit it showed: the page of the changes since then starts there.
         prev=
-        if [ "$COMMENT" = "true" ]; then
-          gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '
-            .[]
-            | select(.body | startswith("<!-- rust-semantic-review") or startswith("<!-- rust-pr-explorer"))
-            | select(.user.login == "github-actions[bot]"
-                or (.author_association | IN("OWNER", "MEMBER", "COLLABORATOR")))
-            | {id, node_id, bot: (.user.login == "github-actions[bot]"), body} | @json' > "$dir/comments.jsonl" \
-            || echo "::warning::Could not read the PR's comments: every run posts a new one, without the changes since the last"
-          if [ -s "$dir/comments.jsonl" ]; then
-            tail -n1 "$dir/comments.jsonl" | jq -r '.body' > "$dir/previous.md"
-            tail -n1 "$dir/comments.jsonl" | jq -r '.id' > "$dir/previous-id"
-            # Only the bot's own comments are hidden when a new one is posted.
-            tail -n1 "$dir/comments.jsonl" | jq -r 'if .bot then .node_id else "" end' > "$dir/previous-node-id"
-            # `<!-- rust-semantic-review {…} -->` (`<!-- rust-pr-explorer {…} -->`
-            # before the rename), else a comment from before
-            # that, which names its commit as "built for <sha>".
-            state=$(sed -n '1s/^<!-- \(rust-semantic-review\|rust-pr-explorer\) \({.*}\) -->$/\2/p' "$dir/previous.md")
-            if [ -n "$state" ] && jq -e . <<< "$state" > /dev/null 2>&1; then
-              printf '%s' "$state" > "$dir/previous.json"
-              prev=$(jq -r '.head // ""' <<< "$state")
-            else
-              echo '{}' > "$dir/previous.json"
-              prev=$(grep -oE 'built for [0-9a-f]{40}' "$dir/previous.md" | head -n1 | cut -c11-)
-            fi
-            if ! [[ "$prev" =~ ^[0-9a-f]{40}$ ]]; then prev=; fi
-          fi
+        if [ "$COMMENT" != "false" ]; then
+          "$GITHUB_ACTION_PATH/action/previous-comment.sh" "$dir"
+          prev=$(cat "$dir/previous-head")
         fi
 
         # The tool clones the repository itself. Authenticate that clone for
@@ -308,46 +292,40 @@ runs:
         "$TOOL" pr "$REPO#$PR" -o "$page" --json "$dir/analysis.json" "${args[@]}" "${trusted[@]}" > "$dir/stdout"
         since=$(sed -n 's/^since: //p' "$dir/stdout" | tail -n1)
 
-        # A short summary for the comment: the changed Rust items (not
-        # modules), how many of them are public, and the other changed
-        # files: those the page lists as files, not as items (non-Rust
-        # files, and Rust files with changes outside every item). The page
-        # has the breakdown by kind and status.
-        summarize() {
-          jq -r '
-            [.items[] | select(.kind != "mod" and .status != "unchanged")] as $items
-            | ($items | length) as $n
-            | ($items | map(select((.public_paths // []) | length > 0)) | length) as $p
-            | ([.files[] | select((.analyzed // false | not) or (.outside_items // 0) > 0)] | length) as $f
-            | (if $f == 1 then "1 other changed file" else "\($f) other changed files" end) as $other
-            | if $n == 0 and $f == 0 then "no changes."
-              elif $n == 0 then "no Rust items changed, \($other)."
-              else "\($n) Rust \(if $n == 1 then "item" else "items" end) changed"
-                + (if $p > 0 then " (\($p) public)" else "" end)
-                + (if $f > 0 then ", \($other)." else "." end)
-              end
-            + (if .semver_checks == null then ""
-               elif .semver_checks.error != null then " cargo-semver-checks could not check this PR."
-               else " cargo-semver-checks: \(.semver_checks.findings | length) findings."
-               end)
-          ' "$1"
-        }
+        # A short summary for the comment (see action/counts.jq).
+        jq -f "$GITHUB_ACTION_PATH/action/counts.jq" "$dir/analysis.json" > "$dir/counts.json"
+        if [ "$since" = "changes" ]; then
+          jq -f "$GITHUB_ACTION_PATH/action/counts.jq" "$dir/analysis-since.json" > "$dir/since-counts.json"
+        fi
+        summarize() { jq -r -f "$GITHUB_ACTION_PATH/action/summary.jq" "$1"; }
+        head=$(jq -r '.meta.pr.head_commit // ""' "$dir/analysis.json")
+        if [ "$COMMENT" = "workflow-run" ]; then
+          # What the comment-only action (`comment/`) needs besides what it
+          # reads from the API itself. It treats all of it as untrusted.
+          mkdir -p "$dir/comment"
+          jq -n --argjson pr "$PR" --arg head "$head" --arg previous "$prev" --arg since "$since" \
+            --slurpfile counts "$dir/counts.json" \
+            --argjson since_counts "$(cat "$dir/since-counts.json" 2>/dev/null || echo null)" \
+            '{version: 1, $pr, $head, $previous, $since, counts: $counts[0], $since_counts}' \
+            > "$dir/comment/rust-semantic-review-comment.json"
+        fi
         {
           echo "page=$page"
-          echo "summary=$(summarize "$dir/analysis.json")"
-          echo "head=$(jq -r '.meta.pr.head_commit // ""' "$dir/analysis.json")"
+          echo "summary=$(summarize "$dir/counts.json")"
+          echo "head=$head"
           echo "previous=$prev"
           # `changes`, `none` or `unavailable (why)`; empty without --since.
           echo "since=$since"
           if [ "$since" = "changes" ]; then
             echo "since-page=${page%.html}-since.html"
-            echo "since-summary=$(summarize "$dir/analysis-since.json")"
+            echo "since-summary=$(summarize "$dir/since-counts.json")"
           fi
           if [ -f "$dir/previous-id" ]; then
             echo "previous-id=$(cat "$dir/previous-id")"
             echo "previous-node-id=$(cat "$dir/previous-node-id")"
             echo "previous-state=$(cat "$dir/previous.json")"
           fi
+          if [ "$COMMENT" = "workflow-run" ]; then echo "comment-dir=$dir/comment"; fi
         } >> "$GITHUB_OUTPUT"
     - name: Cache the analysis' target directory
       if: steps.check.outputs.trust == 'true' && inputs.cache == 'true' && inputs.cache-target == 'true' && inputs.save-cache == 'true' && steps.target.outputs.cache-hit != 'true'
@@ -373,6 +351,14 @@ runs:
         path: ${{ steps.run.outputs.since-page }}
         archive: false
         retention-days: ${{ inputs.retention-days }}
+    - name: Upload the data for the comment
+      if: steps.run.outputs.comment-dir != ''
+      uses: actions/upload-artifact@v7
+      with:
+        # The comment-only action looks for it by this name.
+        name: rust-semantic-review-comment
+        path: ${{ steps.run.outputs.comment-dir }}
+        retention-days: ${{ inputs.retention-days }}
     - name: Link the page
       if: steps.run.outputs.page != ''
       shell: bash
@@ -380,7 +366,7 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
         PR: ${{ inputs.pr }}
         REPO: ${{ inputs.repository }}
-        COMMENT: ${{ inputs.comment }}
+        POST: ${{ inputs.comment == 'true' }}
         URL: ${{ steps.upload.outputs.artifact-url }}
         SUMMARY: ${{ steps.run.outputs.summary }}
         HEAD: ${{ steps.run.outputs.head }}
@@ -395,118 +381,4 @@ runs:
         RETENTION_DAYS: ${{ inputs.retention-days }}
         SINCE_SUMMARY: ${{ steps.run.outputs.since-summary }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-      run: |
-        # When an artifact expires: from the API (needs `actions: read`),
-        # else from the `retention-days` input; empty if neither works.
-        expiry() {
-          local at=
-          if [ -n "$1" ]; then
-            # Right after the upload the API sometimes answers 404 for a
-            # few seconds, so try a few times.
-            local try
-            for try in 1 2 3 4 5; do
-              if at=$(gh api "repos/$REPO/actions/artifacts/$1" --jq '.expires_at' 2>&1); then
-                break
-              fi
-              if [ "$try" = 5 ]; then
-                echo "::notice::Could not read when the artifact expires (does the token have actions: read?): $at" >&2
-                at=
-              else
-                sleep 3
-              fi
-            done
-          fi
-          if [ -z "$at" ] && [ -n "$RETENTION_DAYS" ]; then
-            at=$(date -u -d "+$RETENTION_DAYS days" +%Y-%m-%dT%H:%M:%SZ)
-          fi
-          printf '%s' "$at"
-        }
-        expires=$(expiry "$ARTIFACT_ID")
-
-        # A new comment for every push that changed the PR, with the
-        # changes since the previous comment's commit. A push that only
-        # merged the base branch or rebased onto it (and a re-run) updates
-        # the previous comment instead, which keeps its "since" link.
-        if [ -n "$PREVIOUS_ID" ] && { [ "$SINCE" = "none" ] || [ "$PREVIOUS" = "$HEAD" ]; }; then
-          mode=update
-          since=$(jq -c '.since // empty' <<< "$PREVIOUS_STATE")
-        else
-          mode=new
-          since=
-          if [ "$SINCE" = "changes" ]; then
-            since=$(jq -nc --arg from "$PREVIOUS" --arg to "$HEAD" --arg url "$SINCE_URL" \
-              --arg summary "$SINCE_SUMMARY" --arg expires "$(expiry "$SINCE_ARTIFACT_ID")" \
-              '{$from, $to, $url, $summary} + (if $expires != "" then {$expires} else {} end)')
-          fi
-        fi
-        state=$(jq -nc --arg head "$HEAD" --argjson since "${since:-null}" \
-          '{$head} + (if $since then {$since} else {} end)')
-        # Commit hashes are written out in full and not as code, so that
-        # GitHub links them (shown shortened).
-        body="<!-- rust-semantic-review $state -->
-        ### Rust Semantic Review
-
-        - **[All changes]($URL)** up to $HEAD: $SUMMARY"
-        footer="Built by [this run]($RUN_URL)."
-        if [ -n "$since" ]; then
-          from=$(jq -r '.from' <<< "$since")
-          to=$(jq -r '.to' <<< "$since")
-          upto=
-          if [ "$to" != "$HEAD" ]; then upto=" up to $to"; fi
-          body="$body
-        - **[Changes since]($(jq -r '.url' <<< "$since"))** $from (previous comment)$upto: $(jq -r '.summary' <<< "$since")"
-          footer="$footer \"Changes since\" leaves out what the base branch brought in."
-          # The links expire with the earlier of the two artifacts.
-          since_expires=$(jq -r '.expires // ""' <<< "$since")
-          if [ -n "$since_expires" ] && { [ -z "$expires" ] || [[ "$since_expires" < "$expires" ]]; }; then
-            expires=$since_expires
-          fi
-        elif [ "$mode" = new ] && [[ "$SINCE" == unavailable* ]]; then
-          body="$body
-        - The changes since $PREVIOUS, the previous comment's commit, could not be shown ${SINCE#unavailable }."
-        fi
-        if [ "$mode" = update ] && [ "$PREVIOUS" != "$HEAD" ]; then
-          body="$body
-
-        Updated for $HEAD, which only merged the base branch or was rebased onto it."
-        fi
-        # Anyone can read the comment of a public repository, but GitHub
-        # serves artifacts only to people who are signed in.
-        if [ -n "$expires" ]; then
-          footer="$footer The pages need a GitHub login and expire on $(date -u -d "$expires" '+%-d %b %Y')."
-        else
-          footer="$footer The pages need a GitHub login and expire with the run's artifacts."
-        fi
-        body="$body
-
-        <sub>$footer</sub>"
-        {
-          echo "### Rust Semantic Review"
-          echo
-          echo "[Open the page]($URL): $SUMMARY"
-          if [ -n "$SINCE_URL" ]; then
-            echo
-            echo "[Changes since ${PREVIOUS:0:7}]($SINCE_URL): $SINCE_SUMMARY"
-          fi
-        } >> "$GITHUB_STEP_SUMMARY"
-        if [ "$COMMENT" != "true" ]; then exit 0; fi
-        if [ "$mode" = update ]; then
-          result=$(gh api -X PATCH "repos/$REPO/issues/comments/$PREVIOUS_ID" -f body="$body" 2>&1) || failed=1
-        else
-          result=$(gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$body" 2>&1) || failed=1
-        fi
-        if [ -n "${failed:-}" ]; then
-          # E.g. a PR from a fork, whose token is read-only.
-          echo "::warning::Could not comment on the PR (does the token have pull-requests: write?): $result"
-        elif [ "$mode" = new ] && [ -n "$PREVIOUS_NODE_ID" ]; then
-          # Collapse the previous comment: the new one has the current
-          # numbers and links. Each new comment hides the one before it, so
-          # only the latest stays expanded.
-          gh api graphql -f id="$PREVIOUS_NODE_ID" -f query='
-            mutation($id: ID!) {
-              minimizeComment(input: { subjectId: $id, classifier: OUTDATED }) {
-                minimizedComment { isMinimized }
-              }
-            }' > /dev/null \
-            || echo "::warning::Could not hide the previous Rust Semantic Review comment"
-        fi
+      run: '"$GITHUB_ACTION_PATH/action/post-comment.sh"'

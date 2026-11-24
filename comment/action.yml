@@ -1,0 +1,35 @@
+name: Rust Semantic Review comment
+description: >-
+  Posts the Rust Semantic Review comment for a pull request whose analysis
+  ran in another workflow with `comment: workflow-run`, e.g. a PR from a
+  fork, whose token is read-only. Meant for a workflow triggered by
+  `workflow_run`. It never checks out or runs the PR's code.
+branding:
+  icon: message-square
+  color: orange
+
+inputs:
+  github-token:
+    description: >-
+      Token for reading the analysis run's artifacts and the PR's comments
+      and for writing the comment. Needs `actions: read` and
+      `pull-requests: write`.
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Post the comment
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+        REPO: ${{ github.repository }}
+        EVENT: ${{ github.event_name }}
+        RUN_ID: ${{ github.event.workflow_run.id }}
+        RUN_EVENT: ${{ github.event.workflow_run.event }}
+        CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+        RUN_URL: ${{ github.event.workflow_run.html_url }}
+        HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
+        SERVER: ${{ github.server_url }}
+      run: '"$GITHUB_ACTION_PATH/comment.sh"'
