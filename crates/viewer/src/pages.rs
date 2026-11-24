@@ -291,14 +291,15 @@ fn item_row(
         None
     };
     let body = format!(
-        "{}{}{}",
+        "{}{}{}{}",
+        crate::unsafety::lines_html(&it.unsafe_code),
         d.api_reasons_html(it),
         crate::impact::line_html(d, it),
         d.item_body_html(it, scope, false, src)
     );
     format!(
         r#"<div class="irow {} {} {} {}" data-id="{}">
-        <div class="ihead"><span class="kind">{}</span>{} {} {} {}</div>
+        <div class="ihead"><span class="kind">{}</span>{} {} {} {}{}</div>
         <div class="iacts">{}{}<button data-open="{}" title="Open on the canvas">Open ▸</button></div>
         {body}</div>"#,
         it.status.css(),
@@ -314,6 +315,7 @@ fn item_row(
         } else {
             String::new()
         },
+        crate::unsafety::tag(it),
         d.api_badge(it),
         crate::review::control_html(&it.info.id),
         crate::post::github_link(
@@ -422,7 +424,7 @@ fn impl_line(d: &Data, m: &Item, badge: bool) -> String {
         },
     );
     format!(
-        r#"<div class="impl-line {}" data-id="{}"><code>{header}</code> {}<span class="grow"></span>{}<button data-open="{}" title="Open on the canvas">Open ▸</button></div>"#,
+        r#"<div class="impl-line {}" data-id="{}"><code>{header}</code> {}{}<span class="grow"></span>{}<button data-open="{}" title="Open on the canvas">Open ▸</button></div>"#,
         m.status.css(),
         esc(&m.info.id),
         if badge || !matches!(m.status, Status::Added | Status::Removed) {
@@ -430,6 +432,7 @@ fn impl_line(d: &Data, m: &Item, badge: bool) -> String {
         } else {
             String::new()
         },
+        crate::unsafety::tag(m),
         crate::review::control_html(&m.info.id),
         esc(&m.info.id),
     )
@@ -535,6 +538,7 @@ pub fn render_overview(app: &App) {
             warnings_html(d)
         }
     } else {
+        let unsafe_html = crate::unsafety::overview_html(d) + &crate::risk::overview_html(d);
         let semver = semver_summary(d);
         let public = if public_html.is_empty() && semver.is_empty() {
             String::new()
@@ -557,7 +561,7 @@ pub fn render_overview(app: &App) {
                 }
             )
         };
-        public + &internal
+        unsafe_html + &public + &internal
     };
     let meta = &d.out.meta;
     let html = format!(

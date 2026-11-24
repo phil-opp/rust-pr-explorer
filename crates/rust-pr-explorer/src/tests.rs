@@ -865,20 +865,27 @@ fn repeated_includes_are_limited() {
 
 #[test]
 fn embedded_data_cannot_end_its_script_element() {
-    let json = serde_json::to_string("Strips `<!--<script>` prefixes. </script>").unwrap();
+    use base64::Engine;
+    use std::io::Read;
+    let json =
+        serde_json::to_string("Strips `<!--<script>` prefixes. </script> {{TITLE}}").unwrap();
     let page = crate::render_page("t", &json);
     let start = page
-        .find(r#"<script id="data" type="application/json">"#)
+        .find(r#"<script id="data" type="application/gzip">"#)
         .unwrap();
     let end = start + page[start..].find("</script>").unwrap();
     let data = &page[start..end];
     assert!(!data[1..].contains('<'), "{data}");
-    // Still the same JSON.
+    // Still the same JSON, once unpacked.
     let inner = &data[data.find('>').unwrap() + 1..];
-    assert_eq!(
-        serde_json::from_str::<String>(inner).unwrap(),
-        "Strips `<!--<script>` prefixes. </script>"
-    );
+    let gz = base64::engine::general_purpose::STANDARD
+        .decode(inner)
+        .unwrap();
+    let mut unpacked = String::new();
+    flate2::read::GzDecoder::new(&gz[..])
+        .read_to_string(&mut unpacked)
+        .unwrap();
+    assert_eq!(unpacked, json);
 }
 
 /// In `git` mode, files come from a worktree: symlinks committed to the
@@ -1494,4 +1501,53 @@ fn crate_versions_follow_the_workspace_and_publish() {
     assert_eq!(versions["member_crate"], v("1.4.2", "2.0.0", false));
     // Binaries have no API.
     assert_eq!(versions.len(), 2, "{versions:?}");
+}
+
+#[test]
+fn unsafe_code_is_tracked_per_item() {
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "pub struct Buf(*mut u8);\n\
+         unsafe impl Send for Buf {}\n\
+         pub unsafe fn read(p: *const u8) -> u8 {\n    *p\n}\n\
+         impl Buf {\n    pub fn first(&self) -> u8 {\n        self.peek()\n    }\n    \
+         fn peek(&self) -> u8 {\n        0\n    }\n}\n",
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        "pub struct Buf(*mut u8);\n\
+         pub unsafe fn read(p: *const u8) -> u8 {\n    p.read()\n}\n\
+         impl Buf {\n    pub fn first(&self) -> u8 {\n        self.peek()\n    }\n    \
+         fn peek(&self) -> u8 {\n        unsafe { *self.0 }\n    }\n}\n",
+    )]);
+    let out = analyze_dirs(base.path(), head.path());
+    let changes = |id: &str| {
+        out.items[id]
+            .unsafe_code
+            .iter()
+            .map(|c| (c.status, c.kind, c.what.clone()))
+            .collect::<Vec<_>>()
+    };
+    use model::UnsafeKind;
+    assert_eq!(
+        changes("t::read"),
+        [(Status::Changed, UnsafeKind::Fn, "unsafe fn read".into())]
+    );
+    assert_eq!(
+        changes("t::Buf::peek"),
+        [(Status::Added, UnsafeKind::Block, "unsafe { … }".into())]
+    );
+    assert_eq!(
+        out.items["t::Buf::peek"].unsafe_code[0].lines,
+        Some((10, 10))
+    );
+    let removed: Vec<_> = out
+        .items
+        .values()
+        .filter(|it| it.status == Status::Removed)
+        .flat_map(|it| it.unsafe_code.iter().map(|c| (c.status, c.kind)))
+        .collect();
+    assert_eq!(removed, [(Status::Removed, UnsafeKind::Impl)]);
+    // The impl and the method that only calls `peek` touch no unsafe code.
+    assert!(changes("t::Buf::first").is_empty());
 }

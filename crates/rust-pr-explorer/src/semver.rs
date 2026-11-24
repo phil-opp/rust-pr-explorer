@@ -603,6 +603,7 @@ mod tests {
             doc_hidden: false,
             call_sites: Vec::new(),
             ext_sites: Default::default(),
+            unsafe_sites: Vec::new(),
         }
     }
 

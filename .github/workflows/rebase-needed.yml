@@ -8,16 +8,25 @@ name: Rebase needed
 # into conflicts again later, it gets a new, visible review.
 #
 # A push to `main` can put any open PR in conflict, so it checks all of them.
-# A push to a PR (or a change of its base branch) checks only that PR.
+# A push to a PR from a branch of this repository (or a change of its base
+# branch) checks only that PR, so a resolved conflict is noticed right away.
 #
-# `pull_request_target` runs this file from the base branch with a token that
-# can write reviews also on PRs from forks. That is safe here because the job
-# never checks out or runs the PR's code: it only calls the GitHub API.
+# PRs from forks get a read-only token on `pull_request`, so they are skipped
+# there and covered by the hourly scheduled run instead, which also checks
+# all open PRs. That run also catches PRs whose mergeability GitHub had not
+# computed yet when an earlier run looked at them.
+#
+# This used `pull_request_target` before, which gives a write token also for
+# forks, but GitHub restricts that trigger on public repositories by default.
+# Scheduled runs only happen on the default branch, and GitHub pauses them
+# after 60 days without activity in the repository.
 on:
   push:
     branches: [main]
-  pull_request_target:
+  pull_request:
     types: [opened, reopened, synchronize, edited, ready_for_review]
+  schedule:
+    - cron: '17 * * * *'
   workflow_dispatch:
 
 permissions:
@@ -35,11 +44,12 @@ jobs:
   check:
     runs-on: ubuntu-latest
     # `edited` also fires for title and description edits: only a change of
-    # the base branch can change whether the PR has conflicts.
+    # the base branch can change whether the PR has conflicts. PRs from forks
+    # can't write reviews or labels here; the scheduled run covers them.
     if: >-
-      github.event_name != 'pull_request_target' ||
-      github.event.action != 'edited' ||
-      github.event.changes.base != null
+      github.event_name != 'pull_request' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       (github.event.action != 'edited' || github.event.changes.base != null))
     steps:
       - uses: actions/github-script@v7
         with:
@@ -89,7 +99,7 @@ jobs:
               const { pr, mergeable } = await fetchMergeable(number);
               if (pr.state !== 'open') return;
               if (mergeable === null) {
-                core.warning(`#${number}: GitHub did not report whether it can be merged; skipped.`);
+                core.warning(`#${number}: GitHub did not report whether it can be merged; skipped until the next run.`);
                 return;
               }
               // `mergeable` is false only for conflicts; failing checks or
@@ -171,13 +181,19 @@ jobs:
             }
 
             let numbers;
-            if (context.eventName === 'pull_request_target') {
+            if (context.eventName === 'pull_request') {
               numbers = [context.payload.pull_request.number];
             } else {
               const prs = await github.paginate(github.rest.pulls.list, {
                 owner, repo, state: 'open', per_page: 100,
               });
               numbers = prs.map((p) => p.number);
+              // Fetching a PR starts GitHub's mergeability computation. Do it
+              // for all of them first, so they compute in parallel instead of
+              // one after the other while `check` polls each in turn.
+              for (const number of numbers) {
+                await github.rest.pulls.get({ owner, repo, pull_number: number });
+              }
             }
 
             let failed = false;

@@ -350,6 +350,7 @@ impl Checkout {
                     .map(str::to_string),
                 base_ref,
                 base_rev: short(&base_rev).to_string(),
+                base_commit: base_rev.clone(),
                 head_ref: gh.as_ref().map(|i| i.head_ref_name.clone()),
                 head_owner: gh
                     .as_ref()
