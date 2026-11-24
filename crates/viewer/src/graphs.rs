@@ -41,6 +41,8 @@ pub struct Graph {
     pub types: Vec<String>,
     /// Test functions that reach the graph.
     pub tests: Vec<String>,
+    /// Changed test helpers that those tests call.
+    pub helpers: Vec<String>,
 }
 
 /// A changed function of a graph.
@@ -262,6 +264,8 @@ pub fn graphs(d: &Data) -> Graphs {
         .collect();
     for t in &tests {
         let mut hit: BTreeSet<usize> = BTreeSet::new();
+        // Changed test helpers the test calls, in call order.
+        let mut helpers: Vec<&str> = Vec::new();
         let mut seen = HashSet::from([t.info.id.as_str()]);
         let mut queue = VecDeque::from([(t.info.id.as_str(), 0)]);
         while let Some((x, depth)) = queue.pop_front() {
@@ -269,6 +273,9 @@ pub fn graphs(d: &Data) -> Graphs {
                 hit.insert(g);
             }
             let Some(it) = d.item(x) else { continue };
+            if depth > 0 && is_test(it) && !it.info.test && listed(d, it) {
+                helpers.push(x);
+            }
             if depth == TEST_DEPTH {
                 continue;
             }
@@ -284,6 +291,12 @@ pub fn graphs(d: &Data) -> Graphs {
         for g in hit {
             graphs[g].tests.push(t.info.id.clone());
             shown_tests.insert(t.info.id.as_str());
+            for &h in &helpers {
+                if !graphs[g].helpers.iter().any(|x| x == h) {
+                    graphs[g].helpers.push(h.to_string());
+                }
+                shown_tests.insert(h);
+            }
         }
     }
 
@@ -432,6 +445,22 @@ fn plain_link(d: &Data, id: &str, title: &str) -> String {
     )
 }
 
+/// The SemVer label of a public item that needs attention: "⚠ breaking"
+/// or "? check by hand". Non-breaking changes, the usual case, and
+/// allowed breaking ones get none, so that these stand out.
+fn api_tag(d: &Data, it: &Item) -> String {
+    let attention = it
+        .api
+        .as_ref()
+        .is_some_and(|a| a.level != model::ApiLevel::Compatible)
+        && !d.breaking_allowed(it);
+    if attention && d.in_public_api(it) {
+        d.api_badge(it)
+    } else {
+        String::new()
+    }
+}
+
 /// A badge for a new or removed item. Changed items, the usual case,
 /// have none, so that the new ones stand out.
 fn badge(it: &Item) -> &'static str {
@@ -442,18 +471,66 @@ fn badge(it: &Item) -> &'static str {
     }
 }
 
-/// "Reached from `start` via `load`, `on_click`".
+/// A bulleted list, folded after `shown` entries.
+fn bullets(entries: Vec<String>, shown: usize, more: &str) -> String {
+    if entries.is_empty() {
+        return String::new();
+    }
+    let li = |e: &String| format!("<li>{e}</li>");
+    let head: String = entries.iter().take(shown).map(li).collect();
+    let rest = if entries.len() > shown {
+        format!(
+            r#"<details class="cg-fold"><summary>{} {more}</summary><ul class="cg-bul">{}</ul></details>"#,
+            entries.len() - shown,
+            entries.iter().skip(shown).map(li).collect::<String>()
+        )
+    } else {
+        String::new()
+    };
+    let list = if head.is_empty() {
+        String::new()
+    } else {
+        format!(r#"<ul class="cg-bul">{head}</ul>"#)
+    };
+    list + &rest
+}
+
+/// One labeled part of a graph.
+fn fact(label: &str, body: &str) -> String {
+    if body.is_empty() {
+        return String::new();
+    }
+    format!(r#"<div class="cg-label">{label}</div><div class="cg-val">{body}</div>"#)
+}
+
+/// Links to changed items, with their new or removed badge.
+fn changed_links(d: &Data, ids: &[String]) -> Vec<String> {
+    ids.iter()
+        .map(|id| {
+            let (b, api) = d
+                .item(id)
+                .filter(|it| changed(it))
+                .map_or(("", String::new()), |it| (badge(it), api_tag(d, it)));
+            format!("{} {b} {api}", item_link(d, id))
+                .trim_end()
+                .to_string()
+        })
+        .collect()
+}
+
+/// The graph's public roots, and where its other roots are reached
+/// from: "`start` via `load`".
 fn entries_html(d: &Data, g: &Graph) -> String {
-    let public_roots: Vec<&String> = g
+    let public: Vec<String> = g
         .roots
         .iter()
         .filter(|r| d.item(r).is_some_and(|it| d.in_public_api(it)))
+        .map(|r| plain_link(d, r, "Public item"))
         .collect();
     let mut paths = entries(d, g);
     paths.sort_by_key(Vec::len);
-    let mut parts: Vec<String> = paths
+    let reached: Vec<String> = paths
         .iter()
-        .take(SHOWN_ENTRIES)
         .map(|path| {
             let title = path
                 .iter()
@@ -471,35 +548,13 @@ fn entries_html(d: &Data, g: &Graph) -> String {
             s
         })
         .collect();
-    if paths.len() > SHOWN_ENTRIES {
-        parts.push(format!("{} more", paths.len() - SHOWN_ENTRIES));
-    }
-    let public = match public_roots.len() {
-        0 => String::new(),
-        1 if g.roots.len() == 1 => "Public API".to_string(),
-        _ => format!(
-            "Public API: {}",
-            public_roots
-                .iter()
-                .map(|r| format!("<code>{}</code>", esc(&d.display_name_of(r))))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-    };
-    let reached = if parts.is_empty() {
-        String::new()
+    let reached = if reached.is_empty() && public.is_empty() {
+        r#"<span class="dim">No resolved caller: called through a trait, from a macro, or not at all</span>"#
+            .to_string()
     } else {
-        format!("Reached from {}", parts.join(", "))
+        bullets(reached, SHOWN_ENTRIES, "more")
     };
-    let text = match (public.is_empty(), reached.is_empty()) {
-        (false, false) => format!("{public} · {reached}"),
-        (false, true) => public,
-        (true, false) => reached,
-        (true, true) => {
-            "No resolved caller: called through a trait, from a macro, or not at all".to_string()
-        }
-    };
-    format!(r#"<div class="cg-line dim">{text}</div>"#)
+    fact("Public API", &public.join(", ")) + &fact("Reached from", &reached)
 }
 
 /// One graph as an overview entry.
@@ -511,10 +566,10 @@ fn graph_html(d: &Data, i: usize, g: &Graph) -> String {
         .count();
     let count = match (g.rows.len(), new) {
         (1, 1) => "new function".to_string(),
-        (1, _) => "1 function".to_string(),
-        (n, 0) => format!("{n} functions"),
+        (1, _) => "1 function changed".to_string(),
+        (n, 0) => format!("{n} functions changed"),
         (n, k) if k == n => format!("{n} new functions"),
-        (n, k) => format!("{n} functions, {k} new"),
+        (n, k) => format!("{n} functions changed, {k} new"),
     };
     let head: String = g
         .roots
@@ -538,10 +593,11 @@ fn graph_html(d: &Data, i: usize, g: &Graph) -> String {
             )
         });
         format!(
-            r#"<li style="--depth:{}">{}{via} {}</li>"#,
+            r#"<li style="--depth:{}">{}{via} {} {}</li>"#,
             r.depth.min(MAX_INDENT),
             item_link(d, &r.id),
             badge(it),
+            api_tag(d, it),
         )
     };
     let shown: String = g.rows.iter().take(SHOWN_ROWS).map(row).collect();
@@ -554,26 +610,6 @@ fn graph_html(d: &Data, i: usize, g: &Graph) -> String {
     } else {
         String::new()
     };
-    let list = |label: &str, ids: &[String]| {
-        if ids.is_empty() {
-            return String::new();
-        }
-        let links: Vec<String> = ids
-            .iter()
-            .map(|id| {
-                let b = d
-                    .item(id)
-                    .filter(|it| changed(it))
-                    .map_or("", |it| badge(it));
-                format!("{} {b}", item_link(d, id)).trim_end().to_string()
-            })
-            .collect();
-        format!(
-            r#"<div class="cg-line"><span class="dim">{label}:</span> {}</div>"#,
-            links.join(", ")
-        )
-    };
-    let tests: Vec<String> = g.tests.clone();
     let ids = g
         .rows
         .iter()
@@ -582,14 +618,15 @@ fn graph_html(d: &Data, i: usize, g: &Graph) -> String {
         .chain(
             g.tests
                 .iter()
+                .chain(&g.helpers)
                 .filter(|t| d.item(t).is_some_and(changed))
                 .map(String::as_str),
         );
     format!(
-        r#"<div class="irow cgraph"><div class="ihead"><span class="kind">fn</span><span class="cg-roots">{head}{more_roots}</span><span class="dim">{count}</span><span class="rv-group">{}</span></div>
+        r#"<div class="irow cgraph"><div class="ihead"><span class="cg-roots">{head}{more_roots}</span></div>
         <div class="iacts"><button data-cgraph="{i}" title="{}">{}</button></div>
-        {}<ul class="cg-tree">{shown}</ul>{folded}{}{}</div>"#,
-        crate::review::group_html(ids),
+        <div class="cg-sub"><span class="dim">{count}</span><span class="rv-group">{}</span></div>
+        <div class="cg-facts">{}{}{}{}</div></div>"#,
         if crate::narrow() {
             "Show the root in the call view"
         } else {
@@ -600,44 +637,55 @@ fn graph_html(d: &Data, i: usize, g: &Graph) -> String {
         } else {
             "Canvas ▸"
         },
+        crate::review::group_html(ids),
         entries_html(d, g),
-        list("Types and constants", &g.types),
-        list_tests(d, &tests),
+        fact(
+            "Calls",
+            &format!(r#"<ul class="cg-tree">{shown}</ul>{folded}"#)
+        ),
+        fact(
+            "Types and constants",
+            &bullets(changed_links(d, &g.types), usize::MAX, "")
+        ),
+        fact("Tests", &tests_html(d, &g.tests, &g.helpers)),
     )
 }
 
-/// "Tested by: …": the changed tests by name, the unchanged ones as a
-/// count with their names on hover, since a widely used function can be
-/// reached by dozens of them.
-fn list_tests(d: &Data, tests: &[String]) -> String {
+/// The tests that reach a graph: the changed ones and the changed test
+/// helpers they call by name, the unchanged ones folded, since a widely
+/// used function can be reached by dozens of them.
+fn tests_html(d: &Data, tests: &[String], helpers: &[String]) -> String {
     if tests.is_empty() {
         return String::new();
     }
-    let (changed_tests, unchanged): (Vec<&String>, Vec<&String>) =
-        tests.iter().partition(|id| d.item(id).is_some_and(changed));
-    let mut links: Vec<String> = changed_tests
+    let (changed_tests, unchanged): (Vec<String>, Vec<String>) = tests
         .iter()
-        .map(|id| {
-            let b = d.item(id).map_or("", badge);
-            format!("{} {b}", item_link(d, id)).trim_end().to_string()
-        })
-        .collect();
-    match unchanged.len() {
-        0 => {}
-        1 => links.push(plain_link(d, unchanged[0], "Unchanged test function")),
-        n => links.push(format!(
-            r#"<span class="cg-more" title="{}">{n} unchanged tests</span>"#,
-            esc(&unchanged
-                .iter()
-                .map(|id| d.display_name_of(id))
-                .collect::<Vec<_>>()
-                .join(", "))
-        )),
-    }
-    format!(
-        r#"<div class="cg-line"><span class="dim">Tested by:</span> {}</div>"#,
-        links.join(", ")
-    )
+        .cloned()
+        .partition(|id| d.item(id).is_some_and(changed));
+    let mut entries = changed_links(d, &changed_tests);
+    entries.extend(
+        changed_links(d, helpers)
+            .into_iter()
+            .map(|l| format!(r#"{l} <span class="dim">helper</span>"#)),
+    );
+    let shown = entries.len();
+    entries.extend(
+        unchanged
+            .iter()
+            .map(|id| plain_link(d, id, "Unchanged test function")),
+    );
+    let more = if shown == 0 {
+        "tests, all unchanged"
+    } else {
+        "unchanged tests"
+    };
+    // A lone unchanged test isn't worth folding.
+    let shown = if entries.len() == shown + 1 {
+        entries.len()
+    } else {
+        shown
+    };
+    bullets(entries, shown, more)
 }
 
 /// The overview's section. Empty without changed Rust items.
@@ -676,23 +724,16 @@ pub fn overview_html(d: &Data) -> String {
         if ids.is_empty() {
             return String::new();
         }
-        let links: Vec<String> = ids
-            .iter()
-            .map(|id| {
-                let b = d.item(id).map_or("", badge);
-                format!("{} {b}", item_link(d, id)).trim_end().to_string()
-            })
-            .collect();
         format!(
-            r#"<div class="irow cgraph cg-extra"><div class="ihead"><span class="title-name">{label}</span><span class="dim">{what}</span><span class="rv-group">{}</span></div><div class="cg-line">{}</div></div>"#,
+            r#"<div class="irow cgraph cg-extra"><div class="ihead"><span class="cg-title">{label}</span><span class="dim">{what}</span></div><div class="cg-sub"><span class="rv-group">{}</span></div><div class="cg-facts">{}</div></div>"#,
             crate::review::group_html(ids.iter().map(String::as_str)),
-            links.join(", ")
+            bullets(changed_links(d, ids), usize::MAX, "")
         )
     };
     format!(
         r#"<h2>Changed call graphs <span class="h-note">{note}</span> {}</h2>{graphs}{}{}{}"#,
         crate::pages::help_html(
-            "Each graph starts at a changed function that no other changed function calls, and lists the changed functions it reaches, in call order (indented by call depth). Graphs that share a function are merged. Only resolved calls are followed. Functions without a badge changed; new ones are marked."
+            "Each graph starts at a changed function that no other changed function calls, and lists the changed functions it reaches, in call order (indented by call depth). Graphs that share a function are merged. Only resolved calls are followed. Functions without a badge changed; new ones are marked. Test helpers are listed with the tests that call them."
         ),
         extra("Other changed tests", &gs.tests, "reach no graph"),
         extra(
@@ -834,6 +875,22 @@ mod tests {
         assert_eq!(gs.graphs[1].types, vec!["c::Ty"]);
         assert_eq!(gs.graphs[2].types, vec!["c::Ty"]);
         assert_eq!(gs.other, vec!["c::Unused"]);
+    }
+
+    #[test]
+    fn test_helpers_go_with_the_tests_that_call_them() {
+        use Status::*;
+        let mut test = f("c::tests::t", Changed, &["c::tests::decode", "c::run"]);
+        test.1.info.test = true;
+        let mut helper = f("c::tests::decode", Added, &[]);
+        helper.1.info.test_only = true;
+        let mut lone = f("c::tests::lone_helper", Added, &[]);
+        lone.1.info.test_only = true;
+        let d = data(vec![f("c::run", Changed, &[]), test, helper, lone]);
+        let gs = graphs(&d);
+        assert_eq!(gs.graphs[0].tests, vec!["c::tests::t"]);
+        assert_eq!(gs.graphs[0].helpers, vec!["c::tests::decode"]);
+        assert_eq!(gs.tests, vec!["c::tests::lone_helper"]);
     }
 
     #[test]

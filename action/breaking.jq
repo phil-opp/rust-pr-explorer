@@ -1,6 +1,7 @@
 # The comment's list of breaking changes, as Markdown, from counts.jq's
 # numbers and the page's URL (`--arg url`); empty if there are none. Each
-# item links to its row on the page's overview (`#/overview/item/<id>`).
+# item links to it on the page (`#/overview/item/<id>`, which opens its
+# row on its module page).
 #
 # The comment-only action reads the list from an artifact of a run on the
 # PR's code, so all of it is reduced to what such a list needs: the ids are

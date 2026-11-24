@@ -109,9 +109,10 @@ try {
       await check_contrast(page, scheme, `${view} view`);
     }
 
-    // Open an item from the overview on the canvas.
+    // Open an item from the overview's call graphs on the canvas.
     await page.click('#views [data-view="overview"]');
-    const open = page.locator("#view-overview [data-open]").first();
+    const items = "#view-overview .cgraph a.ref[data-id]";
+    const open = page.locator(items).first();
     if ((await open.count()) === 0) {
       fail("the overview has no item to open");
     } else {
@@ -123,12 +124,12 @@ try {
         // Each listed item alone on the canvas, with its body diff
         // expanded, so that changed words in source diffs are checked too.
         // One at a time: axe skips text that another card covers.
-        const ids = await page.$$eval("#view-overview [data-open]", (els) => els.map((e) => e.dataset.open));
+        const ids = [...new Set(await page.$$eval(items, (els) => els.map((e) => e.dataset.id)))];
         for (const id of ids) {
           await page.click('#views [data-view="canvas"]');
           await page.click("#cv-clear");
           await page.click('#views [data-view="overview"]');
-          await page.click(`#view-overview [data-open="${id}"]`);
+          await page.locator(`${items}[data-id="${id}"]`).first().click();
           await page.locator("#cards .card").first().waitFor({ state: "visible", timeout: 5_000 });
           await page.$$eval("#cards details.src:not([open])", (ds) => ds.forEach((d) => (d.open = true)));
           await check_contrast(page, scheme, `canvas card of ${id} with its body diff`);

@@ -220,6 +220,12 @@ fn show(app: &mut App, wanted: Route, first: bool) {
             Route::Module(m, a)
         }
         Route::Module(..) => Route::Overview(None),
+        // The overview listed public items in full before it listed them
+        // as links: links to them (in PR comments) open the module page.
+        Route::Overview(Some(Anchor::Item(id))) => match app.d.item(&id) {
+            Some(it) => Route::Module(app.d.mod_of(it).to_string(), Some(Anchor::Item(id))),
+            None => Route::Overview(None),
+        },
         Route::Canvas(Some(id)) if app.d.item(&id).is_none() => Route::Canvas(None),
         Route::Calls(Some(id)) if app.d.item(&id).is_none() => Route::Calls(None),
         r => r,
