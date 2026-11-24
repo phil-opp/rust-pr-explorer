@@ -1,4 +1,4 @@
-//! Rust PR Explorer: shows a pull request as changed Rust items.
+//! Rust Semantic Review: shows a pull request as changed Rust items.
 
 mod analyze;
 mod commits;
@@ -35,8 +35,13 @@ use std::path::{Path, PathBuf};
 struct Cli {
     #[command(subcommand)]
     input: Input,
-    /// Where to write the explorer page.
-    #[arg(short, long, global = true, default_value = "pr-explorer.html")]
+    /// Where to write the review page.
+    #[arg(
+        short,
+        long,
+        global = true,
+        default_value = "rust-semantic-review.html"
+    )]
     out: PathBuf,
     /// Also write the analysis as JSON.
     #[arg(long, global = true)]
@@ -47,7 +52,12 @@ struct Cli {
     /// Allow running the analyzed project's build scripts and procedural
     /// macros, and keep its `.cargo/config.toml` and `rust-toolchain.toml`.
     /// Only use this in a sandboxed environment: the PR's code gets executed.
-    #[arg(long, global = true, env = "RUST_PR_EXPLORER_TRUST_PROJECT_CODE")]
+    #[arg(
+        long,
+        global = true,
+        env = "RUST_SEMANTIC_REVIEW_TRUST_PROJECT_CODE",
+        value_parser = clap::builder::FalseyValueParser::new()
+    )]
     trust_project_code: bool,
     /// Also run cargo-semver-checks on the two versions and add what it
     /// finds to the SemVer labels. It builds both versions' rustdoc JSON,
@@ -64,7 +74,7 @@ struct Cli {
     #[arg(
         long,
         global = true,
-        env = "RUST_PR_EXPLORER_TARGET_DIR",
+        env = "RUST_SEMANTIC_REVIEW_TARGET_DIR",
         requires = "trust_project_code"
     )]
     target_dir: Option<PathBuf>,
@@ -106,8 +116,30 @@ const GLUE: &str = include_str!(concat!(env!("OUT_DIR"), "/viewer.js"));
 // Gzipped, like the data (see `render_page`).
 const WASM_GZ: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/viewer_bg.wasm.gz"));
 
+/// An environment variable from before the rename, still read when the
+/// new one is unset.
+fn old_env(old: &str, new: &str) -> Option<std::ffi::OsString> {
+    let value = std::env::var_os(old)?;
+    eprintln!("warning: `{old}` is deprecated, use `{new}`");
+    std::env::var_os(new).is_none().then_some(value)
+}
+
 fn main() -> Result<()> {
-    let cli = Cli::parse();
+    let mut cli = Cli::parse();
+    if let Some(v) = old_env(
+        "RUST_PR_EXPLORER_TRUST_PROJECT_CODE",
+        "RUST_SEMANTIC_REVIEW_TRUST_PROJECT_CODE",
+    ) {
+        // As `FalseyValueParser` reads the new one.
+        let off = ["", "0", "false", "no", "off", "n", "f"];
+        cli.trust_project_code |= !off.contains(&v.to_string_lossy().to_lowercase().as_str());
+    }
+    if let Some(v) = old_env(
+        "RUST_PR_EXPLORER_TARGET_DIR",
+        "RUST_SEMANTIC_REVIEW_TARGET_DIR",
+    ) {
+        cli.target_dir.get_or_insert(v.into());
+    }
     let trust = if cli.trust_project_code {
         eprintln!("trusting project code: build scripts and proc macros may run");
         source::Trust::Trusted

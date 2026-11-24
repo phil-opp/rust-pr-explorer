@@ -1,4 +1,4 @@
-//! The analysis result that the command-line tool embeds in the explorer
+//! The analysis result that the command-line tool embeds in the review
 //! page and the viewer reads back.
 
 use serde::{Deserialize, Serialize};
@@ -599,7 +599,7 @@ pub struct PrMeta {
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub custom_base: bool,
     /// The page shows only what changed since this earlier commit of the
-    /// PR (in full), e.g. the one an earlier explorer page showed, leaving
+    /// PR (in full), e.g. the one an earlier review page showed, leaving
     /// out what the base branch changed in between. `base_rev` is then
     /// that commit.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -630,13 +630,15 @@ pub struct SavedMarks {
 /// The first line of the review marks that the viewer adds to a review it
 /// posts, in a code block in a collapsed `<details>` at the end of the
 /// review's text. One line per mark follows (see the viewer's `carry`).
-pub const REVIEW_MARKS_HEADER: &str = "rust-pr-explorer review marks v1";
+pub const REVIEW_MARKS_HEADER: &str = "rust-semantic-review review marks v1";
+/// [`REVIEW_MARKS_HEADER`] in reviews posted before the rename.
+const OLD_REVIEW_MARKS_HEADER: &str = "rust-pr-explorer review marks v1";
 
 /// The lines of review marks in a review's text: those after
 /// [`REVIEW_MARKS_HEADER`], up to the end of its code block.
 pub fn review_marks_in(text: &str) -> Option<String> {
     let mut lines = text.lines().map(|l| l.trim_end_matches('\r'));
-    lines.find(|l| l.trim() == REVIEW_MARKS_HEADER)?;
+    lines.find(|l| [REVIEW_MARKS_HEADER, OLD_REVIEW_MARKS_HEADER].contains(&l.trim()))?;
     let marks: Vec<&str> = lines
         .take_while(|l| !l.trim_start().starts_with("```"))
         .filter(|l| !l.trim().is_empty())
@@ -647,12 +649,16 @@ pub fn review_marks_in(text: &str) -> Option<String> {
 /// What starts review marks copied to paste on another page, followed by
 /// the marks as base64 JSON (with the reviewed versions and comments,
 /// which a review leaves out).
-pub const MARKS_MARKER: &str = "rust-pr-explorer-marks v1 ";
+pub const MARKS_MARKER: &str = "rust-semantic-review-marks v1 ";
+/// [`MARKS_MARKER`] in texts copied before the rename.
+const OLD_MARKS_MARKER: &str = "rust-pr-explorer-marks v1 ";
 
 /// The base64 after [`MARKS_MARKER`] in a text, with any line breaks taken
 /// out.
 pub fn marks_in(text: &str) -> Option<String> {
-    let start = text.find(MARKS_MARKER)? + MARKS_MARKER.len();
+    let start = [MARKS_MARKER, OLD_MARKS_MARKER]
+        .iter()
+        .find_map(|m| Some(text.find(m)? + m.len()))?;
     let data: String = text[start..]
         .chars()
         .filter(|c| !c.is_whitespace())

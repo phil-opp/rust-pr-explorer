@@ -332,6 +332,8 @@ thread_local! {
     static REVIEW: RefCell<Review> = RefCell::new(Review::default());
 }
 
+// The keys keep the tool's old name, so that marks saved before the rename
+// still load.
 const MODE_KEY: &str = "rust-pr-explorer.review-mode";
 const MARKS_KEY: &str = "rust-pr-explorer.reviewed";
 const VERSIONS_KEY: &str = "rust-pr-explorer.reviewed-versions";
@@ -1062,7 +1064,7 @@ pub fn import(json: &str) -> Result<usize, String> {
     let p: Payload =
         serde_json::from_str(json).map_err(|_| "These aren't review marks.".to_string())?;
     if p.v != 1 {
-        return Err("These marks are from a newer version of the explorer.".to_string());
+        return Err("These marks are from a newer version of Rust Semantic Review.".to_string());
     }
     merge(p)
 }
@@ -1558,7 +1560,7 @@ fn update_groups() {
 const EXIT: &str = r#"<button id="rv-keys" title="Keyboard shortcuts (?)">?</button><button id="rv-exit" title="Hide the review controls; your marks stay">Exit<span class="btn-label"> review</span></button>"#;
 
 /// A button that loads the marks saved in a review, while this page has
-/// no marks of the PR: what a page of a later explorer comment starts with,
+/// no marks of the PR: what a page of a later Rust Semantic Review comment starts with,
 /// since it can't see the marks of the earlier one's page.
 fn load_offer() -> String {
     if has_marks() {

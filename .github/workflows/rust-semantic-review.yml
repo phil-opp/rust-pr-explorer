@@ -1,6 +1,6 @@
-name: PR Explorer
+name: Rust Semantic Review
 
-# Builds the explorer page for every pull request and links it in a comment.
+# Builds the review page for every pull request and links it in a comment.
 # Uses the action from the PR's own checkout, so a PR that changes the tool
 # shows itself with its own version.
 #
@@ -26,7 +26,7 @@ permissions:
 # each one would cancel the previous, and the cache would never be saved.
 # They queue instead, and a newer queued run replaces an older one.
 concurrency:
-  group: pr-explorer-${{ github.event.pull_request.number || github.ref }}
+  group: rust-semantic-review-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       # The analysis doesn't need the viewer's wasm build (see build.rs).
-      RUST_PR_EXPLORER_STUB_VIEWER: "1"
+      RUST_SEMANTIC_REVIEW_STUB_VIEWER: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: ./

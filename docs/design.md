@@ -1,19 +1,19 @@
 # Design notes
 
-This document records how the Rust PR Explorer prototype gets its information and why. It also covers the alternatives that were considered but not implemented. For what the tool shows, see the [README](../README.md).
+This document records how the Rust Semantic Review prototype gets its information and why. It also covers the alternatives that were considered but not implemented. For what the tool shows, see the [README](../README.md).
 
 ## Requirements that shape the design
 
 - **Everything in Rust.** The analysis and the viewer are Rust crates. The only JavaScript in the generated page is the glue that `wasm-bindgen` generates, plus three handwritten lines that load the WebAssembly module. A browser offers no other way to start WebAssembly.
 - **No `unsafe`.** `unsafe_code = "forbid"` is set for the whole workspace. Dependencies such as `wasm-bindgen` and rust-analyzer use `unsafe` internally; our code does not.
 - **Never run the analyzed project's code.** A pull request is untrusted input. Build scripts (`build.rs`) and procedural macros are arbitrary programs, so the tool must not compile or run them. See [Safety](#safety).
-- **One self-contained output file.** The explorer is a single HTML file that can be opened locally or shared.
+- **One self-contained output file.** The page is a single HTML file that can be opened locally or shared.
 
 ## Architecture
 
 ```text
 crates/model             data types shared by analysis and viewer (serde)
-crates/rust-pr-explorer  CLI: get sources, analyze, compare, write the page
+crates/rust-semantic-review CLI: get sources, analyze, compare, write the page
   src/source.rs          git worktrees or directory copies; finds crates and targets
   src/analyze/           syntactic analysis with syn (items, names, edges)
     load.rs              module files, items and impls (passes 1 and 2)
@@ -157,7 +157,7 @@ Paths the project chooses are confined to the checkout: `#[path]` attributes and
 
 ### Trusted mode
 
-In a sandboxed environment (a throwaway container or VM without credentials), running the project's code is acceptable. `--trust-project-code`, or `RUST_PR_EXPLORER_TRUST_PROJECT_CODE=1` for CI and container setups, then:
+In a sandboxed environment (a throwaway container or VM without credentials), running the project's code is acceptable. `--trust-project-code`, or `RUST_SEMANTIC_REVIEW_TRUST_PROJECT_CODE=1` for CI and container setups, then:
 - runs build scripts (rust-analyzer's `cargo check` step), so code included from `OUT_DIR` is analyzed;
 - expands procedural macros with the toolchain's `rust-analyzer-proc-macro-srv`;
 - keeps `.cargo/config.toml` and `rust-toolchain.toml`, which builds may need.
@@ -192,7 +192,7 @@ rust-analyzer already provides most of the semantic precision the views need, wi
 
 ### rustdoc HTML — not implemented
 
-Embedding or scraping rustdoc's HTML pages would reuse rustdoc's rendering. But the HTML is not a stable interface. It comes with rustdoc's own JavaScript and CSS, which are large, and it needs the same build as rustdoc JSON. The explorer already renders signatures in rustdoc style. Names in external crates link to their pages on docs.rs through rust-analyzer's *external docs* instead.
+Embedding or scraping rustdoc's HTML pages would reuse rustdoc's rendering. But the HTML is not a stable interface. It comes with rustdoc's own JavaScript and CSS, which are large, and it needs the same build as rustdoc JSON. The page already renders signatures in rustdoc style. Names in external crates link to their pages on docs.rs through rust-analyzer's *external docs* instead.
 
 ### rust-analyzer over LSP — not implemented
 

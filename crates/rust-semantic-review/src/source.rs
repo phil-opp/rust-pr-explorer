@@ -385,7 +385,7 @@ impl Checkout {
 }
 
 /// What changed in a pull request since an earlier commit of it, such as
-/// the one an earlier explorer page showed.
+/// the one an earlier review page showed.
 pub enum Since {
     /// The PR changed since then.
     Changes(SinceChanges),
@@ -494,9 +494,9 @@ fn since_checkout(
             git_dir,
             &[
                 "-c",
-                "user.name=rust-pr-explorer",
+                "user.name=rust-semantic-review",
                 "-c",
-                "user.email=rust-pr-explorer@localhost",
+                "user.email=rust-semantic-review@localhost",
                 "commit-tree",
                 &tree,
                 "-p",
@@ -1416,7 +1416,7 @@ mod tests {
         };
         let block = |marks: &str| {
             format!(
-                r"<details><summary>Review marks</summary>\n\n```text\nrust-pr-explorer review marks v1\n{marks}\n```\n\n</details>"
+                r"<details><summary>Review marks</summary>\n\n```text\nrust-semantic-review review marks v1\n{marks}\n```\n\n</details>"
             )
         };
         let deleted = format!(
@@ -1471,5 +1471,16 @@ mod tests {
         let t = &threads[1];
         assert!(t.left && t.resolved && t.outdated);
         assert_eq!((t.line, t.original_line), (None, Some(3)));
+    }
+
+    #[test]
+    fn reads_marks_from_before_the_rename() {
+        let review = "x\n\n<details><summary>Review marks</summary>\n\n```text\nrust-pr-explorer review marks v1\nmark 1 a::f\n```\n\n</details>";
+        assert_eq!(
+            model::review_marks_in(review).as_deref(),
+            Some("mark 1 a::f")
+        );
+        let copied = "<!-- rust-pr-explorer-marks v1 TW\nFu -->";
+        assert_eq!(model::marks_in(copied).as_deref(), Some("TWFu"));
     }
 }

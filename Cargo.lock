@@ -2071,7 +2071,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust-pr-explorer"
+name = "rust-semantic-review"
 version = "0.1.0"
 dependencies = [
  "anyhow",

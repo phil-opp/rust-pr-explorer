@@ -1,4 +1,4 @@
-# Rust PR Explorer (prototype)
+# Rust Semantic Review (prototype)
 
 > [!WARNING]
 > This is a vibe-coded toy project, written mostly by an AI coding assistant. Expect bugs and rough edges, and use it with care. In particular, don't rely on its output as the only basis for a review.
@@ -23,27 +23,27 @@ cargo build --release
 cargo build --release --features wasm-opt
 
 # A GitHub pull request (public repositories; needs `git`).
-./target/release/rust-pr-explorer pr https://github.com/rust-lang/log/pull/613
-./target/release/rust-pr-explorer pr rust-lang/log#613 --base main
+./target/release/rust-semantic-review pr https://github.com/rust-lang/log/pull/613
+./target/release/rust-semantic-review pr rust-lang/log#613 --base main
 
 # Two revisions of a local repository.
-./target/release/rust-pr-explorer git path/to/repo main my-branch
+./target/release/rust-semantic-review git path/to/repo main my-branch
 
 # Two directories, e.g. the bundled demo.
-./target/release/rust-pr-explorer dirs fixtures/demo/base fixtures/demo/head
+./target/release/rust-semantic-review dirs fixtures/demo/base fixtures/demo/head
 ```
 
-All commands write `pr-explorer.html` (change it with `-o`). Open that file in a browser. `--json analysis.json` also writes the raw analysis. `--syntax-only` skips the rust-analyzer step, which makes the run faster but leaves method calls and calls inside macros unresolved (see below).
+All commands write `rust-semantic-review.html` (change it with `-o`). Open that file in a browser. `--json analysis.json` also writes the raw analysis. `--syntax-only` skips the rust-analyzer step, which makes the run faster but leaves method calls and calls inside macros unresolved (see below).
 
-In a sandboxed environment, `--trust-project-code` (or `RUST_PR_EXPLORER_TRUST_PROJECT_CODE=1`) lets rust-analyzer run the project's build scripts and procedural macros. It then also resolves calls involving generated code, such as types from `include!(concat!(env!("OUT_DIR"), …))` or items produced by proc macros. See [Safety](#safety).
+In a sandboxed environment, `--trust-project-code` (or `RUST_SEMANTIC_REVIEW_TRUST_PROJECT_CODE=1`) lets rust-analyzer run the project's build scripts and procedural macros. It then also resolves calls involving generated code, such as types from `include!(concat!(env!("OUT_DIR"), …))` or items produced by proc macros. See [Safety](#safety).
 
-This builds the dependencies' build scripts and proc macros with `cargo check`, which takes a while on a project with many dependencies. Both versions (and the "since" one) share one target directory, a temporary one by default. `--target-dir DIR` (or `RUST_PR_EXPLORER_TARGET_DIR`) keeps it between runs, so that a later run only rebuilds the workspace's own crates. On this repository: 47 s without trust, about 7 minutes with trust and an empty target directory, and about 2 minutes with a filled one (4 cores).
+This builds the dependencies' build scripts and proc macros with `cargo check`, which takes a while on a project with many dependencies. Both versions (and the "since" one) share one target directory, a temporary one by default. `--target-dir DIR` (or `RUST_SEMANTIC_REVIEW_TARGET_DIR`) keeps it between runs, so that a later run only rebuilds the workspace's own crates. On this repository: 47 s without trust, about 7 minutes with trust and an empty target directory, and about 2 minutes with a filled one (4 cores).
 
 `--semver-checks` also runs [cargo-semver-checks](https://github.com/obi1kenobi/cargo-semver-checks) on the two versions (it must be installed: `cargo install cargo-semver-checks`) and adds what it finds to the SemVer labels (see [Overview](#overview)). It compares the rustdoc JSON of both versions, so both must build, and building them runs the project's build scripts and procedural macros: like `--trust-project-code`, use it only in a sandbox. It doesn't turn on `--trust-project-code` for rust-analyzer: the two are separate options.
 
 For `git`, the path may also be a subdirectory of the repository (then only that subdirectory is analyzed and listed) or a bare repository. For `dirs`, `target/` and `node_modules/` directories are skipped.
 
-For `pr`, `--since <commit>` (a full commit id of the PR, e.g. one an earlier page showed) also writes a page of only what changed since that commit, next to the first with `-since` added to its name (`pr-explorer-since.html`, and `analysis-since.json` with `--json`). A plain diff from that commit would also show everything the base branch changed in between, once the PR merged it or was rebased onto it. So the base branch's changes since the commit's merge base are first applied to the commit (with `git merge-tree`), and the PR's head is compared with that. Where those changes conflict with the PR's, the files are taken from the PR's last merge, which holds the PR's own resolution, unless a commit of the PR changed them before that merge; then no page is written. When nothing changed but the base branch, no page is written either. The page's header says what it compares, and it shares its review marks with the PR's full page (see [Review mode](#review-mode)). It has no commit filter, since commits are traced from the PR's base. The command prints `since: changes`, `since: none` or `since: unavailable (reason)` on stdout.
+For `pr`, `--since <commit>` (a full commit id of the PR, e.g. one an earlier page showed) also writes a page of only what changed since that commit, next to the first with `-since` added to its name (`rust-semantic-review-since.html`, and `analysis-since.json` with `--json`). A plain diff from that commit would also show everything the base branch changed in between, once the PR merged it or was rebased onto it. So the base branch's changes since the commit's merge base are first applied to the commit (with `git merge-tree`), and the PR's head is compared with that. Where those changes conflict with the PR's, the files are taken from the PR's last merge, which holds the PR's own resolution, unless a commit of the PR changed them before that merge; then no page is written. When nothing changed but the base branch, no page is written either. The page's header says what it compares, and it shares its review marks with the PR's full page (see [Review mode](#review-mode)). It has no commit filter, since commits are traced from the PR's base. The command prints `since: changes`, `since: none` or `since: unavailable (reason)` on stdout.
 
 For `pr`, the repository is cloned without file contents (`--filter=blob:none`), and only the two revisions being compared are checked out. If the GitHub CLI (`gh`) is installed and logged in, `gh pr view` supplies the PR's title, description, base branch and its own branch; the page header then shows the repository, PR number and title, `base-branch ← pr-branch`, and the overview, under the title, a row each for the base and the PR's branch with the compared commits linked on GitHub, then the description (folded when it is longer than 20 lines). The description is rendered as Markdown like doc comments: raw HTML is shown as text, HTML comments (such as PR template instructions) are left out, and images show only their alt text, so the page loads nothing from elsewhere. Without `gh`, the title, description and PR branch are left out. `gh` also supplies the PR's review threads (see [Review threads](#review-threads)). Without `--base`, the base is the merge base of the PR head and the PR's base branch (without `gh`: the default branch). For a PR that was already merged with a merge commit, the base is the state just before that merge.
 
@@ -54,8 +54,8 @@ The demo in `fixtures/demo` is a small calculator crate. Its "PR" adds variables
 The repository is also a GitHub Action that builds the page for every pull request and links it in a comment on the PR:
 
 ```yaml
-# .github/workflows/pr-explorer.yml
-name: PR Explorer
+# .github/workflows/rust-semantic-review.yml
+name: Rust Semantic Review
 on:
   pull_request:
   # Optional, to fill the build cache that new pull requests start from.
@@ -68,12 +68,12 @@ jobs:
   explore:
     runs-on: ubuntu-latest
     steps:
-      - uses: phil-opp/diff-viewer@main
+      - uses: phil-opp/rust-semantic-review@main
 ```
 
 The action builds the tool, runs `pr` on the pull request (including its existing review threads) and uploads the page as a workflow artifact. The artifact is a single unzipped HTML file, so the link opens the page directly in the browser. The comment links the page with a one-line summary: how many Rust items changed, how many of them are public, and how many other files changed (those the page lists as files rather than items). The link is also in the job summary.
 
-Every push that changes the PR gets a new comment, with two pages: all changes of the PR, and the changes since the commit that the previous explorer comment showed (built with `pr --since`, see below). What the base branch changed in between is left out of the second page, so merging `main` into the PR or rebasing it doesn't show up there. A push that only merges the base branch or rebases onto it, and a re-run, update the previous comment instead of posting a new one. A new comment hides the previous explorer comment as outdated (if the workflow's bot posted it), so only the latest one stays expanded. Only explorer comments by the workflow's bot or by people with write access to the repository count as the previous one.
+Every push that changes the PR gets a new comment, with two pages: all changes of the PR, and the changes since the commit that the previous Rust Semantic Review comment showed (built with `pr --since`, see below). What the base branch changed in between is left out of the second page, so merging `main` into the PR or rebasing it doesn't show up there. A push that only merges the base branch or rebases onto it, and a re-run, update the previous comment instead of posting a new one. A new comment hides the previous Rust Semantic Review comment as outdated (if the workflow's bot posted it), so only the latest one stays expanded. Only Rust Semantic Review comments by the workflow's bot or by people with write access to the repository count as the previous one.
 
 Build time: the built tool is cached under a hash of its sources, so once a run has built it, later runs skip the build (in a repository that only uses the action, that is every run after the first). The build's dependencies, mainly rust-analyzer, are cached on the default branch, the only branch whose caches every pull request can read, so the `push` trigger above keeps new pull requests from building them from scratch (about 5 minutes). On a push, the action only builds and caches the tool. The tool is built with the `action` profile (see `Cargo.toml`): dependencies optimized, the tool's own crates not, which builds faster than `--release` and analyzes as fast.
 
@@ -83,7 +83,7 @@ Who can open the page: anyone logged in to GitHub with access to the repository.
 
 Inputs: `comment: false` leaves out the comment, `syntax-only: true` skips rust-analyzer, `semver-checks: true` adds cargo-semver-checks (see below), and `pr` and `repository` pick another pull request (by default the one that triggered the workflow). The `page-url` output is the link.
 
-By default the action never builds or runs the PR's code. `trust-project-code: true` passes `--trust-project-code`, so calls into code that build scripts and proc macros generate resolve too. That runs the PR's code with the job's token, as a CI job that runs the PR's tests does. Under `pull_request` that is no new risk: a PR from a fork gets a read-only token and no secrets, and a PR from a branch of the repository can change the workflow itself anyway. Under `pull_request_target`, whose token can write and which has the repository's secrets also on PRs from forks, the action refuses it. In trusted mode the analysis' cargo target directory is cached too, keyed by the toolchain and the checked out `Cargo.lock` files and saved like the dependencies' cache; on a push to the default branch the action fills it by analyzing the checked out repository. This repository's workflow also sets `RUST_PR_EXPLORER_STUB_VIEWER=1`, so its build script skips the viewer's wasm build during the analysis (see `build.rs`). With that, a trusted run here takes about 75 s with the cache and 6 minutes without it, against 48 s untrusted, and the cache is about 1.8 GB of the repository's 10 GB.
+By default the action never builds or runs the PR's code. `trust-project-code: true` passes `--trust-project-code`, so calls into code that build scripts and proc macros generate resolve too. That runs the PR's code with the job's token, as a CI job that runs the PR's tests does. Under `pull_request` that is no new risk: a PR from a fork gets a read-only token and no secrets, and a PR from a branch of the repository can change the workflow itself anyway. Under `pull_request_target`, whose token can write and which has the repository's secrets also on PRs from forks, the action refuses it. In trusted mode the analysis' cargo target directory is cached too, keyed by the toolchain and the checked out `Cargo.lock` files and saved like the dependencies' cache; on a push to the default branch the action fills it by analyzing the checked out repository. This repository's workflow also sets `RUST_SEMANTIC_REVIEW_STUB_VIEWER=1`, so its build script skips the viewer's wasm build during the analysis (see `build.rs`). With that, a trusted run here takes about 75 s with the cache and 6 minutes without it, against 48 s untrusted, and the cache is about 1.8 GB of the repository's 10 GB.
 
 `semver-checks: true` installs a prebuilt cargo-semver-checks and runs the tool with `--semver-checks`, which builds both versions and so runs the PR's build scripts and procedural macros, as any CI job that builds or tests the PR does, and it is refused under `pull_request_target` for the same reasons. It is off by default because of its cost. Both versions and their dependencies are built for docs, and nothing of that build is cached between runs. Measured locally on 4 cores (as many as GitHub's standard runner), without caches:
 
@@ -188,7 +188,7 @@ Review mode is on when the page opens, for going through a PR one item at a time
 - The header shows how many of the PR's items and files have a verdict; in review mode the sidebar counts what is left per module (✓ when nothing is). **Marks…** copies, pastes or clears them (see below).
 - Marks are saved in the browser's local storage, per pull request (for `git`, per repository or subdirectory; for `dirs`, per pair of directories; the page holds only a hash of their paths), so they carry over to a page generated again after new commits, as long as the browser opens it from the same address (see below for the action's pages). A mark remembers the item's diff: if the diff is different in the new page, the item shows **⚠ Changed since review** and counts as not reviewed.
 - The PR's full page and its page of the changes since an earlier commit share their marks. A mark also remembers which change was reviewed, from which version of the item (or file) to which: a review on either page counts on the other where it covers what that page shows. Reviewing the whole PR covers the changes since any earlier commit. On the full page, an item counts as reviewed when the reviews add up from its base version to its current one, such as the whole PR reviewed at the earlier commit plus the changes since. Hunks share their marks when both pages show the same change.
-- GitHub serves each page the action uploads from a storage host of its own (`productionresultssaN.blob.core.windows.net`, usually with a different `N` for each run), and browsers keep local storage per host. So marks made on one explorer comment's pages don't show on the next comment's pages. The full page and the changes-since page of one comment share a host, so they share marks. Marks travel to a later comment's page in two ways:
+- GitHub serves each page the action uploads from a storage host of its own (`productionresultssaN.blob.core.windows.net`, usually with a different `N` for each run), and browsers keep local storage per host. So marks made on one Rust Semantic Review comment's pages don't show on the next comment's pages. The full page and the changes-since page of one comment share a host, so they share marks. Marks travel to a later comment's page in two ways:
   - A review posted with **Finish review…** ends with the marks, in a collapsed "Review marks" section: a code block with one line per mark (`mark HASH ID` with the hash of the diff it had, `change full|since FROM TO ID` for a reviewed change, `verdict changes|comment ID`). It leaves out the PR and the comments, which the review has, and the reviewed versions, which would make the command long. The action reads the PR's reviews and puts the latest marks of each reviewer into the page. A page without marks of the PR then offers **Load marks from NAME's review** in the review bar, and **Marks…** lists them all. Marks loaded from a review can't show what changed since then (**Show changes**); the page of the changes since the previous comment shows that.
   - **Marks…** → **Copy marks** copies them (with the reviewed versions) as text, and **Load marks** under "Paste from another page" adds them on another page. Marks of another PR are refused.
 
@@ -252,7 +252,7 @@ How the change spreads over the modules, in two modes:
 
 The workspace has three crates:
 - `crates/model`: the data passed from the analysis to the page.
-- `crates/rust-pr-explorer`: the command-line tool.
+- `crates/rust-semantic-review`: the command-line tool.
 - `crates/viewer`: the page's front end.
 
 1. **Sources** (`source.rs`): getting the two source trees.
