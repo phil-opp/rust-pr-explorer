@@ -997,26 +997,29 @@ fn next_steps_html(d: &Data, unit: &str) -> String {
             .filter(open)
             .collect()
     });
-    let mut parts = vec![group("Called by", callers), group("Calls", callees)];
+    // The way back first, so that its ◂ points away from the ways on.
+    let back = graphs::graph_of(d, unit).map_or(String::new(), |i| {
+        format!(
+            r#"<button class="rv-go-btn" data-rv-go-graph="{i}" title="The overview's call graph that lists this item">◂ Call graph</button>"#
+        )
+    });
+    let mut on = vec![group("Called by", callers), group("Calls", callees)];
     if review::next_open(Some(unit)).is_some() {
-        parts.push(
+        on.push(
             r#"<button class="rv-go-btn" data-rv-go-next title="The next item that needs a review, in review order (j)">Next unreviewed ▸</button>"#
                 .to_string(),
         );
     }
-    if let Some(i) = graphs::graph_of(d, unit) {
-        parts.push(format!(
-            r#"<button class="rv-go-btn" data-rv-go-graph="{i}" title="The overview's call graph that lists this item">◂ Call graph</button>"#
-        ));
-    }
-    let parts: Vec<String> = parts.into_iter().filter(|p| !p.is_empty()).collect();
-    if parts.is_empty() {
+    let on = on.concat();
+    if back.is_empty() && on.is_empty() {
         return String::new();
     }
-    format!(
-        r#"<span class="rv-next"><span class="rv-next-label">Next:</span>{}</span>"#,
-        parts.concat()
-    )
+    let label = if on.is_empty() {
+        ""
+    } else {
+        r#"<span class="rv-next-label">Next:</span>"#
+    };
+    format!(r#"<span class="rv-next">{back}{label}{on}</span>"#)
 }
 
 /// The dialog for writing a unit's comment.
