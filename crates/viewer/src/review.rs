@@ -1080,7 +1080,7 @@ fn update_groups() {
 }
 
 /// Leaves review mode; the marks stay.
-const EXIT: &str = r#"<button id="rv-keys" title="Keyboard shortcuts (?)">?</button><button id="rv-exit" title="Hide the review controls; your marks stay">Exit review</button>"#;
+const EXIT: &str = r#"<button id="rv-keys" title="Keyboard shortcuts (?)">?</button><button id="rv-exit" title="Hide the review controls; your marks stay">Exit<span class="btn-label"> review</span></button>"#;
 
 /// The progress and the review actions in the header: "Next" while
 /// something is left, then "Finish review…" as the main action. "Clear"
@@ -1104,7 +1104,7 @@ pub fn update_progress() {
                     .to_string()
             };
             format!(
-                r#"<span class="rv-progress{}" title="Reviewed items and files"><span class="rv-count">{count}</span><span class="rv-meter"><span style="width:{percent}%"></span></span></span>{next}<button id="rv-finish" class="{}" title="Collect your verdicts and comments for GitHub">Finish review…</button><button id="rv-clear" title="Remove all review marks">Clear marks</button>{EXIT}"#,
+                r#"<span class="rv-progress{}" title="Reviewed items and files"><span class="rv-count">{count}</span><span class="rv-meter"><span style="width:{percent}%"></span></span></span>{next}<button id="rv-finish" class="{}" title="Collect your verdicts and comments for GitHub">Finish<span class="btn-label"> review</span>…</button><button id="rv-clear" title="Remove all review marks">Clear<span class="btn-label"> marks</span></button>{EXIT}"#,
                 if all { " all" } else { "" },
                 if all { "primary" } else { "" },
             )
