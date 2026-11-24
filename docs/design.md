@@ -53,7 +53,7 @@ The CLI's build script runs a nested `cargo build` of the viewer for `wasm32-unk
 
 ### Size of the wasm module
 
-The module is embedded in every page as base64, so its size is paid by every page. The viewer is built with the `wasm-release` profile (`opt-level = "s"`, one codegen unit, link-time optimization), and `wasm-bindgen` drops the name and producers sections. Measured on the viewer at the time of the change:
+The module is embedded in every page, so its size is paid by every page. The viewer is built with the `wasm-release` profile (`opt-level = "s"`, one codegen unit, link-time optimization), and `wasm-bindgen` drops the name and producers sections. Measured on the viewer at the time of the change:
 
 | Step | Module | Page (demo) |
 |---|---|---|
@@ -65,6 +65,17 @@ The module is embedded in every page as base64, so its size is paid by every pag
 The function names were 37% of the module; they only help when debugging a panic in the browser. `wasm-opt` is opt-in because the `wasm-opt` crate compiles Binaryen (C++) from source, which takes about 5 minutes and needs a C++ compiler; `opt-level = "z"` saved only 1% more than `"s"`, so the viewer stays at `"s"`.
 
 Replacing `serde_json` with a more compact format was considered and not done. The JSON deserializer and the derived visitors are roughly 130 kB of the module before `wasm-opt` (by `twiggy`), and a binary format such as `postcard` would still need the derived visitors. The model also relies on `skip_serializing_if`, `flatten` and internally tagged enums, which only work with self-describing formats like JSON; and binary data would have to be embedded as base64. The `similar` crate is larger (about 240 kB before `wasm-opt`, mostly copies of its diff algorithms for each element type), so it would be the next place to look.
+
+### Compression of the page
+
+The page is often served without HTTP compression: from a workflow artifact, or opened as a local file. So the wasm module and the analysis' JSON are embedded gzipped (the module at build time, the JSON by `render_page`) and base64 encoded, and the page's script unpacks them with `fetch` of a data URL (native base64 decoding) and a `DecompressionStream`. The module is compiled with `WebAssembly.compileStreaming` while the JSON is unpacked. The JSON is then written back into its script element, where the viewer reads it as before. Measured at the time of the change:
+
+| Page | Before | After | Before, gzipped by a server |
+|---|---|---|---|
+| demo | 2.60 MB | 0.94 MB | 0.90 MB |
+| 40 commits of this repository (420 changed items) | 7.13 MB | 1.84 MB | 1.58 MB |
+
+Base64 makes the gzipped parts a third larger again, and a server that gzips the page can't take that back, so the page is a bit larger than a gzipped plain page would be; that is the price of not depending on the server. Unpacking also replaced `atob` and a loop over its characters, which took about 120 ms for the module; the page then loaded in about 0.7 s instead of 0.8 s from a local file, most of which is the layout of the overview.
 
 ## Two analysis layers
 
