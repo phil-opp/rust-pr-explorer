@@ -363,10 +363,20 @@ runs:
         expiry() {
           local at=
           if [ -n "$1" ]; then
-            if ! at=$(gh api "repos/$REPO/actions/artifacts/$1" --jq '.expires_at' 2>&1); then
-              echo "::notice::Could not read when the artifact expires (does the token have actions: read?): $at" >&2
-              at=
-            fi
+            # Right after the upload the API sometimes answers 404 for a
+            # few seconds, so try a few times.
+            local try
+            for try in 1 2 3 4 5; do
+              if at=$(gh api "repos/$REPO/actions/artifacts/$1" --jq '.expires_at' 2>&1); then
+                break
+              fi
+              if [ "$try" = 5 ]; then
+                echo "::notice::Could not read when the artifact expires (does the token have actions: read?): $at" >&2
+                at=
+              else
+                sleep 3
+              fi
+            done
           fi
           if [ -z "$at" ] && [ -n "$RETENTION_DAYS" ]; then
             at=$(date -u -d "+$RETENTION_DAYS days" +%Y-%m-%dT%H:%M:%SZ)
