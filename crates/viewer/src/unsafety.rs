@@ -135,14 +135,14 @@ pub fn overview_html(d: &Data) -> String {
         .iter()
         .map(|it| {
             format!(
-                r#"<div class="unsafe-row{}"><div class="unsafe-name"><span class="kind">{}</span><a class="ref" data-id="{}" data-kind="{}" data-path="{}">{}</a> <span class="dim">in {}</span>{}</div>{}</div>"#,
+                r#"<div class="unsafe-row{}"><div class="unsafe-name"><span class="kind">{}</span><a class="ref" data-id="{}" data-kind="{}" data-path="{}"><code>{}</code></a> <span class="dim">in {}</span>{}</div>{}</div>"#,
                 if adds(&it.unsafe_code) { "" } else { " gone" },
                 it.info.kind.label(),
                 esc(&it.info.id),
                 it.info.kind.css(),
                 esc(&it.info.id),
                 crate::review::item_tag(&it.info.id, &d.display_name(it)),
-                esc(&d.mod_label(d.mod_of(it))),
+                d.mod_label_html(d.mod_of(it)),
                 crate::data::test_tag_of(it),
                 lines_html(&it.unsafe_code),
             )
@@ -152,7 +152,7 @@ pub fn overview_html(d: &Data) -> String {
     for f in &d.out.files {
         for p in f.parts.iter().filter(|p| !p.unsafe_code.is_empty()) {
             rows.push(format!(
-                r#"<div class="unsafe-row{}"><div class="unsafe-name"><span class="kind">{}</span><a data-goto-file="{}"><code>{}</code></a> <span class="dim">in {}</span></div>{}</div>"#,
+                r#"<div class="unsafe-row{}"><div class="unsafe-name"><span class="kind">{}</span><a data-goto-file="{}"><code>{}</code></a> <span class="dim">in <code>{}</code></span></div>{}</div>"#,
                 if adds(&p.unsafe_code) { "" } else { " gone" },
                 esc(&p.kind),
                 esc(&f.path),
