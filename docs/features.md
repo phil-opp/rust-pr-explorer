@@ -37,6 +37,10 @@ The sidebar lists the modules that changed or contain changes, with a status sym
 
 Below the modules, the sidebar lists every changed file with its status and its added and removed lines (the total is in the heading). A Rust file whose changes are all inside items opens its module's page; any other file scrolls to its entry in the overview.
 
+On the canvas and in the call view, the sidebar shows the call graph instead (when the PR has a changed call graph): the changed call graphs that the cards on the canvas (or the call view's focused item) belong to, as call trees like in the overview, with the types and constants they use. Each row has the item's status symbol and, in review mode, its verdict (✓ approved, ✗ changes requested, ✎ commented, ↻ changed since the review); each graph's heading counts what is left. On the canvas, names in gray italics have no card yet: a click opens one next to its caller, a click on any other name shows its card, and hovering a name outlines its card. Below come the other cards on the canvas and the other call graphs, which open on the canvas with a click. In the call view, a click focuses the item.
+
+The ☰ button in the header hides or shows the sidebar. This is remembered per view, so the sidebar can be hidden on the canvas but kept on the module pages. On a narrow screen, the sidebar is a drawer that the button opens.
+
 ## Changed files
 
 Every file the PR changes is accounted for:

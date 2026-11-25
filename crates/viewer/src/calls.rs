@@ -72,6 +72,7 @@ fn focus_at(app: &mut App, id: &str, start: &'static str) {
     }
     if app.s.view == View::Calls {
         render(app);
+        crate::pages::render_sidebar(app);
         crate::nav::record(app);
     } else {
         crate::set_view(app, View::Calls);

@@ -363,6 +363,10 @@ pub fn render(app: &mut App) {
     );
     apply_pan(c);
     mark_on_canvas(app);
+    // The sidebar's outline marks which items have a card.
+    if app.s.view == crate::View::Canvas {
+        crate::pages::render_sidebar(app);
+    }
     dom::raf(|| {
         crate::with_app(|app| {
             draw_edges(app);
@@ -408,4 +412,15 @@ fn mark_on_canvas(app: &App) {
             on.contains(id.as_str()) && own != Some(id.as_str()),
         );
     }
+}
+
+/// The items that have a card (as any of its tabs), also those hidden at
+/// the canvas's scope.
+pub fn items_on_canvas(app: &App) -> Vec<String> {
+    app.s
+        .canvas
+        .groups
+        .iter()
+        .flat_map(|g| g.tabs.iter().cloned())
+        .collect()
 }

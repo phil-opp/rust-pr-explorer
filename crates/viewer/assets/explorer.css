@@ -115,8 +115,8 @@ code { font-size: .92em; }
 #search-results div:hover, #search-results div.sel { background: var(--bg-alt); }
 
 #layout { display: flex; flex: 1; min-height: 0; position: relative; }
-/* Opens the sidebar drawer on a narrow screen. */
-#side-btn { display: none; font-size: 16px; padding: 0 9px; line-height: 28px; flex: none; }
+/* Collapses the sidebar, or on a narrow screen opens it as a drawer. */
+#side-btn { font-size: 14px; padding: 0 7px; line-height: 24px; flex: none; }
 #sidebar {
   width: 260px; flex: none; overflow: auto; border-right: 1px solid var(--border);
   background: var(--panel); padding: 10px 0; font-size: 14px;
@@ -976,7 +976,7 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
   .top-row { gap: 8px; padding: 0 10px; }
   .top-row:first-child { min-height: 44px; }
   .brand, .btn-label { display: none; }
-  #side-btn { display: inline-block; }
+  #side-btn { font-size: 16px; padding: 0 9px; line-height: 28px; }
   #pr-title .hd-main { font-size: 14px; }
   #pr-title .hd-sub { display: none; }
   .search { flex: 0 1 140px; min-width: 90px; }
@@ -1100,4 +1100,26 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
 @media (max-width: 760px) {
   .cg-facts { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .cg-label { margin-top: 6px; }
+}
+
+/* The call graph outline in the sidebar of the canvas and the call view. */
+.ol-g-h { display: flex; align-items: baseline; gap: 6px; padding: 6px 14px 2px; font-family: var(--mono); font-size: 12.5px; font-weight: 600; }
+.ol-g-h .cnt, .ol-graph .cnt { margin-left: auto; font: 11px var(--sans); color: var(--muted); }
+.ol-g-nm { overflow: hidden; text-overflow: ellipsis; min-width: 0; white-space: nowrap; }
+.tree.ol { padding-left: 6px; }
+.ol-row { padding-left: calc(8px + var(--depth, 0) * 12px); }
+.ol-nm { font-family: var(--mono); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ol-nm[data-kind="fn"], .ol-nm[data-kind="method"], .ol-nm[data-kind="trait_method"] { color: var(--fn); }
+.ol-nm[data-kind="struct"], .ol-nm[data-kind="enum"], .ol-nm[data-kind="union"], .ol-nm[data-kind="type_alias"] { color: var(--type); }
+.ol-nm[data-kind="trait"] { color: var(--trait); }
+/* No card yet: gray, and not a kind color. */
+.ol-row.off .ol-nm { color: var(--muted); font-style: italic; }
+.ol-row .cnt { flex: none; font-size: 12px; }
+.ol-sub { padding: 6px 14px 0 22px; font-size: 11px; color: var(--muted); }
+.ol-chg { color: var(--removed); font-weight: 700; }
+.ol-cmt, .ol-stale { color: var(--changed); font-weight: 700; }
+.ol-graph .ol-g-nm { font-family: var(--mono); font-size: 12.5px; }
+/* Collapsed by its button, per view. On a narrow screen it is a drawer. */
+@media (min-width: 761px) {
+  .side-closed #sidebar { display: none; }
 }
