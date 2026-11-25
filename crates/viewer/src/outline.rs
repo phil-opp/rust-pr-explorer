@@ -119,7 +119,7 @@ fn row_html(app: &App, id: &str, depth: usize, from: Option<&str>, on: &[String]
     let off = canvas && !on.iter().any(|o| o == id);
     let sel = match app.s.view {
         View::Calls => app.s.calls.focus.as_deref() == Some(id),
-        _ => app.s.canvas_focus.as_deref() == Some(id),
+        _ => matches!(&app.s.canvas_focus, Some(crate::nav::OnCanvas::Item(f)) if f == id),
     };
     let hint = match (app.s.view, off) {
         (View::Calls, _) => "focus it",
