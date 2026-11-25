@@ -2,7 +2,7 @@
 
 use super::{
     Canvas, EXPAND_LIMIT, Expansion, Group, MIN_W, apply_pan, card_el,
-    edges::{Rect, call_site_y, card_rect, draw_edges},
+    edges::{Rect, call_site_y, card_rect, draw_edges, frame_boxes, frames_clash},
     height_of,
     layout::arrange_by_module,
     place, render, spot, visible, width_of,
@@ -10,6 +10,7 @@ use super::{
 use crate::data::{Data, changed};
 use crate::{App, View, dom, toast};
 use model::{Item, Kind};
+use std::collections::HashMap;
 
 /// Places `id` on the canvas, next to the card of `from` if given.
 pub fn open(app: &mut App, id: &str, from: Option<&str>, switch_view: bool) {
@@ -23,15 +24,30 @@ pub fn open_for_review(app: &mut App, id: &str, reviewed: Option<&str>) {
     let d = app.d.clone();
     let c = &app.s.canvas;
     let vis: Vec<&super::Group> = c.groups.iter().filter(|g| visible(&d, c, g)).collect();
-    let caller = d.callers.get(id).and_then(|callers| {
-        // Prefer the card just reviewed.
-        let on = |f: &str| vis.iter().copied().find(|g| g.active == f);
+    // A card it is connected to: one that calls it, else one it calls or
+    // uses, preferring the card just reviewed. Not the card just reviewed
+    // if it is neither, so that the connectors stay short.
+    let on = |f: &str| vis.iter().copied().find(|g| g.active == f);
+    let pick = |ids: &[String]| {
         reviewed
-            .filter(|r| callers.iter().any(|f| f == r))
+            .filter(|r| ids.iter().any(|f| f == r))
             .and_then(on)
-            .or_else(|| callers.iter().find_map(|f| on(f)))
+            .or_else(|| ids.iter().find_map(|f| on(f)))
+    };
+    let callees: Vec<String> = d.item(id).map_or(Vec::new(), |it| {
+        it.info
+            .calls
+            .iter()
+            .map(|c| c.to.clone())
+            .chain(it.info.uses.iter().map(|u| u.to.clone()))
+            .collect()
     });
-    // Next to a caller: placed like a card opened from it.
+    let caller = d
+        .callers
+        .get(id)
+        .and_then(|callers| pick(callers))
+        .or_else(|| pick(&callees));
+    // Next to it: placed like a card opened from it.
     let at = (c.group_of(id).is_none() && !vis.is_empty() && caller.is_none()).then(|| {
         let x = vis
             .iter()
@@ -102,6 +118,17 @@ fn open_at(
         }
     };
     let gid = c.groups[gi].gid;
+    if added && at.is_none() && app.s.view == View::Canvas {
+        // Placed again with its real size, once it is rendered: a card
+        // wider than estimated would overlap the card it is placed left of.
+        render(app);
+        let c = &mut app.s.canvas;
+        if let (Some(gi), Some(fi)) = (c.by_gid(gid), from.and_then(|f| c.group_of(f))) {
+            let (x, y) = spot_next_to(&d, c, gi, fi);
+            c.groups[gi].x = x;
+            c.groups[gi].y = y;
+        }
+    }
     if added && app.s.view == View::Canvas {
         keep_arranged(app, from.unwrap_or(id));
     }
@@ -128,11 +155,32 @@ fn open_at(
 }
 
 /// With module frames on, lays the cards out by module again after cards
-/// were opened or closed, so that the frames stay apart: a card placed
-/// freely would stretch its module's frame across other modules. Moves the
-/// view along so that the card of `keep` stays where it is on screen.
+/// were opened or closed, if the frames now get in each other's way: a
+/// card placed next to the cards it is connected to can stretch its
+/// module's frame across other modules. Where it doesn't, the card stays
+/// next to them. Moves the view along so that the card of `keep` stays
+/// where it is on screen.
 fn keep_arranged(app: &mut App, keep: &str) {
     if !app.s.canvas.frames {
+        return;
+    }
+    // The boxes of the cards as they are now shown.
+    render(app);
+    let d = app.d.clone();
+    let c = &app.s.canvas;
+    let vis: Vec<&Group> = c.groups.iter().filter(|g| visible(&d, c, g)).collect();
+    let rects: HashMap<u32, Rect> = vis
+        .iter()
+        .filter_map(|g| Some((g.gid, card_rect(g)?)))
+        .collect();
+    let cards: Vec<(String, Rect)> = vis
+        .iter()
+        .filter_map(|g| {
+            let it = d.item(&g.active)?;
+            Some((d.mod_of(it).to_string(), *rects.get(&g.gid)?))
+        })
+        .collect();
+    if !frames_clash(&frame_boxes(&d, c, &rects), &cards) {
         return;
     }
     let at = |c: &Canvas| c.group_of(keep).map(|gi| (c.groups[gi].x, c.groups[gi].y));
@@ -165,18 +213,18 @@ fn spot_next_to(d: &Data, c: &Canvas, gi: usize, fi: usize) -> (f64, f64) {
         .map(|(_, g)| g)
         .collect();
     let it = d.item(id);
-    let calls_new = |g: &Group| {
-        g.active == c.groups[fi].active
-            || d.callers.get(id).is_some_and(|v| v.contains(&g.active))
-            || d.used_by
-                .get(id)
-                .is_some_and(|v| v.iter().any(|(f, _)| *f == g.active))
-    };
     let called = |g: &Group| {
         it.is_some_and(|it| {
             it.info.calls.iter().any(|x| x.to == g.active)
                 || it.info.uses.iter().any(|x| x.to == g.active)
         })
+    };
+    let calls_new = |g: &Group| {
+        (g.active == c.groups[fi].active && !called(g))
+            || d.callers.get(id).is_some_and(|v| v.contains(&g.active))
+            || d.used_by
+                .get(id)
+                .is_some_and(|v| v.iter().any(|(f, _)| *f == g.active))
     };
     let related: Vec<spot::Related> = others
         .iter()
