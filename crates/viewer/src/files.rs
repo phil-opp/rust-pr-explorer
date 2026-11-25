@@ -5,7 +5,7 @@
 //! macro calls and `extern` blocks as parts, and the remaining lines.
 
 use crate::code::{
-    Links, Seg, code_html, esc, mark_changed_tokens, markdown_diff_segs, markdown_file_html,
+    Links, Seg, code_html, esc, mark_changed_lines, markdown_diff_segs, markdown_file_html,
     marked_html, sig_diff_html,
 };
 use crate::css;
@@ -107,18 +107,18 @@ pub fn diff_html(d: &Data, lines: &[SourceLine], lang: &str, opts: &Diff) -> Str
             _ => esc(&l.1),
         });
     }
-    // Removed lines directly followed by added ones pair up (the first
-    // with the first, and so on) and get their changed words marked.
+    // Removed lines directly followed by added ones get their changed
+    // words marked, compared as a block.
     let mut i = 0;
     while i < lines.len() {
         let dels = lines[i..].iter().take_while(|l| l.0 == '-').count();
         let adds = lines[i + dels..].iter().take_while(|l| l.0 == '+').count();
-        for k in 0..dels.min(adds) {
-            let (o, n) = (i + k, i + dels + k);
-            if let Some((a, b)) = mark_changed_tokens(&codes[o], &codes[n]) {
-                codes[o] = a;
-                codes[n] = b;
-            }
+        if dels > 0
+            && adds > 0
+            && let Some((a, b)) =
+                mark_changed_lines(&codes[i..i + dels], &codes[i + dels..i + dels + adds])
+        {
+            codes.splice(i..i + dels + adds, a.into_iter().chain(b));
         }
         i += (dels + adds).max(1);
     }
@@ -305,7 +305,13 @@ fn parts_html(d: &Data, path: &str, list: &[PartChange], lang: &str) -> String {
         .enumerate()
         .map(|(i, c)| {
             if c.kind == "module" {
-                return r#"<div class="irow member part"><div class="ihead"><span class="kind">module</span><span class="title-name">top-level code</span></div><div class="mark m-chg"><div class="note">Statements outside functions and classes changed; see the line diff.</div></div></div>"#.to_string();
+                return format!(
+                    r#"<div class="irow member part"><div class="ihead"><span class="kind">module</span><span class="title-name">top-level code</span></div><div class="mark m-chg"><div class="note">Statements outside functions and classes changed; see the line diff{}.</div></div></div>"#,
+                    match line_hunks_label(path) {
+                        Some(l) => format!(" below <span class=\"rv-in\">({l})</span>"),
+                        None => String::new(),
+                    }
+                );
             }
             let sig = match &c.old_sig {
                 Some(old) if code => format!(
@@ -618,6 +624,25 @@ pub fn markdown_html(d: &Data, old: &str, new: &str, path: Option<&str>) -> Stri
     html
 }
 
+/// Which of a file's hunks its line diff shows ("change 2 of 2",
+/// "changes 2 and 3 of 3"), if it shows any: the changed lines that no box
+/// holds. The line diff then starts open, so that they aren't missed.
+fn line_hunks_label(path: &str) -> Option<String> {
+    let all = crate::review::hunks_of(&crate::review::file_unit(path));
+    let mine: Vec<String> = all
+        .iter()
+        .enumerate()
+        .filter(|(_, h)| h.key.starts_with("lines:"))
+        .map(|(i, _)| (i + 1).to_string())
+        .collect();
+    let (last, rest) = mine.split_last()?;
+    Some(if rest.is_empty() {
+        format!("change {last} of {}", all.len())
+    } else {
+        format!("changes {} and {last} of {}", rest.join(", "), all.len())
+    })
+}
+
 /// The start and end of the box around a hunk of a file, if the file is
 /// reviewed hunk by hunk and has the hunk `key`: its review controls and a
 /// link to its lines on GitHub at the top.
@@ -923,9 +948,15 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
         } else {
             f.added + f.removed <= SMALL && structured.is_empty()
         };
+        // Hunks to review in the line diff: open, and named in its summary.
+        let to_review = line_hunks_label(&f.path);
         format!(
-            r#"<details class="src" {}><summary>{} {}</summary>{}</details>"#,
-            if small { "open" } else { "" },
+            r#"<details class="src" {}><summary>{} {}{}</summary>{}</details>"#,
+            if small || to_review.is_some() {
+                "open"
+            } else {
+                ""
+            },
             if f.analyzed && !f.parts.is_empty() {
                 "Other lines outside items"
             } else if f.analyzed {
@@ -941,6 +972,9 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
             } else {
                 stats(f.added, f.removed)
             },
+            to_review
+                .map(|l| format!(r#" <span class="dim rv-in">· {l}</span>"#))
+                .unwrap_or_default(),
             diff_html(
                 d,
                 &f.hunks,
@@ -1601,6 +1635,26 @@ mod tests {
         let mut added = f.clone();
         added.status = Status::Added;
         assert!(review_hunks(&added).is_empty());
+    }
+
+    #[test]
+    fn the_line_diff_names_its_hunks() {
+        let old: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+        let new = old
+            .replace("line 3\n", "line three\n")
+            .replace("line 25\n", "line 25\nline 25b\n");
+        let f = changed("notes.txt", "text", &old, &new);
+        crate::review::set_hunks_for_test(&f.path, review_hunks(&f));
+        assert_eq!(
+            line_hunks_label(&f.path).as_deref(),
+            Some("changes 1 and 2 of 2")
+        );
+        let mut h = review_hunks(&f);
+        h[0].key = "part:0".into();
+        crate::review::set_hunks_for_test(&f.path, h);
+        assert_eq!(line_hunks_label(&f.path).as_deref(), Some("change 2 of 2"));
+        crate::review::set_hunks_for_test(&f.path, Vec::new());
+        assert_eq!(line_hunks_label(&f.path), None);
     }
 
     #[test]

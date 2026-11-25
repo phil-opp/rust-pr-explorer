@@ -1,4 +1,4 @@
-use super::docs_diff::{docs_diff_html, mark_changed_tokens, word_diff_html};
+use super::docs_diff::{docs_diff_html, mark_changed_lines, word_diff_html};
 use super::markdown::doc_blocks;
 use super::*;
 use crate::data::Data;
@@ -662,6 +662,12 @@ fn review_rendering_cases() {
     assert!(!web_url("javascript://x/%0Aalert(1)") && web_url("https://docs.rs/x"));
 }
 
+/// `mark_changed_lines` for one line on each side.
+fn mark_changed_tokens(old: &str, new: &str) -> Option<(String, String)> {
+    let (mut a, mut b) = mark_changed_lines(&[old.into()], &[new.into()])?;
+    Some((a.remove(0), b.remove(0)))
+}
+
 #[test]
 fn changed_code_lines_mark_changed_tokens() {
     let d = empty();
@@ -683,6 +689,79 @@ fn changed_code_lines_mark_changed_tokens() {
     );
     // A different line: no marks.
     assert_eq!(mark_changed_tokens("one two three", "four five six"), None);
+}
+
+#[test]
+fn rewrapped_comment_lines_mark_all_changed_words() {
+    // PR 165: a doc comment paragraph that was edited and rewrapped.
+    let d = empty();
+    let html = |lines: &str| -> Vec<String> {
+        lines
+            .lines()
+            .map(|l| code_html(&d, l, Links::None))
+            .collect()
+    };
+    let old = html(
+        "    /// GitHub refuses it, by changing the event on its first line (see
+    /// `pretty`). An approval's text starts with \"Approved.\" for that case
+    /// (see `body`), since adding it here would need a `\\n` in the command,
+    /// which fish reads differently from bash inside single quotes. The
+    /// first attempt's output is kept back until it succeeds: on an error,",
+    );
+    let new = html(
+        "    /// GitHub refuses it, with `sed`: it changes the event on the JSON's
+    /// second line (see `pretty`) and starts the review's text with
+    /// \"Approved.\", so that the comment review still says what it is. The
+    /// `\\n` after it is written as `\\134` (the octal code of a backslash) for
+    /// `printf`, since fish reads two backslashes inside single quotes as one,
+    /// unlike bash and zsh. The first attempt's output is kept back until it succeeds: on an error,",
+    );
+    let (ma, mb) = mark_changed_lines(&old, &new).unwrap();
+    // The text of a line's marks.
+    let marked = |l: &str| -> Vec<String> {
+        l.split(r#"<span class="wc">"#)
+            .skip(1)
+            .map(|m| {
+                let m = &m[..m.find("</span>").unwrap()];
+                m.split('<')
+                    .map(|p| p.split_once('>').map_or(p, |(_, t)| t))
+                    .collect()
+            })
+            .collect()
+    };
+    // Every line that has new text has it marked, not just the first two.
+    for (k, l) in mb.iter().enumerate() {
+        assert!(!marked(l).is_empty(), "line {k}: {l}");
+    }
+    let all_new: Vec<String> = mb.iter().flat_map(|l| marked(l)).collect();
+    for word in ["134", "octal", "printf", "zsh", "comment review"] {
+        assert!(
+            all_new.iter().any(|m| m.contains(word)),
+            "{word}: {all_new:?}"
+        );
+    }
+    let all_old: Vec<String> = ma.iter().flat_map(|l| marked(l)).collect();
+    for word in ["command", "differently"] {
+        assert!(
+            all_old.iter().any(|m| m.contains(word)),
+            "{word}: {all_old:?}"
+        );
+    }
+    // Words that only moved to another line and the comment markers
+    // aren't marked.
+    for word in ["kept back", "single quotes", "first attempt", "/"] {
+        assert!(
+            !all_new.iter().any(|m| m.contains(word)),
+            "{word}: {all_new:?}"
+        );
+    }
+    // A different comment marker is marked.
+    let (_, mb) = mark_changed_tokens(
+        &code_html(&d, "// a b c", Links::None),
+        &code_html(&d, "/// a b c", Links::None),
+    )
+    .unwrap();
+    assert!(mb.contains(r#"<span class="wc">"#), "{mb}");
 }
 
 #[test]

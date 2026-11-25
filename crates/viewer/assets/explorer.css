@@ -883,6 +883,7 @@ body:not(.reviewing) .card-rv:has(.rvc.open) { display: none; }
 .rv-editor textarea, .rv-finish textarea { width: 100%; box-sizing: border-box; font: 14px var(--sans); padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); resize: vertical; }
 .rv-finish #rv-out { font: 12px var(--mono); margin-top: 8px; }
 .rv-finish .rv-fallback { margin: 6px 0; font-size: 13px; }
+.rv-finish .rv-quick { margin: 10px 0 4px; }
 .rv-finish .rv-fallback > summary { cursor: pointer; color: var(--link); width: fit-content; }
 .rv-editor .sub, .rv-finish .sub { color: var(--muted); font-size: 13px; margin: 6px 0; }
 .rv-row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 6px 0; }
@@ -940,6 +941,7 @@ pre .rt-row { max-width: min(760px, 100cqw); }
 .hunk-rv .rv-btn { font-size: 11px; padding: 0 6px; }
 .rv-scope { color: var(--muted); font-size: 12px; white-space: nowrap; }
 body:not(.reviewing) .rv-scope { display: none; }
+body:not(.reviewing) .rv-in { display: none; }
 .rvc:has(> .rv-same) { flex-wrap: wrap; justify-content: flex-end; }
 .rv-same { flex-basis: 100%; color: var(--muted); font-size: 12px; text-align: right; }
 body:not(.reviewing) .rv-same { display: none; }

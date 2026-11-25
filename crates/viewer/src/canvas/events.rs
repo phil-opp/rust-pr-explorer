@@ -271,8 +271,22 @@ fn beside_code(el: &Element, x: f64, y: f64) -> bool {
     let Some(block) = code_block(el) else {
         return false;
     };
+    // The block's own scroll bar scrolls the code, as usual.
+    if on_scrollbar(&block, x, y) {
+        return false;
+    }
     let line = dom::closest(el, ".ln").unwrap_or(block);
     !text_at(&line, x, y)
+}
+
+/// Whether `x`, `y` is on a scroll bar of `el`: below or right of its
+/// content and padding, but inside its border box.
+fn on_scrollbar(el: &Element, x: f64, y: f64) -> bool {
+    let r = el.get_bounding_client_rect();
+    let left = r.left() + el.client_left() as f64;
+    let top = r.top() + el.client_top() as f64;
+    let inside = x >= r.left() && x <= r.right() && y >= r.top() && y <= r.bottom();
+    inside && (y >= top + el.client_height() as f64 || x >= left + el.client_width() as f64)
 }
 
 /// Whether text of `el` (not its line numbers or sign) is at `x`, `y`,

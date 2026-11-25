@@ -230,6 +230,41 @@ try {
   await browser.close();
 }
 
+// A press on a code block's scroll bar is left to the browser: it must not
+// start moving the view (it did, so the bar could not be dragged). Needs a
+// browser that shows scroll bars, which headless Chromium hides by default.
+const bars = await chromium.launch({ ignoreDefaultArgs: ["--hide-scrollbars"] });
+try {
+  const page = await bars.newPage({ viewport: { width: 1400, height: 1600 } });
+  await page.goto(url);
+  await page.waitForFunction(() => document.querySelector("#sidebar")?.children.length > 0, null, { timeout: 30_000 });
+  await page.locator("#view-overview .cgraph a.ref[data-id]").first().click();
+  const card = page.locator("#cards .card").first();
+  await card.waitFor({ state: "visible", timeout: 5_000 });
+  await page.$$eval("#cards details.src:not([open])", (ds) => ds.forEach((d) => (d.open = true)));
+  // Narrow enough that the code needs scrolling.
+  await card.evaluate((c) => (c.style.width = "320px"));
+  const bar = await card.evaluate((c) => {
+    const b = [...c.querySelectorAll("pre, .sig, .sbs")].find(
+      (b) => b.scrollWidth > b.clientWidth && b.offsetHeight > b.clientHeight,
+    );
+    if (!b) return null;
+    const r = b.getBoundingClientRect();
+    return { x: r.left + 40, y: (r.top + b.clientTop + b.clientHeight + r.bottom) / 2, bottom: innerHeight };
+  });
+  if (!bar || bar.y > bar.bottom) {
+    failures.push("found no code block with a scroll bar in view to press");
+  } else {
+    await page.mouse.move(bar.x, bar.y);
+    await page.mouse.down();
+    const panning = await page.evaluate(() => document.getElementById("viewport").classList.contains("panning"));
+    await page.mouse.up();
+    if (panning) failures.push("a press on a code block's scroll bar moves the view instead of the bar");
+  }
+} finally {
+  await bars.close();
+}
+
 if (backgrounds.light === backgrounds.dark) {
   failures.push(`light and dark themes have the same background (${backgrounds.light})`);
 }

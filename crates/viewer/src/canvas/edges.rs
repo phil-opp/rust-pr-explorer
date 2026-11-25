@@ -1,8 +1,8 @@
 //! Connectors between cards, and frames around the cards of a module.
 
-use super::{Group, card_el, visible};
+use super::{Canvas, Group, card_el, visible};
 use crate::code::esc;
-use crate::data::Data;
+use crate::data::{Data, within};
 use crate::indirect;
 use crate::{App, dom, route};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -368,6 +368,82 @@ fn lanes(conns: &[Conn], ends: &[Ends]) -> Vec<f64> {
         }
     }
     out
+}
+
+/// Space kept between a connector's lane and a card it runs past.
+const CLEAR: f64 = 20.0;
+
+/// Moves the lane of a connector that runs left or right between two cards
+/// when, in the middle of the gap, it would run behind other cards: its
+/// runs across, at the call sites and at the callee, and its run along the
+/// lane would hide behind them, so that it seems to end at a card it does
+/// not go to. The lane goes where it crosses the fewest cards: next to the
+/// caller, next to the callee, or beside one of the cards in between.
+fn avoid_cards(conns: &[Conn], ends: &[Ends], lanes: &mut [f64], cards: &[(u32, Rect)]) {
+    // Lanes moved so far, with the heights they span.
+    let mut moved: Vec<(f64, f64, f64)> = Vec::new();
+    for (i, c) in conns.iter().enumerate() {
+        let Route::Ortho(sa, sb) = c.route else {
+            continue;
+        };
+        if sa == sb || !matches!(sa, Side::Left | Side::Right) {
+            continue;
+        }
+        let (p, q) = ends[i];
+        let dir = if q.0 >= p.0 { 1.0 } else { -1.0 };
+        let mut ys = vec![p.1];
+        ys.extend(c.more_sites.iter().copied());
+        let (lo, hi) = ys
+            .iter()
+            .chain([&q.1])
+            .fold((f64::MAX, f64::MIN), |(lo, hi), &y| (lo.min(y), hi.max(y)));
+        let others: Vec<Rect> = cards
+            .iter()
+            .filter(|(g, _)| *g != c.a.0 && *g != c.b.0)
+            .map(|&(_, r)| r)
+            .collect();
+        let hits = |lane: f64| -> usize {
+            others
+                .iter()
+                .filter(|r| {
+                    let across = |y: f64, x0: f64, x1: f64| {
+                        y > r.y && y < r.y + r.h && x0.max(x1) > r.x && x0.min(x1) < r.x + r.w
+                    };
+                    ys.iter().any(|&y| across(y, p.0, lane))
+                        || across(q.1, lane, q.0)
+                        || (lane > r.x && lane < r.x + r.w && hi > r.y && lo < r.y + r.h)
+                })
+                .count()
+        };
+        let lane = lanes[i];
+        if hits(lane) == 0 {
+            continue;
+        }
+        let inside = |x: f64| (x - p.0) * dir > 0.0 && (q.0 - x) * dir > 0.0;
+        let mut options = vec![p.0 + dir * CLEAR, q.0 - dir * CLEAR];
+        for r in &others {
+            options.extend([r.x - CLEAR, r.x + r.w + CLEAR]);
+        }
+        let Some(mut best) = options
+            .into_iter()
+            .filter(|&x| inside(x))
+            .map(|x| (hits(x), (x - lane).abs(), x))
+            .min_by(|a, b| a.0.cmp(&b.0).then(a.1.total_cmp(&b.1)))
+            .filter(|&(n, _, _)| n < hits(lane))
+            .map(|(_, _, x)| x)
+        else {
+            continue;
+        };
+        // Apart from lanes moved to the same place, towards the callee.
+        while moved
+            .iter()
+            .any(|&(x, l, h)| (x - best).abs() < LANE_GAP / 2.0 && l < hi && h > lo)
+        {
+            best += dir * LANE_GAP;
+        }
+        moved.push((best, lo, hi));
+        lanes[i] = best;
+    }
 }
 
 /// The SVG paths of a connector.
@@ -837,7 +913,9 @@ pub fn draw_edges(app: &App) {
         }
     }
     let ends = ports(&conns);
-    let lanes = lanes(&conns, &ends);
+    let mut lanes = lanes(&conns, &ends);
+    let cards: Vec<(u32, Rect)> = rects.iter().map(|(&g, &r)| (g, r)).collect();
+    avoid_cards(&conns, &ends, &mut lanes, &cards);
     let colors = call_colors(&conns, &ends, &lanes);
     let ids: HashMap<u32, &str> = vis.iter().map(|g| (g.gid, g.active.as_str())).collect();
     mark_callees(&conns, &colors, &ids);
@@ -984,13 +1062,16 @@ fn mark_callees(conns: &[Conn], colors: &[usize], ids: &HashMap<u32, &str>) {
 }
 
 /// Module boundaries around the cards they contain, with a private zone.
-fn draw_frames(app: &App, rects: &HashMap<u32, Rect>) {
-    let d = &app.d;
-    let c = &app.s.canvas;
-    if !c.frames {
-        dom::set_html("frames", "");
-        return;
-    }
+/// A module's frame: the module, its box and the box of its private zone.
+pub(super) struct Frame {
+    pub(super) module: String,
+    pub(super) b: Rect,
+    pub(super) private: Option<Rect>,
+}
+
+/// The frames around the visible cards, innermost first. `rects` are the
+/// cards' boxes by group.
+pub(super) fn frame_boxes(d: &Data, c: &Canvas, rects: &HashMap<u32, Rect>) -> Vec<Frame> {
     #[derive(Default)]
     struct Entry {
         public: Vec<Rect>,
@@ -1037,7 +1118,7 @@ fn draw_frames(app: &App, rects: &HashMap<u32, Rect>) {
     let mut mods: Vec<String> = by_mod.keys().cloned().collect();
     // Innermost first, so parents can enclose their children's frames.
     mods.sort_by_key(|m| std::cmp::Reverse(d.mod_depth(m)));
-    let mut out: Vec<String> = Vec::new();
+    let mut out = Vec::new();
     for m in mods {
         let e = by_mod.remove(&m).unwrap();
         let private_box = union(&e.private, 14.0);
@@ -1060,6 +1141,47 @@ fn draw_frames(app: &App, rects: &HashMap<u32, Rect>) {
         {
             parent.frames.push(b);
         }
+        out.push(Frame {
+            module: m,
+            b,
+            private: private_box,
+        });
+    }
+    out
+}
+
+/// Whether module frames get in each other's way: two frames of which
+/// neither is inside the other overlap, or a frame overlaps a card of
+/// another module that it is not part of. `cards` are the cards' boxes
+/// with their modules.
+pub(super) fn frames_clash(frames: &[Frame], cards: &[(String, Rect)]) -> bool {
+    let meet = |a: &Rect, b: &Rect| {
+        a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+    };
+    frames.iter().enumerate().any(|(i, f)| {
+        frames[i + 1..].iter().any(|g| {
+            !within(&f.module, &g.module) && !within(&g.module, &f.module) && meet(&f.b, &g.b)
+        }) || cards
+            .iter()
+            .any(|(m, r)| !within(m, &f.module) && meet(&f.b, r))
+    })
+}
+
+fn draw_frames(app: &App, rects: &HashMap<u32, Rect>) {
+    let d = &app.d;
+    let c = &app.s.canvas;
+    if !c.frames {
+        dom::set_html("frames", "");
+        return;
+    }
+    let mut out: Vec<String> = Vec::new();
+    for Frame {
+        module: m,
+        b,
+        private: private_box,
+    } in frame_boxes(d, c, rects)
+    {
+        let Some(it) = d.item(&m) else { continue };
         let mut s = format!(
             r#"<g class="frame"><rect class="frame-bg" x="{x}" y="{y}" width="{w}" height="{h}" rx="12"/><rect x="{x}" y="{y}" width="{w}" height="{h}" rx="12"/><rect class="frame-grip" data-frame="{m}" x="{x}" y="{y}" width="{w}" height="{h}" rx="12"><title>Drag to move this module's cards</title></rect><text data-frame="{m}" x="{}" y="{}">{}{}</text>"#,
             b.x + 12.0,
@@ -1135,6 +1257,69 @@ mod tests {
         }
         // The lower connector enters the right card lower down.
         assert!(ends[0].1.1 < ends[1].1.1);
+    }
+
+    /// Frames that overlap without one being inside the other clash, and
+    /// so does a frame over a card of another module; a submodule's frame
+    /// inside its parent's doesn't.
+    #[test]
+    fn module_frames_clash_only_across_modules() {
+        let frame = |m: &str, x: f64, y: f64, w: f64, h: f64| Frame {
+            module: m.into(),
+            b: Rect { x, y, w, h },
+            private: None,
+        };
+        let card = |m: &str, x: f64, y: f64| (m.to_string(), rect(x, y, 300.0));
+        // `post::tests` right of a `post` card, all inside `post`.
+        let frames = [
+            frame("c::post::tests", 640.0, -40.0, 660.0, 380.0),
+            frame("c::post", -40.0, -80.0, 1400.0, 480.0),
+        ];
+        let cards = [
+            card("c::post", 0.0, 0.0),
+            card("c::post::tests", 680.0, 0.0),
+        ];
+        assert!(!frames_clash(&frames, &cards));
+        // A card of `post` inside the frame of `post::tests`.
+        let cards = [
+            card("c::post", 700.0, 100.0),
+            card("c::post::tests", 680.0, 0.0),
+        ];
+        assert!(frames_clash(&frames, &cards));
+        // Two sibling modules' frames overlapping.
+        let frames = [
+            frame("c::a", 0.0, 0.0, 600.0, 400.0),
+            frame("c::b", 500.0, 300.0, 600.0, 400.0),
+        ];
+        assert!(frames_clash(&frames, &[]));
+    }
+
+    /// A call from a card on the right to a card further up on the left,
+    /// past a card in between: in the middle of the gap, the connector
+    /// would run behind the card in between and seem to end there. Its
+    /// lane moves between that card and the caller instead, where it
+    /// crosses nothing.
+    #[test]
+    fn connector_runs_around_a_card_in_between() {
+        let callee = (1, rect(0.0, 0.0, 300.0));
+        let between = (2, rect(660.0, 400.0, 800.0));
+        let caller = (3, rect(1320.0, 500.0, 600.0));
+        let site = 700.0;
+        let c = Conn {
+            site_y: Some(site),
+            more_sites: vec![780.0, 860.0],
+            route: choose_route(caller.1, callee.1, Some(site)),
+            ..conn(caller, callee)
+        };
+        assert!(matches!(c.route, Route::Ortho(Side::Left, Side::Right)));
+        let conns = vec![c];
+        let ends = ports(&conns);
+        let mut lanes = lanes(&conns, &ends);
+        // In the middle of the gap: behind the card in between.
+        assert!(lanes[0] > 660.0 && lanes[0] < 1240.0, "lane {}", lanes[0]);
+        let cards = [callee, between, caller];
+        avoid_cards(&conns, &ends, &mut lanes, &cards);
+        assert!(lanes[0] > 1240.0 && lanes[0] < 1320.0, "lane {}", lanes[0]);
     }
 
     /// A call from a card's source to a card below it in the same column
