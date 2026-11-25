@@ -1095,6 +1095,7 @@ fn update_finish(app: &App) {
     let (event, own) = finish_choice();
     let comments = post::summary(&app.d).comments;
     dom::set_html("rv-what", &post::posts_html(&comments, &own, event));
+    dom::set_html("rv-fallback", &post::fallback_html(&comments, event));
 }
 
 /// The buttons of the "Finish review" dialog: copy the review in one form.
@@ -1113,14 +1114,27 @@ fn finish_output(app: &App, what: &str) {
             post::review_markdown(&comments, &own, event),
             "The review as Markdown",
         ),
-        "cmd" => (
-            post::command(&app.d, &comments, &own, event, &carry::for_review()).unwrap_or_default(),
-            "The command",
-        ),
-        _ => (
+        "json" => (
             post::review_json(&comments, &own, event, commit, &carry::for_review()),
             "The review's JSON",
         ),
+        _ => {
+            let Some(attempt) = post::Attempt::from_name(what) else {
+                return;
+            };
+            (
+                post::command(
+                    &app.d,
+                    &comments,
+                    &own,
+                    event,
+                    &carry::for_review(),
+                    attempt,
+                )
+                .unwrap_or_default(),
+                "The command",
+            )
+        }
     };
     // Also shown, selected, in case the browser doesn't allow the
     // clipboard.
