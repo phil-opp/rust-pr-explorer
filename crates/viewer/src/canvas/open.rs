@@ -1,10 +1,11 @@
 //! Opening and closing cards and tabs, and expanding an item's relatives.
 
 use super::{
-    CARD_W, EXPAND_LIMIT, Expansion, apply_pan, card_el, edges::draw_edges, height_of, place,
-    render, visible,
+    CARD_W, Canvas, EXPAND_LIMIT, Expansion, Group, apply_pan, card_el,
+    edges::{Rect, call_site_y, card_rect, draw_edges},
+    height_of, place, render, spot, visible,
 };
-use crate::data::changed;
+use crate::data::{Data, changed};
 use crate::{App, View, dom, toast};
 use model::{Item, Kind};
 
@@ -28,15 +29,13 @@ pub fn open_for_review(app: &mut App, id: &str, reviewed: Option<&str>) {
             .and_then(on)
             .or_else(|| callers.iter().find_map(|f| on(f)))
     });
-    let at = (c.group_of(id).is_none() && !vis.is_empty()).then(|| match caller {
-        Some(g) => (g.x + CARD_W + 120.0, g.y),
-        None => {
-            let x = vis.iter().map(|g| g.x).fold(f64::MIN, f64::max) + CARD_W + 120.0;
-            let y = reviewed
-                .and_then(|r| vis.iter().find(|g| g.active == r))
-                .map_or_else(|| vis.iter().map(|g| g.y).fold(f64::MAX, f64::min), |g| g.y);
-            (x, y)
-        }
+    // Next to a caller: placed like a card opened from it.
+    let at = (c.group_of(id).is_none() && !vis.is_empty() && caller.is_none()).then(|| {
+        let x = vis.iter().map(|g| g.x).fold(f64::MIN, f64::max) + CARD_W + 120.0;
+        let y = reviewed
+            .and_then(|r| vis.iter().find(|g| g.active == r))
+            .map_or_else(|| vis.iter().map(|g| g.y).fold(f64::MAX, f64::min), |g| g.y);
+        (x, y)
     });
     let from = caller.map(|g| g.active.clone());
     if let Some(gid) = open_at(app, id, from.as_deref(), true, at) {
@@ -70,9 +69,10 @@ fn open_at(
             gi
         }
         None => {
+            let gi = c.add_group(id, 0.0, 0.0);
             let (x, y) = match (at, from.and_then(|f| c.group_of(f))) {
                 (Some(at), _) => at,
-                (None, Some(fi)) => (c.groups[fi].x + CARD_W + 80.0, c.groups[fi].y),
+                (None, Some(fi)) => spot_next_to(&d, c, gi, fi),
                 (None, None) => {
                     let width = dom::by_id("viewport")
                         .map_or(1000.0, |v| v.get_bounding_client_rect().width());
@@ -82,7 +82,8 @@ fn open_at(
                     )
                 }
             };
-            let gi = c.add_group(id, x, y);
+            c.groups[gi].x = x;
+            c.groups[gi].y = y;
             place(&d, c, gi);
             if let Some(f) = from {
                 c.add_link(f, id);
@@ -93,7 +94,7 @@ fn open_at(
     let gid = c.groups[gi].gid;
     if switch_view {
         // Opened from outside the canvas, or jumped to: a history entry.
-        app.s.canvas_focus = Some(id.to_string());
+        app.s.canvas_focus = Some(crate::nav::OnCanvas::Item(id.to_string()));
     }
     if switch_view && app.s.view != View::Canvas {
         crate::set_view(app, View::Canvas);
@@ -111,6 +112,70 @@ fn open_at(
         nudge_into_view(gid);
     }
     Some(gid)
+}
+
+/// Where to put the new card `gi`, opened from card `fi`: see [`spot`].
+fn spot_next_to(d: &Data, c: &Canvas, gi: usize, fi: usize) -> (f64, f64) {
+    let id = c.groups[gi].active.as_str();
+    let rect = |g: &Group| {
+        card_rect(g).unwrap_or(Rect {
+            x: g.x,
+            y: g.y,
+            w: CARD_W,
+            h: height_of(d, g),
+        })
+    };
+    let others: Vec<&Group> = c
+        .groups
+        .iter()
+        .enumerate()
+        .filter(|&(i, g)| i != gi && visible(d, c, g))
+        .map(|(_, g)| g)
+        .collect();
+    let it = d.item(id);
+    let calls_new = |g: &Group| {
+        g.active == c.groups[fi].active
+            || d.callers.get(id).is_some_and(|v| v.contains(&g.active))
+            || d.used_by
+                .get(id)
+                .is_some_and(|v| v.iter().any(|(f, _)| *f == g.active))
+    };
+    let called = |g: &Group| {
+        it.is_some_and(|it| {
+            it.info.calls.iter().any(|x| x.to == g.active)
+                || it.info.uses.iter().any(|x| x.to == g.active)
+        })
+    };
+    let related: Vec<spot::Related> = others
+        .iter()
+        .filter_map(|&g| {
+            let r = rect(g);
+            if calls_new(g) {
+                let at = call_site_y(g, id, c.pan.k).unwrap_or(r.y + 40.0);
+                Some(spot::Related {
+                    r,
+                    dir: spot::Dir::In,
+                    at,
+                })
+            } else if called(g) {
+                Some(spot::Related {
+                    r,
+                    dir: spot::Dir::Out,
+                    at: r.y + 40.0,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    let cards: Vec<Rect> = others.iter().map(|&g| rect(g)).collect();
+    spot::best_spot(
+        CARD_W,
+        height_of(d, &c.groups[gi]),
+        rect(&c.groups[fi]),
+        &related,
+        &cards,
+    )
 }
 
 /// After following a link from one card to another: pans only as far as

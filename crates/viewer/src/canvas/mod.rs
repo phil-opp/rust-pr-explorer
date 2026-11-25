@@ -13,7 +13,9 @@ mod events;
 mod layout;
 mod open;
 mod reflow;
+mod spot;
 mod undo;
+mod zoom;
 
 pub use edges::draw_edges;
 pub use events::{
@@ -294,6 +296,17 @@ fn place(d: &Data, c: &mut Canvas, gi: usize) {
     c.groups[gi].y = y;
 }
 
+/// The items of the cards that the canvas shows, with the view it looks
+/// from: what a new tab lays out again (see `nav::update_view_links`).
+pub fn shown_items(app: &App) -> Vec<String> {
+    let c = &app.s.canvas;
+    c.groups
+        .iter()
+        .filter(|g| visible(&app.d, c, g))
+        .map(|g| g.active.clone())
+        .collect()
+}
+
 /// The card of item `id` as the canvas would show it, looking from
 /// `scope`, for a view outside the canvas (see [`crate::calls`]). `full`
 /// shows an unchanged item's docs and source, not only its signature.
@@ -363,6 +376,10 @@ pub fn render(app: &mut App) {
     );
     apply_pan(c);
     mark_on_canvas(app);
+    // The sidebar's outline marks which items have a card.
+    if app.s.view == crate::View::Canvas {
+        crate::pages::render_sidebar(app);
+    }
     dom::raf(|| {
         crate::with_app(|app| {
             draw_edges(app);
@@ -408,4 +425,15 @@ fn mark_on_canvas(app: &App) {
             on.contains(id.as_str()) && own != Some(id.as_str()),
         );
     }
+}
+
+/// The items that have a card (as any of its tabs), also those hidden at
+/// the canvas's scope.
+pub fn items_on_canvas(app: &App) -> Vec<String> {
+    app.s
+        .canvas
+        .groups
+        .iter()
+        .flat_map(|g| g.tabs.iter().cloned())
+        .collect()
 }
