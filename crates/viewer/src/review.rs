@@ -354,6 +354,12 @@ pub fn hunk_controls(item: &str, old: &[usize], new: &[usize]) -> String {
         .collect()
 }
 
+/// Sets a file's hunks, for tests of what shows them.
+#[cfg(test)]
+pub fn set_hunks_for_test(path: &str, list: Vec<Hunk>) {
+    REVIEW.with(|r| r.borrow_mut().hunks.insert(file_unit(path), list));
+}
+
 /// The hunk of a file that a part of its view shows (by the hunk's
 /// `key`), if the file is reviewed hunk by hunk.
 pub fn file_hunk(path: &str, key: &str) -> Option<Hunk> {
