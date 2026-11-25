@@ -1477,13 +1477,14 @@ impl Data {
         // controls of the hunks that start in it (see `review::hunks`), and
         // a part with controls is boxed together with them (`.hunk`), so
         // that the controls clearly belong to the lines below them.
-        let part_gh = |part: std::ops::Range<usize>| -> (Vec<usize>, Vec<usize>, String) {
+        let part_html = |part: std::ops::Range<usize>| -> String {
             let (mut olds, mut news) = (Vec::new(), Vec::new());
             for &(o, n) in rows[part.clone()].iter().filter(|r| changed_row(r)) {
                 olds.extend(o.map(|a| old_start + a));
                 news.extend(n.map(|b| new_start + b));
             }
-            // A link to the part's first changed line on GitHub.
+            // A link to the part's first changed line on GitHub, for its
+            // review bar.
             let first_added = rows[part.clone()]
                 .iter()
                 .find(|r| changed_row(r))
@@ -1501,35 +1502,22 @@ impl Data {
                 "GitHub ↗",
                 "this change",
             );
-            (olds, news, gh)
-        };
-        let part_html = |part: std::ops::Range<usize>| -> String {
-            let (olds, news, gh) = part_gh(part.clone());
             let lines: String = part.map(&row_html).collect();
             match crate::review::hunk_controls(&it.info.id, &olds, &news) {
+                // Outside review mode, a change has no link of its own: the
+                // item's link (in a card's header or an item's row) leads to
+                // its first change.
                 c if c.is_empty() => lines,
-                // In review mode the link goes into the hunk's bar.
                 c => format!(
                     r#"<span class="hunk"><span class="hunk-rv">{c}{gh}</span>{lines}</span>"#
                 ),
             }
         };
-        // Outside review mode, a part's link is in the row of the folded
-        // lines above it, not over its first line, where it would hide the
-        // end of that line. The first part has none unless lines above it
-        // are folded: the item's own link (in a card's header or an item's
-        // row) leads to its first change.
-        let mut parts = Vec::new();
-        let mut r = 0;
-        for g in &gaps {
-            parts.push(r..g.start);
-            r = g.end;
-        }
-        parts.push(r..rows.len());
         let mut folded = 0;
         let mut body = String::new();
-        for (i, g) in gaps.iter().enumerate() {
-            body += &part_html(parts[i].clone());
+        let mut r = 0;
+        for g in &gaps {
+            body += &part_html(r..g.start);
             let inner: String = g.clone().map(&row_html).collect();
             if unfolded.contains(&g.start) {
                 body += &inner;
@@ -1542,19 +1530,16 @@ impl Data {
                 } else {
                     "↕"
                 };
-                let gh = match part_gh(parts[i + 1].clone()).2 {
-                    gh if gh.is_empty() => gh,
-                    gh => format!(r#"<span class="hunk-gh">{gh}</span>"#),
-                };
                 body += &format!(
-                    r#"<span class="{}unfold" data-unfold="{}" title="Show these lines">{arrow} {} unchanged lines{gh}</span><span class="fold" hidden>{inner}</span>"#,
+                    r#"<span class="{}unfold" data-unfold="{}" title="Show these lines">{arrow} {} unchanged lines</span><span class="fold" hidden>{inner}</span>"#,
                     if split { "skip " } else { "ln skip " },
                     g.start,
                     g.len()
                 );
             }
+            r = g.end;
         }
-        body += &part_html(parts[gaps.len()].clone());
+        body += &part_html(r..rows.len());
         let code = format!(
             r#"<div class="src-code" data-item="{}">{}{}</div>"#,
             esc(&it.info.id),

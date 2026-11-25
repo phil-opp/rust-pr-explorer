@@ -901,11 +901,6 @@ body:not(.reviewing) .rv-same { display: none; }
 a.gh-link { font: 12px var(--sans); color: var(--link); white-space: nowrap; text-decoration: none; }
 a.gh-link:hover { text-decoration: underline; }
 .iacts a.gh-link { align-self: center; margin-right: 4px; }
-/* A change's link to GitHub, outside review mode: at the right end of the
-   folded lines' row above the change (in review mode it is in the
-   change's bar). */
-.unfold .hunk-gh { float: right; margin-right: 6px; }
-body.reviewing .unfold .hunk-gh { display: none; }
 body:not(.reviewing) .hunk-rv:not(:has(.rvc.done, .rvc.stale)) { display: none; }
 /* Wherever its bar shows, a hunk is a box around its bar and its lines,
    apart from the next one, so that the buttons clearly belong to the lines
