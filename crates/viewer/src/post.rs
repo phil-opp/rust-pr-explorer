@@ -796,23 +796,18 @@ pub fn summary(d: &Data) -> Summary {
     s
 }
 
-/// The review's text: "Approved." for an approval, the reviewer's own
-/// text, then the comments that fit on no line (all of them unless
-/// `inline`). GitHub requires a text for anything but an approval.
+/// The review's text: the reviewer's own, then the comments that fit on
+/// no line (all of them unless `inline`). GitHub requires a text for
+/// anything but an approval.
 fn body(comments: &[Comment], own: &str, event: Verdict, inline: bool) -> String {
     let mut parts: Vec<String> = Vec::new();
-    if event == Verdict::Approve {
-        // Also says what the review is when it's posted as a comment
-        // review, on the reviewer's own PR (see `command`).
-        parts.push("Approved.".to_string());
-    }
     if !own.trim().is_empty() {
         parts.push(own.trim().to_string());
     }
     for c in comments.iter().filter(|c| !inline || c.loc.is_none()) {
         parts.push(format!("{}\n\n{}", c.lead_in_text(), c.text));
     }
-    if parts.is_empty() {
+    if parts.is_empty() && event != Verdict::Approve {
         parts.push(if comments.is_empty() {
             "Reviewed with Rust Semantic Review.".to_string()
         } else {
@@ -929,6 +924,10 @@ fn review_value(
             })
             .collect::<Vec<Value>>(),
     });
+    if v["body"] == "" {
+        // An approval without a text.
+        v.as_object_mut().map(|o| o.remove("body"));
+    }
     if !commit.is_empty() {
         v["commit_id"] = json!(commit);
     }
@@ -1007,11 +1006,12 @@ fn shell_safe(json: &str) -> String {
 ///
 /// GitHub refuses an approval of one's own PR. So an approval goes through
 /// a POSIX `sh` script, which posts the JSON again as a comment review if
-/// GitHub refuses it, by changing the event on its first line (see
-/// `pretty`). An approval's text starts with "Approved." for that case
-/// (see `body`), since adding it here would need a `\n` in the command,
-/// which fish reads differently from bash inside single quotes. The
-/// first attempt's output is kept back until it succeeds: on an error,
+/// GitHub refuses it, with `sed`: it changes the event on the JSON's
+/// second line (see `pretty`) and starts the review's text with
+/// "Approved.", so that the comment review still says what it is. The
+/// `\n` after it is written as `\134` (the octal code of a backslash) for
+/// `printf`, since fish reads two backslashes inside single quotes as one,
+/// unlike bash and zsh. The first attempt's output is kept back until it succeeds: on an error,
 /// `gh` prints GitHub's answer on stdout and its own message on stderr,
 /// which would look like a failure although the comment review is then
 /// posted. If that fails too, its error shows.
@@ -1031,11 +1031,17 @@ pub fn command(
         pr.repo, pr.number
     );
     Some(if event == Verdict::Approve {
+        let as_comment = if v.get("body").is_some() {
+            "nl=$(printf \"\\134\\134n\")
+  printf %s \"$review\" | sed \"2s/APPROVE/COMMENT/; s/^  \\\"body\\\": \\\"/&Approved.$nl$nl/\""
+        } else {
+            "printf %s \"$review\" | sed \"2s/APPROVE\\\",/COMMENT\\\", \\\"body\\\": \\\"Approved.\\\",/\""
+        };
         format!(
             "printf '%s' '{json}' | sh -c 'review=$(cat)
 post() {{ {post}; }}
 if link=$(printf %s \"$review\" | post 2>/dev/null); then echo \"$link\"; else
-  printf %s \"$review\" | sed 2s/APPROVE/COMMENT/ | post; fi'"
+  {as_comment} | post; fi'"
         )
     } else {
         format!("printf '%s' '{json}' | {post}")
@@ -1757,11 +1763,10 @@ mod tests {
             serde_json::from_str(&review_json(&[], "", Verdict::Comment, "", "")).unwrap();
         assert!(!v["body"].as_str().unwrap().is_empty());
         assert!(v.get("commit_id").is_none());
-        // An approval says so in its text, for when it's posted as a
-        // comment review.
+        // An approval doesn't.
         let v: Value =
             serde_json::from_str(&review_json(&[], "", Verdict::Approve, "", "")).unwrap();
-        assert_eq!(v["body"], "Approved.");
+        assert!(v.get("body").is_none());
     }
 
     #[test]
@@ -1807,12 +1812,17 @@ mod tests {
         assert!(c.starts_with("printf '%s' '{\n  \"event\": \"COMMENT\",\n"));
         assert!(c.ends_with(&format!("}}' | {post}")));
         // The review is in the command once, also for an approval.
-        let c = command(&d, &comments, "", Verdict::Approve, "", false).unwrap();
+        let c = command(&d, &comments, "Nice", Verdict::Approve, "", false).unwrap();
         assert_eq!(c.matches("it\\u0027s").count(), 1);
         assert!(c.starts_with("printf '%s' '{\n  \"event\": \"APPROVE\",\n"));
         assert!(c.ends_with(&format!(
-            "}}' | sh -c 'review=$(cat)\npost() {{ {post}; }}\nif link=$(printf %s \"$review\" | post 2>/dev/null); then echo \"$link\"; else\n  printf %s \"$review\" | sed 2s/APPROVE/COMMENT/ | post; fi'"
+            "}}' | sh -c 'review=$(cat)\npost() {{ {post}; }}\nif link=$(printf %s \"$review\" | post 2>/dev/null); then echo \"$link\"; else\n  nl=$(printf \"\\134\\134n\")\n  printf %s \"$review\" | sed \"2s/APPROVE/COMMENT/; s/^  \\\"body\\\": \\\"/&Approved.$nl$nl/\" | post; fi'"
         )));
+        // Without a text, the comment review gets one.
+        let c = command(&d, &[], "", Verdict::Approve, "", false).unwrap();
+        assert!(c.contains(
+            "sed \"2s/APPROVE\\\",/COMMENT\\\", \\\"body\\\": \\\"Approved.\\\",/\" | post; fi'"
+        ));
     }
 
     #[test]
@@ -1918,6 +1928,6 @@ mod tests {
         let v = review_value(&[], "Looks good", Verdict::Comment, "", true, m);
         assert_eq!(v["body"], format!("Looks good\n\n{m}"));
         let v = review_value(&[], "", Verdict::Approve, "", true, m);
-        assert_eq!(v["body"], format!("Approved.\n\n{m}"));
+        assert_eq!(v["body"], m);
     }
 }
