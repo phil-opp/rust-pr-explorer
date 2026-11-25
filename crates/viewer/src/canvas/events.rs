@@ -5,7 +5,7 @@ use super::{
     edges::draw_edges,
     layout::{arrange_by_module, fit_view},
     open::{Related, close_tab, expand, members_as_tabs},
-    place, render, visible,
+    place, render, visible, zoom,
 };
 use crate::data::within;
 use crate::{App, View, dom, toast};
@@ -15,7 +15,7 @@ use web_sys::{Element, PointerEvent, WheelEvent};
 const HOLD_MS: i32 = 450;
 /// How far a finger may move, in pixels, and still count as resting (or,
 /// when lifted, as a tap rather than a pan).
-const SLOP: f64 = 10.0;
+pub(super) const SLOP: f64 = 10.0;
 
 /// A finger resting on what a mouse would drag right away: a card's
 /// header or a module frame. On a touch screen a drag there pans the view
@@ -148,6 +148,7 @@ pub fn on_pointer_down(app: &mut App, el: &Element, ev: &PointerEvent) -> bool {
     if dom::closest(el, "#viewport").is_none() {
         return false;
     }
+    zoom::on_press(el, ev);
     let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
     let d = app.d.clone();
     let c = &mut app.s.canvas;
@@ -158,6 +159,7 @@ pub fn on_pointer_down(app: &mut App, el: &Element, ev: &PointerEvent) -> bool {
         c.touches.retain(|t| t.0 != ev.pointer_id());
         c.touches.push((ev.pointer_id(), x, y));
         if c.touches.len() > 1 {
+            zoom::cancel_press();
             c.panned = true;
             c.hold = None;
             // A second finger turns panning into a pinch.
@@ -448,6 +450,7 @@ pub fn on_pointer_up(app: &mut App, ev: &PointerEvent) {
     let (x, y) = (ev.client_x() as f64, ev.client_y() as f64);
     app.s.canvas.touches.retain(|t| t.0 != ev.pointer_id());
     app.s.canvas.hold = None;
+    let double_click = zoom::on_release(ev);
     let Some(drag) = app.s.canvas.drag.take() else {
         return;
     };
@@ -481,6 +484,9 @@ pub fn on_pointer_up(app: &mut App, ev: &PointerEvent) {
             }
         }
         render(app);
+    }
+    if let Some(gid) = double_click {
+        zoom::zoom_to(app, gid);
     }
 }
 
