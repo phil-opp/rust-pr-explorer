@@ -1331,7 +1331,8 @@ impl Data {
             (" uns", crate::unsafety::note_at(&it.unsafe_code, old, no))
         };
         // The reviewer's comments on chosen lines (see `line_notes`).
-        let lnotes = crate::line_notes::ForItem::new(it);
+        let lnotes =
+            crate::line_notes::ForUnit::new(&it.info.id, &crate::line_notes::Sides::of_item(it));
         // The lines of a row, as `(base side, number)`, by which line
         // comments are placed: inline, a removed line by its base number
         // and any other by the PR's; side by side, both sides of a changed
@@ -1535,6 +1536,7 @@ impl Data {
                 new: news.clone(),
                 old: olds.clone(),
                 starts_added: first_added,
+                ..Default::default()
             };
             let gh = crate::post::github_link(
                 self,

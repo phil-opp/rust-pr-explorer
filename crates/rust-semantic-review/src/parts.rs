@@ -47,26 +47,74 @@ fn unique_key(counts: &mut BTreeMap<String, usize>, name: &str) -> String {
     }
 }
 
-/// The physical lines of a part, without its nested parts.
-fn own_lines(text: &[&str], d: &Def) -> String {
+/// The physical lines of a part, without its nested parts: their indices
+/// (0-based) in the file.
+fn own_lines(text: &[&str], d: &Def) -> Vec<usize> {
     (d.first..=d.last.min(text.len().saturating_sub(1)))
         .filter(|i| !d.nested.iter().any(|(a, b)| a <= i && i <= b))
-        .map(|i| format!("{}\n", text[i]))
         .collect()
 }
 
-fn diff_lines(old: &str, new: &str) -> Vec<SourceLine> {
-    TextDiff::from_lines(old, new)
-        .iter_all_changes()
-        .map(|c| {
-            let tag = match c.tag() {
-                ChangeTag::Equal => ' ',
-                ChangeTag::Insert => '+',
-                ChangeTag::Delete => '-',
+/// The text of some lines of a file, each with its newline.
+fn text_of(text: &[&str], lines: &[usize]) -> String {
+    lines.iter().map(|&i| format!("{}\n", text[i])).collect()
+}
+
+/// A line diff of a part's own lines in the two versions (`old` and `new`
+/// are their indices in each file, see [`own_lines`]). `@` lines hold
+/// "old_line new_line" (1-based) at the start and wherever the numbering
+/// jumps over a nested part, as for a file's hunks, so that every line
+/// has its number in the file.
+fn diff_lines(
+    old_text: &[&str],
+    old: &[usize],
+    new_text: &[&str],
+    new: &[usize],
+) -> Vec<SourceLine> {
+    let (a, b) = (text_of(old_text, old), text_of(new_text, new));
+    let mut out = Vec::new();
+    let (mut ko, mut kn) = (0, 0);
+    // The number the next line of each side gets if it follows the last.
+    let (mut next_o, mut next_n): (Option<usize>, Option<usize>) = (None, None);
+    for c in TextDiff::from_lines(&a, &b).iter_all_changes() {
+        let tag = match c.tag() {
+            ChangeTag::Equal => ' ',
+            ChangeTag::Insert => '+',
+            ChangeTag::Delete => '-',
+        };
+        let o = (tag != '+').then(|| old[ko] + 1);
+        let n = (tag != '-').then(|| new[kn] + 1);
+        let jump = out.is_empty()
+            || o.is_some_and(|o| next_o.is_some_and(|x| x != o))
+            || n.is_some_and(|n| next_n.is_some_and(|x| x != n));
+        if jump {
+            // The side that this line doesn't have goes on at its next
+            // line, so that a removed line and the added one after it
+            // share one `@` line.
+            let side = |now: Option<usize>, next: Option<usize>, idx: &[usize], k: usize| {
+                now.or_else(|| idx.get(k).map(|i| i + 1))
+                    .or(next)
+                    .unwrap_or(1)
             };
-            SourceLine(tag, c.value().trim_end_matches('\n').to_string())
-        })
-        .collect()
+            out.push(SourceLine(
+                '@',
+                format!("{} {}", side(o, next_o, old, ko), side(n, next_n, new, kn)),
+            ));
+        }
+        if let Some(o) = o {
+            next_o = Some(o + 1);
+            ko += 1;
+        }
+        if let Some(n) = n {
+            next_n = Some(n + 1);
+            kn += 1;
+        }
+        out.push(SourceLine(
+            tag,
+            c.value().trim_end_matches('\n').to_string(),
+        ));
+    }
+    out
 }
 
 /// For each thing of the old version, the next one after it that the new
@@ -119,14 +167,15 @@ pub fn compare_defs(a: &[Def], b: &[Def], old: &str, new: &str) -> Vec<PartChang
                 status: Status::Removed,
                 sig: o.sig.clone(),
                 line: o.first + 1,
-                lines: diff_lines(&own_lines(&old_lines, o), ""),
+                lines: diff_lines(&old_lines, &own_lines(&old_lines, o), &new_lines, &[]),
                 unsafe_code: crate::unsafety::compare(&o.unsafe_sites, &[]),
                 ..Default::default()
             });
             continue;
         }
         let d = new_by_key[key];
-        let src = own_lines(&new_lines, d);
+        let own = own_lines(&new_lines, d);
+        let src = text_of(&new_lines, &own);
         match old_by_key.get(key) {
             None => out.push(PartChange {
                 name: d.name.clone(),
@@ -134,12 +183,13 @@ pub fn compare_defs(a: &[Def], b: &[Def], old: &str, new: &str) -> Vec<PartChang
                 status: Status::Added,
                 sig: d.sig.clone(),
                 line: d.first + 1,
-                lines: diff_lines("", &src),
+                lines: diff_lines(&old_lines, &[], &new_lines, &own),
                 unsafe_code: crate::unsafety::compare(&[], &d.unsafe_sites),
                 ..Default::default()
             }),
             Some(o) => {
-                let old_src = own_lines(&old_lines, o);
+                let old_own = own_lines(&old_lines, o);
+                let old_src = text_of(&old_lines, &old_own);
                 let sig_changed = o.sig_norm != d.sig_norm || o.kind != d.kind;
                 let doc_changed = o.doc != d.doc;
                 let body_changed = o.body != d.body;
@@ -169,7 +219,7 @@ pub fn compare_defs(a: &[Def], b: &[Def], old: &str, new: &str) -> Vec<PartChang
                     body_changed,
                     cosmetic,
                     line: d.first + 1,
-                    lines: diff_lines(&old_src, &src),
+                    lines: diff_lines(&old_lines, &old_own, &new_lines, &own),
                     unsafe_code: crate::unsafety::compare(&o.unsafe_sites, &d.unsafe_sites),
                 });
             }
@@ -663,6 +713,32 @@ mod tests {
         assert_eq!(c[2].sig, "#[tokio::test]\nasync fn waits()");
         assert_eq!(c[0].sig, "#[test]\nfn adds()");
         assert_eq!(c[0].line, 7);
+    }
+
+    #[test]
+    fn part_diffs_number_their_lines() {
+        let old = ["a", "nested", "b", "c"];
+        let new = ["x", "a", "nested", "b", "c2"];
+        // The part's own lines skip the nested part's line.
+        let d = diff_lines(&old, &[0, 2, 3], &new, &[1, 3, 4]);
+        let tags: Vec<(char, &str)> = d.iter().map(|l| (l.0, l.1.as_str())).collect();
+        assert_eq!(
+            tags,
+            [
+                ('@', "1 2"),
+                (' ', "a"),
+                ('@', "3 4"),
+                (' ', "b"),
+                ('-', "c"),
+                ('+', "c2"),
+            ]
+        );
+        // Added and removed parts.
+        let d = diff_lines(&old, &[], &new, &[3, 4]);
+        assert_eq!((d[0].0, d[0].1.as_str()), ('@', "1 4"));
+        let d = diff_lines(&old, &[2, 3], &new, &[]);
+        assert_eq!((d[0].0, d[0].1.as_str()), ('@', "3 1"));
+        assert_eq!(d.len(), 3);
     }
 
     #[test]

@@ -1,5 +1,6 @@
-//! Review comments on chosen lines of an item's source diff, as on
-//! GitHub: in review mode, a click on a line number selects that line,
+//! Review comments on chosen lines of an item's source diff, or of the
+//! diff of a file outside the Rust analysis, as on GitHub: in review mode,
+//! a click on a line number selects that line,
 //! Shift+click on another one selects the lines between, and the bar under
 //! the selection opens the comment editor.
 //!
@@ -19,7 +20,7 @@ use crate::data::Data;
 use crate::dom;
 use crate::review::Verdict;
 use model::stable_hash as hash;
-use model::{Item, Status};
+use model::{ChangedFile, Item, SourceLine, Status};
 use serde::{Deserialize, Serialize};
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -52,7 +53,7 @@ impl Span {
     }
 }
 
-/// A comment on lines of an item.
+/// A comment on lines of an item (or of a file: `file:PATH`).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LineNote {
     pub item: String,
@@ -141,67 +142,133 @@ pub fn starts(it: &Item) -> (usize, usize) {
     }
 }
 
-/// The lines of one side of an item: the base's (without added lines) or
-/// the PR's (without removed ones), and the number of the first.
-fn side_lines(it: &Item, old: bool) -> (usize, Vec<&str>) {
-    let skip = if old { '+' } else { '-' };
-    let (o, n) = starts(it);
-    let lines = it
-        .source
-        .iter()
-        .filter(|l| l.0 != skip)
-        .map(|l| l.1.as_str())
-        .collect();
-    (if old { o } else { n }, lines)
+/// The lines of a unit that its diffs show, on each side, by number: the
+/// base's (unchanged and removed lines) and the PR's (unchanged and added
+/// lines). For an item all of its lines; for a file the lines of its line
+/// diff and of its boxes' diffs, and all of a Markdown file.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Sides {
+    pub old: BTreeMap<usize, String>,
+    pub new: BTreeMap<usize, String>,
 }
 
-/// The hash of lines `first..=last` of a side, `None` if the item doesn't
-/// have them all.
-fn print_of(start: usize, lines: &[&str], first: usize, last: usize) -> Option<u64> {
-    let a = first.checked_sub(start)?;
-    let b = last.checked_sub(start)?;
-    let window = lines.get(a..=b)?;
+impl Sides {
+    pub fn of_item(it: &Item) -> Sides {
+        let (o, n) = starts(it);
+        let mut s = Sides::default();
+        s.add(o, n, &it.source);
+        s
+    }
+
+    pub fn of_file(f: &ChangedFile) -> Sides {
+        let mut s = Sides::default();
+        s.add(1, 1, &f.hunks);
+        for p in &f.parts {
+            s.add(1, 1, &p.lines);
+        }
+        let whole = |text: &Option<String>| -> BTreeMap<usize, String> {
+            text.iter()
+                .flat_map(|t| t.split('\n').enumerate())
+                .map(|(i, l)| (i + 1, l.to_string()))
+                .collect()
+        };
+        s.old.extend(whole(&f.old_text));
+        s.new.extend(whole(&f.new_text));
+        s
+    }
+
+    /// The lines of an item or a file (`file:PATH`).
+    pub fn of_unit(d: &Data, unit: &str) -> Option<Sides> {
+        match unit.strip_prefix("file:") {
+            Some(path) => d
+                .out
+                .files
+                .iter()
+                .find(|f| f.path == path)
+                .map(Sides::of_file),
+            None => d.item(unit).map(Sides::of_item),
+        }
+    }
+
+    /// Adds the lines of a diff whose first lines have the numbers `o` and
+    /// `n`, or as its `@` lines say.
+    fn add(&mut self, mut o: usize, mut n: usize, lines: &[SourceLine]) {
+        for l in lines {
+            match l.0 {
+                '@' => {
+                    let mut it = l.1.split(' ').filter_map(|x| x.parse::<usize>().ok());
+                    o = it.next().unwrap_or(1);
+                    n = it.next().unwrap_or(1);
+                }
+                '-' => {
+                    self.old.insert(o, l.1.clone());
+                    o += 1;
+                }
+                '+' => {
+                    self.new.insert(n, l.1.clone());
+                    n += 1;
+                }
+                _ => {
+                    self.old.insert(o, l.1.clone());
+                    self.new.insert(n, l.1.clone());
+                    o += 1;
+                    n += 1;
+                }
+            }
+        }
+    }
+
+    fn side(&self, old: bool) -> &BTreeMap<usize, String> {
+        if old { &self.old } else { &self.new }
+    }
+}
+
+/// The hash of lines `first..=last` of a side, `None` if it doesn't have
+/// them all.
+fn print_of(side: &BTreeMap<usize, String>, first: usize, last: usize) -> Option<u64> {
+    let window = (first..=last)
+        .map(|l| side.get(&l).map(String::as_str))
+        .collect::<Option<Vec<&str>>>()?;
     Some(hash(&window.join("\n")))
 }
 
-/// A span of lines `first..=last` of one side of an item, with their hash.
-pub fn span(it: &Item, old: bool, first: usize, last: usize) -> Option<Span> {
-    let (start, lines) = side_lines(it, old);
+/// A span of lines `first..=last` of one side, with their hash.
+pub fn span(s: &Sides, old: bool, first: usize, last: usize) -> Option<Span> {
     Some(Span {
         first,
         last,
-        print: print_of(start, &lines, first, last)?,
+        print: print_of(s.side(old), first, last)?,
     })
 }
 
 /// Where a span's lines are now: at the same place if their text is still
 /// there, else at the only other place with the same text.
-fn relocate(it: &Item, old: bool, s: Span) -> Option<Span> {
-    let (start, lines) = side_lines(it, old);
-    if print_of(start, &lines, s.first, s.last) == Some(s.print) {
-        return Some(s);
+fn relocate(s: &Sides, old: bool, sp: Span) -> Option<Span> {
+    let side = s.side(old);
+    if print_of(side, sp.first, sp.last) == Some(sp.print) {
+        return Some(sp);
     }
-    let len = s.len();
-    let mut found = (0..lines.len().saturating_sub(len - 1))
-        .map(|i| start + i)
-        .filter(|&f| print_of(start, &lines, f, f + len - 1) == Some(s.print));
+    let mut found = side
+        .keys()
+        .copied()
+        .filter(|&f| print_of(side, f, f + sp.len() - 1) == Some(sp.print));
     match (found.next(), found.next()) {
-        (Some(f), None) => Some(s.shifted(f)),
+        (Some(f), None) => Some(sp.shifted(f)),
         _ => None,
     }
 }
 
-/// Where a comment's lines are in `it` now, `None` if they changed.
-pub fn place(it: &Item, n: &LineNote) -> Option<Placed> {
+/// Where a comment's lines are now, `None` if they changed.
+pub fn place(s: &Sides, n: &LineNote) -> Option<Placed> {
     if n.old.is_none() && n.new.is_none() {
         return None;
     }
     let old = match n.old {
-        Some(s) => Some(relocate(it, true, s)?),
+        Some(sp) => Some(relocate(s, true, sp)?),
         None => None,
     };
     let new = match n.new {
-        Some(s) => Some(relocate(it, false, s)?),
+        Some(sp) => Some(relocate(s, false, sp)?),
         None => None,
     };
     Some(Placed {
@@ -327,15 +394,15 @@ pub fn clear() {
     update(BTreeMap::clear);
 }
 
-/// The comments on an item with where they are now (`None` if their
-/// lines changed), in the order of their lines.
-pub fn of_item(it: &Item) -> Vec<(String, LineNote, Option<Placed>)> {
+/// The comments on an item (or file) with where they are now (`None` if
+/// their lines changed), in the order of their lines.
+pub fn of_unit(unit: &str, sides: &Sides) -> Vec<(String, LineNote, Option<Placed>)> {
     let mut out: Vec<(String, LineNote, Option<Placed>)> = STATE.with(|s| {
         s.borrow()
             .notes
             .iter()
-            .filter(|(id, n)| n.item == it.info.id && id.as_str() != NEW)
-            .map(|(id, n)| (id.clone(), n.clone(), place(it, n)))
+            .filter(|(id, n)| n.item == unit && id.as_str() != NEW)
+            .map(|(id, n)| (id.clone(), n.clone(), place(sides, n)))
             .collect()
     });
     out.sort_by_key(|(id, _, p)| (p.map(|p| p.first_line()), id.clone()));
@@ -363,15 +430,22 @@ pub fn box_html(d: &Data, id: &str, n: &LineNote, p: Option<&Placed>) -> String 
     )
 }
 
-/// What the source diff of `it` adds for line comments: whether a line is
-/// commented, and the boxes of the comments that end on a line.
-pub struct ForItem {
+/// What the diffs of an item or file add for line comments: whether a
+/// line is commented, and the boxes of the comments that end on a line.
+pub struct ForUnit {
     list: Vec<(String, LineNote, Option<Placed>)>,
 }
 
-impl ForItem {
-    pub fn new(it: &Item) -> ForItem {
-        ForItem { list: of_item(it) }
+impl ForUnit {
+    pub fn new(unit: &str, sides: &Sides) -> ForUnit {
+        ForUnit {
+            list: of_unit(unit, sides),
+        }
+    }
+
+    pub fn of(d: &Data, unit: &str) -> ForUnit {
+        let sides = Sides::of_unit(d, unit).unwrap_or_default();
+        ForUnit::new(unit, &sides)
     }
 
     pub fn covers(&self, old: bool, line: usize) -> bool {
@@ -412,35 +486,97 @@ impl ForItem {
 pub fn comments(d: &Data) -> (Vec<crate::post::Comment>, usize) {
     let mut out = Vec::new();
     let mut stale = 0;
-    let mut list: Vec<(String, LineNote)> = all().into_iter().collect();
+    let list: Vec<(String, LineNote)> = all().into_iter().collect();
     // In reading order of their items, then by line.
-    list.sort_by_key(|(id, n)| {
-        let at = d
-            .item(&n.item)
-            .and_then(|it| place(it, n))
-            .map(|p| p.first_line());
-        (crate::review::unit_index(&n.item), at, id.clone())
+    let mut sides: BTreeMap<String, Option<Sides>> = BTreeMap::new();
+    let mut placed = |n: &LineNote| {
+        sides
+            .entry(n.item.clone())
+            .or_insert_with(|| Sides::of_unit(d, &n.item))
+            .as_ref()
+            .and_then(|s| place(s, n))
+    };
+    let mut list: Vec<(String, LineNote, Option<Placed>)> = list
+        .into_iter()
+        .map(|(id, n)| {
+            let p = placed(&n);
+            (id, n, p)
+        })
+        .collect();
+    list.sort_by_key(|(id, n, p)| {
+        (
+            crate::review::unit_index(&n.item),
+            p.map(|p| p.first_line()),
+            id.clone(),
+        )
     });
-    for (_, n) in list {
+    for (_, n, p) in list {
         if n.text.trim().is_empty() {
             continue;
         }
-        let Some((it, p)) = d.item(&n.item).and_then(|it| Some((it, place(it, &n)?))) else {
+        let (Some(t), Some(p)) = (Target::of(d, &n.item), p) else {
             stale += 1;
             continue;
         };
         let (old, new) = (p.old.map(|s| s.range()), p.new.map(|s| s.range()));
-        let loc = crate::post::lines_loc(&d.out.files, it, old, new);
         out.push(crate::post::Comment {
-            name: d.display_name(it),
+            name: t.name(d),
             part: format!(", {}", p.label()),
             verdict: n.verdict,
             text: n.text.trim().to_string(),
-            link: crate::post::lines_link(d, it, old, new),
-            loc,
+            link: t.lines_link(d, old, new),
+            loc: t.lines_loc(d, old, new),
         });
     }
     (out, stale)
+}
+
+/// What a line comment is on: an item, or a file outside the Rust
+/// analysis.
+#[derive(Clone, Copy)]
+pub enum Target<'a> {
+    Item(&'a Item),
+    File(&'a ChangedFile),
+}
+
+impl<'a> Target<'a> {
+    pub fn of(d: &'a Data, unit: &str) -> Option<Target<'a>> {
+        match unit.strip_prefix("file:") {
+            Some(path) => d
+                .out
+                .files
+                .iter()
+                .find(|f| f.path == path)
+                .map(Target::File),
+            None => d.item(unit).map(Target::Item),
+        }
+    }
+
+    fn name(&self, d: &Data) -> String {
+        match self {
+            Target::Item(it) => d.display_name(it),
+            Target::File(f) => f.path.clone(),
+        }
+    }
+
+    fn lines_loc(
+        &self,
+        d: &Data,
+        old: Option<Lines>,
+        new: Option<Lines>,
+    ) -> Option<crate::post::Loc> {
+        match self {
+            Target::Item(it) => crate::post::lines_loc(&d.out.files, it, old, new),
+            Target::File(f) => crate::post::file_lines_loc(&d.out.files, &f.path, old, new),
+        }
+    }
+
+    fn lines_link(&self, d: &Data, old: Option<Lines>, new: Option<Lines>) -> Option<String> {
+        match self {
+            Target::Item(it) => crate::post::lines_link(d, it, old, new),
+            Target::File(f) => crate::post::file_lines_link(d, &f.path, old, new),
+        }
+    }
 }
 
 /// The source diffs that show an item.
@@ -478,10 +614,10 @@ fn row_end(el: &Element) -> Element {
 /// Shows an item's comments again in its diffs on the page, after they
 /// changed, without rendering the views again.
 pub fn refresh(d: &Data, item: &str) {
-    let Some(it) = d.item(item) else {
+    let Some(sides) = Sides::of_unit(d, item) else {
         return;
     };
-    let f = ForItem::new(it);
+    let f = ForUnit::new(item, &sides);
     for c in containers(item) {
         for b in dom::query_all_in(&c, ".lc-box") {
             b.remove();
@@ -649,14 +785,14 @@ fn open_new(app: &crate::App, verdict: Verdict) {
     let Some((item, keys, _)) = selected() else {
         return;
     };
-    let Some(it) = app.d.item(&item) else {
+    let Some(sides) = Sides::of_unit(&app.d, &item) else {
         return;
     };
     let (old, new, end_old) = spans_of_keys(&keys);
     let n = LineNote {
         item,
-        old: old.and_then(|(a, b)| span(it, true, a, b)),
-        new: new.and_then(|(a, b)| span(it, false, a, b)),
+        old: old.and_then(|(a, b)| span(&sides, true, a, b)),
+        new: new.and_then(|(a, b)| span(&sides, false, a, b)),
         end_old,
         verdict,
         text: String::new(),
@@ -676,11 +812,12 @@ fn open_editor(app: &crate::App, id: &str, verdict: Option<Verdict>) {
     let Some(n) = STATE.with(|s| s.borrow().notes.get(id).cloned()) else {
         return;
     };
-    let Some(it) = app.d.item(&n.item) else {
+    let (Some(t), Some(sides)) = (Target::of(&app.d, &n.item), Sides::of_unit(&app.d, &n.item))
+    else {
         return;
     };
     let verdict = verdict.unwrap_or(n.verdict);
-    let p = place(it, &n);
+    let p = place(&sides, &n);
     let lines = p.map_or_else(
         || label(n.old.map(|s| s.range()), n.new.map(|s| s.range())),
         |p| p.label(),
@@ -688,14 +825,8 @@ fn open_editor(app: &crate::App, id: &str, verdict: Option<Verdict>) {
     let at = if app.d.out.meta.pr.is_none() {
         String::new()
     } else {
-        match p.and_then(|p| {
-            crate::post::lines_loc(
-                &app.d.out.files,
-                it,
-                p.old.map(|s| s.range()),
-                p.new.map(|s| s.range()),
-            )
-        }) {
+        match p.and_then(|p| t.lines_loc(&app.d, p.old.map(|s| s.range()), p.new.map(|s| s.range())))
+        {
             Some(l) => format!(
                 "Posted to GitHub, it goes on {} of <code>{}</code>.",
                 l.lines(),
@@ -730,7 +861,7 @@ fn open_editor(app: &crate::App, id: &str, verdict: Option<Verdict>) {
     crate::open_modal(
         &format!(
             "{title} <code>{}</code>, {}",
-            esc(&app.d.display_name(it)),
+            esc(&t.name(&app.d)),
             esc(&lines)
         ),
         &format!(
@@ -836,6 +967,10 @@ mod tests {
         it
     }
 
+    fn sides(source: &[(char, &str)]) -> Sides {
+        Sides::of_item(&item(source))
+    }
+
     #[test]
     fn labels() {
         assert_eq!(label(None, Some((4, 4))), "line 4");
@@ -862,7 +997,7 @@ mod tests {
 
     #[test]
     fn a_comment_follows_its_lines() {
-        let it = item(&[(' ', "fn f() {"), ('-', "a();"), ('+', "b();"), (' ', "}")]);
+        let it = sides(&[(' ', "fn f() {"), ('-', "a();"), ('+', "b();"), (' ', "}")]);
         // `b();` is line 11 of the PR, `a();` line 9 of the base.
         let n = LineNote {
             item: "c::f".into(),
@@ -876,7 +1011,7 @@ mod tests {
         assert_eq!(p.end(), Some((false, 11)));
         assert!(p.covers(true, 9) && p.covers(false, 11) && !p.covers(false, 10));
         // Two lines added above in a later revision: the comment moves.
-        let later = item(&[
+        let later = sides(&[
             ('+', "// one"),
             ('+', "// two"),
             (' ', "fn f() {"),
@@ -888,13 +1023,13 @@ mod tests {
         assert_eq!(p.new.map(|s| s.range()), Some((13, 13)));
         assert_eq!(p.old.map(|s| s.range()), Some((9, 9)));
         // The line changed: the comment is stale.
-        let changed = item(&[(' ', "fn f() {"), ('-', "a();"), ('+', "c();"), (' ', "}")]);
+        let changed = sides(&[(' ', "fn f() {"), ('-', "a();"), ('+', "c();"), (' ', "}")]);
         assert_eq!(place(&changed, &n), None);
     }
 
     #[test]
     fn repeated_text_is_not_a_place() {
-        let it = item(&[(' ', "x();"), ('+', "y();"), (' ', "x();")]);
+        let it = sides(&[(' ', "x();"), ('+', "y();"), (' ', "x();")]);
         let n = LineNote {
             item: "c::f".into(),
             old: None,
@@ -904,14 +1039,14 @@ mod tests {
             text: "x".into(),
         };
         assert!(place(&it, &n).is_some());
-        let later = item(&[(' ', "z();"), (' ', "x();"), ('+', "y();"), (' ', "x();")]);
+        let later = sides(&[(' ', "z();"), (' ', "x();"), ('+', "y();"), (' ', "x();")]);
         // `x();` is now at lines 11 and 13: no telling which.
         assert_eq!(place(&later, &n), None);
     }
 
     #[test]
     fn lines_outside_the_item_have_no_span() {
-        let it = item(&[(' ', "a"), ('+', "b")]);
+        let it = sides(&[(' ', "a"), ('+', "b")]);
         assert!(span(&it, false, 9, 10).is_none());
         assert!(span(&it, false, 10, 12).is_none());
         assert!(span(&it, false, 10, 11).is_some());

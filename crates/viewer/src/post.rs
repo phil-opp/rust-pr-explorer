@@ -319,6 +319,13 @@ pub fn hunk_loc(files: &[ChangedFile], it: &Item, h: &review::Hunk) -> Option<Lo
         .or_else(|| span_of(&rows_of(files, base), base, '-', &h.old))
 }
 
+/// Where a comment on one hunk of a file goes, as for an item's hunk (see
+/// [`hunk_loc`]).
+pub fn file_hunk_loc(files: &[ChangedFile], path: &str, h: &review::Hunk) -> Option<Loc> {
+    let rows = rows_of(files, path);
+    span_of(&rows, path, '+', &h.new).or_else(|| span_of(&rows, path, '-', &h.old))
+}
+
 /// Where a comment on chosen lines of an item goes (see `line_notes`): on
 /// those lines, from the first that GitHub's diff shows to the last,
 /// removed lines (`old`, base line numbers) and the PR's (`new`) alike.
@@ -387,6 +394,71 @@ pub fn lines_loc(
         side,
         start_side: (several && start_side != side).then_some(start_side),
     })
+}
+
+/// Where a comment on chosen lines of a file outside the Rust analysis
+/// goes: as for an item (see [`lines_loc`]), on those lines if GitHub's
+/// diff shows all of them within one of its hunks. Lines of a box (a
+/// Python function, a YAML key) that the diff doesn't show, as an
+/// unchanged line far from any change, make it `None`.
+pub fn file_lines_loc(
+    files: &[ChangedFile],
+    path: &str,
+    old: Option<(usize, usize)>,
+    new: Option<(usize, usize)>,
+) -> Option<Loc> {
+    let rows = rows_of(files, path);
+    let within = |r: Option<(usize, usize)>, x: usize| r.is_some_and(|(a, b)| (a..=b).contains(&x));
+    // Removed lines by their base number, the others by the PR's.
+    let hit: Vec<&Row> = rows
+        .iter()
+        .filter(|r| {
+            if r.tag == '-' {
+                within(old, r.old)
+            } else {
+                within(new, r.new)
+            }
+        })
+        .collect();
+    let (first, last) = (hit.first()?, hit.last()?);
+    let shown_new = hit.iter().filter(|r| r.tag != '-').count();
+    let want_new = new.map_or(0, |(a, b)| b + 1 - a);
+    let has_old = hit.iter().any(|r| r.tag == '-');
+    if shown_new != want_new || (old.is_some() && !has_old) || first.hunk != last.hunk {
+        return None;
+    }
+    let several = hit.len() > 1;
+    let (side, start_side) = (side_of(last.tag), side_of(first.tag));
+    Some(Loc {
+        path: path.to_string(),
+        line: last.num(),
+        start_line: several.then_some(first.num()),
+        side,
+        start_side: (several && start_side != side).then_some(start_side),
+    })
+}
+
+/// A Markdown link to chosen lines of a file on GitHub, for the review's
+/// text: to the PR's lines, or the base's if only those were chosen.
+pub fn file_lines_link(
+    d: &Data,
+    path: &str,
+    old: Option<(usize, usize)>,
+    new: Option<(usize, usize)>,
+) -> Option<String> {
+    let (side, (a, b)) = match (old, new) {
+        (_, Some(r)) => ("RIGHT", r),
+        (Some(r), None) => ("LEFT", r),
+        (None, None) => return None,
+    };
+    let l = Loc {
+        path: path.to_string(),
+        line: b,
+        start_line: (b > a).then_some(a),
+        side,
+        start_side: None,
+    };
+    place_link(d, "", Some(&l))
 }
 
 /// A Markdown link to chosen lines of an item on GitHub, for the review's
@@ -468,6 +540,9 @@ pub fn item_links(d: &Data, it: &Item) -> String {
 pub fn loc(d: &Data, unit: &str) -> Option<Loc> {
     if let Some(item) = review::hunk_item(unit) {
         let h = review::hunks_of(&item).into_iter().find(|h| h.id == unit)?;
+        if let Some(path) = item.strip_prefix("file:") {
+            return file_hunk_loc(&d.out.files, path, &h);
+        }
         return hunk_loc(&d.out.files, d.item(&item)?, &h);
     }
     match unit.strip_prefix("file:") {
@@ -489,12 +564,17 @@ pub fn unit_name(d: &Data, unit: &str) -> String {
     }
 }
 
-/// For a hunk: which part of its item it is, e.g. ", change at line 41".
+/// For a hunk: which part of its item it is, e.g. ", change at line 41",
+/// or of its file, e.g. ", section Usage".
 pub fn part_label(unit: &str) -> String {
     review::hunk_item(unit)
         .and_then(|item| review::hunks_of(&item).into_iter().find(|h| h.id == unit))
         .map_or(String::new(), |h| {
-            format!(", change at line {}", h.first_line())
+            if h.name.is_empty() {
+                format!(", change at line {}", h.first_line())
+            } else {
+                format!(", {}", h.name)
+            }
         })
 }
 
@@ -549,6 +629,7 @@ pub fn place_link(d: &Data, unit: &str, l: Option<&Loc>) -> Option<String> {
         };
         return Some(link(&l.path, l.side, Some((l.first(), l.line)), label));
     }
+    let unit = review::hunk_item(unit).unwrap_or_else(|| unit.to_string());
     if let Some(path) = unit.strip_prefix("file:") {
         let removed = d
             .out
@@ -558,7 +639,7 @@ pub fn place_link(d: &Data, unit: &str, l: Option<&Loc>) -> Option<String> {
         let side = if removed { "LEFT" } else { "RIGHT" };
         return Some(format!("[`{path}`]({})", blob_url(pr, path, side, None)));
     }
-    let it = d.item(&review::hunk_item(unit).unwrap_or_else(|| unit.to_string()))?;
+    let it = d.item(&unit)?;
     let (path, side, start, tags) = if it.status == Status::Removed {
         (
             it.old_file.as_deref().unwrap_or(&it.info.file),
@@ -1485,6 +1566,7 @@ mod tests {
             new,
             old: Vec::new(),
             starts_added: true,
+            ..Default::default()
         };
         let mut f = file("src/lib.rs", Vec::new());
         let it = item(Status::Changed, 1, Vec::new());
@@ -1505,6 +1587,46 @@ mod tests {
     }
 
     #[test]
+    fn file_lines_go_on_their_lines() {
+        let f = lib();
+        let files = [f.clone()];
+        let path = f.path.as_str();
+        // Lines the diff shows, in one hunk: a range on them.
+        assert_eq!(
+            file_lines_loc(&files, path, None, Some((10, 11))),
+            at(path, Some(10), 11, "RIGHT")
+        );
+        // A removed line and the added one after it.
+        let rows = numbered(&f.hunks);
+        let removed = rows.iter().find(|r| r.tag == '-').unwrap();
+        let next = rows
+            .iter()
+            .find(|r| r.tag == '+' && r.hunk == removed.hunk)
+            .unwrap();
+        let l = file_lines_loc(
+            &files,
+            path,
+            Some((removed.old, removed.old)),
+            Some((next.new, next.new)),
+        )
+        .unwrap();
+        assert_eq!(l.start_side, Some("LEFT"));
+        assert_eq!(l.side, "RIGHT");
+        // Lines the diff doesn't show: none.
+        assert_eq!(file_lines_loc(&files, path, None, Some((20, 22))), None);
+        // A hunk of the file: its added lines.
+        let h = review::Hunk {
+            new: vec![10, 11],
+            old: vec![10],
+            ..Default::default()
+        };
+        assert_eq!(
+            file_hunk_loc(&files, path, &h),
+            at(path, Some(10), 11, "RIGHT")
+        );
+    }
+
+    #[test]
     fn hunks_prefer_their_added_lines() {
         // A change that starts with its removed line still goes on the
         // added ones: the PR's code.
@@ -1513,6 +1635,7 @@ mod tests {
             new: vec![10, 11],
             old: vec![10],
             starts_added: false,
+            ..Default::default()
         };
         let it = item(Status::Changed, 8, Vec::new());
         assert_eq!(
@@ -1525,6 +1648,7 @@ mod tests {
             new: Vec::new(),
             old: vec![39],
             starts_added: false,
+            ..Default::default()
         };
         assert_eq!(
             hunk_loc(&[lib()], &it, &h),
