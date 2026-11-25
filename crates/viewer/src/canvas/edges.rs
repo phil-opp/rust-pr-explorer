@@ -137,6 +137,12 @@ fn call_site_ys(g: &Group, to: &str, k: f64) -> Vec<f64> {
     ys
 }
 
+/// The height of the first call site of `to` in card `g`, see
+/// [`call_site_ys`].
+pub(super) fn call_site_y(g: &Group, to: &str, k: f64) -> Option<f64> {
+    call_site_ys(g, to, k).first().copied()
+}
+
 /// Cards closer than this, side by side, are connected through their tops
 /// and bottoms instead.
 const MIN_GAP: f64 = 16.0;
@@ -144,6 +150,8 @@ const MIN_GAP: f64 = 16.0;
 const PORT_GAP: f64 = 14.0;
 /// Distance between connectors that run through one gap between cards.
 const LANE_GAP: f64 = 12.0;
+/// How far right of two cards a connector between their right sides runs.
+const BESIDE: f64 = 24.0;
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Side {
@@ -185,6 +193,11 @@ fn choose_route(a: Rect, b: Rect, site_y: Option<f64>) -> Route {
         Route::Ortho(Side::Right, Side::Left)
     } else if b.x + b.w <= a.x - MIN_GAP {
         Route::Ortho(Side::Left, Side::Right)
+    } else if site_y.is_some() && (b.y >= a.y + a.h + MIN_GAP || b.y + b.h <= a.y - MIN_GAP) {
+        // Above or below the caller, in its column: out of the caller's
+        // right side level with the call, down (or up) beside the cards,
+        // and into the right side of the callee.
+        Route::Ortho(Side::Right, Side::Right)
     } else if let Some(y) = site_y {
         Route::Site(y)
     } else if b.y >= a.y + a.h + MIN_GAP {
@@ -276,10 +289,21 @@ fn lanes(conns: &[Conn], ends: &[Ends]) -> Vec<f64> {
     type Gaps = BTreeMap<(bool, i64, i64), Vec<((bool, f64), usize)>>;
     let mut gaps: Gaps = BTreeMap::new();
     let mut out = vec![0.0; conns.len()];
+    // Connectors between two cards' right sides run beside the cards: per
+    // column edge, each in a lane of its own, further out the longer it is.
+    let mut beside: BTreeMap<i64, Vec<(f64, usize)>> = BTreeMap::new();
     for (i, c) in conns.iter().enumerate() {
-        let Route::Ortho(sa, _) = c.route else {
+        let Route::Ortho(sa, sb) = c.route else {
             continue;
         };
+        if sa == sb {
+            let (p, q) = ends[i];
+            beside
+                .entry(p.0.max(q.0).round() as i64)
+                .or_default()
+                .push(((p.1 - q.1).abs(), i));
+            continue;
+        }
         let horizontal = matches!(sa, Side::Left | Side::Right);
         // In horizontal coordinates: `u` across the gap, `v` along it.
         let (p, q) = ends[i];
@@ -306,6 +330,12 @@ fn lanes(conns: &[Conn], ends: &[Ends]) -> Vec<f64> {
             .or_default()
             .push(((!down, order), i));
     }
+    for (edge, mut list) in beside {
+        list.sort_by(|x, y| x.0.total_cmp(&y.0));
+        for (k, &(_, i)) in list.iter().enumerate() {
+            out[i] = edge as f64 + BESIDE + k as f64 * LANE_GAP;
+        }
+    }
     for ((_, u0, u1), mut list) in gaps {
         list.sort_by(|x, y| x.0.0.cmp(&y.0.0).then(x.0.1.total_cmp(&y.0.1)));
         let (u0, u1) = (u0 as f64, u1 as f64);
@@ -323,7 +353,7 @@ fn conn_path(c: &Conn, ends: Ends, lane: f64) -> String {
     // head at the end of the path is that of the main connector.
     let mut d = String::new();
     match c.route {
-        Route::Ortho(sa, _) => {
+        Route::Ortho(sa, sb) => {
             let (p, q) = ends;
             for &y in &c.more_sites {
                 // Into the main connector's lane, then along it to `b`.
@@ -331,7 +361,7 @@ fn conn_path(c: &Conn, ends: Ends, lane: f64) -> String {
                 d.push(' ');
             }
             let points = match sa {
-                _ if p.0 == q.0 || p.1 == q.1 => vec![p, q],
+                _ if sa != sb && (p.0 == q.0 || p.1 == q.1) => vec![p, q],
                 Side::Left | Side::Right => vec![p, (lane, p.1), (lane, q.1), q],
                 Side::Top | Side::Bottom => vec![p, (p.0, lane), (q.0, lane), q],
             };
@@ -633,6 +663,28 @@ mod tests {
         }
         // The lower connector enters the right card lower down.
         assert!(ends[0].1.1 < ends[1].1.1);
+    }
+
+    /// A call from a card's source to a card below it in the same column
+    /// leaves at the call, runs down right of both cards and enters the
+    /// callee's right side, instead of looping into its top.
+    #[test]
+    fn call_to_a_card_below_runs_beside_the_column() {
+        let a = (1, rect(0.0, 0.0, 600.0));
+        let b = (2, rect(20.0, 650.0, 700.0));
+        let site = 350.0;
+        let c = Conn {
+            site_y: Some(site),
+            route: choose_route(a.1, b.1, Some(site)),
+            ..conn(a, b)
+        };
+        assert!(matches!(c.route, Route::Ortho(Side::Right, Side::Right)));
+        let conns = vec![c];
+        let ends = ports(&conns);
+        let lanes = lanes(&conns, &ends);
+        assert_eq!(ends[0].0, (580.0, site));
+        assert_eq!(ends[0].1, (600.0, 690.0));
+        assert_eq!(lanes[0], 600.0 + BESIDE);
     }
 
     /// A connector between cards of one column that skips a card bends

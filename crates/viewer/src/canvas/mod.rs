@@ -13,6 +13,7 @@ mod events;
 mod layout;
 mod open;
 mod reflow;
+mod spot;
 mod undo;
 
 pub use edges::draw_edges;
