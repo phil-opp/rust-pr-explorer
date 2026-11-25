@@ -925,6 +925,7 @@ pub fn load(d: &Data) {
             .filter_map(|(id, _)| d.item(id))
             .filter(|it| is_unit_item(it)),
     );
+    crate::line_notes::load(&key);
     REVIEW.with(|r| {
         *r.borrow_mut() = Review {
             on,
@@ -1035,6 +1036,10 @@ struct Payload {
     notes: BTreeMap<String, Note>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     versions: BTreeMap<String, Snapshot>,
+    /// Comments on lines (see `line_notes`); only in copied marks, since a
+    /// posted review has them as comments.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    lines: BTreeMap<String, crate::line_notes::LineNote>,
 }
 
 /// Whether anything of this PR is marked, on this page or not.
@@ -1070,6 +1075,7 @@ pub fn export(to: Export) -> Option<String> {
                 edges: encode_edges(&r.edges),
                 notes: r.notes.clone(),
                 versions: r.versions.clone(),
+                lines: crate::line_notes::all(),
             })
             .ok(),
             Export::Review => Some(review_lines(&r.marks, &r.edges, &r.notes)),
@@ -1121,6 +1127,7 @@ fn parse_review_lines(text: &str) -> Payload {
         edges: String::new(),
         notes: BTreeMap::new(),
         versions: BTreeMap::new(),
+        lines: BTreeMap::new(),
     };
     for l in text.lines().map(str::trim) {
         let Some((kind, rest)) = l.split_once(' ') else {
@@ -1181,7 +1188,7 @@ pub fn import(json: &str) -> Result<usize, String> {
     merge(p)
 }
 
-fn merge(p: Payload) -> Result<usize, String> {
+fn merge(mut p: Payload) -> Result<usize, String> {
     reread();
     let added = REVIEW.with(|r| {
         let mut r = r.borrow_mut();
@@ -1209,6 +1216,7 @@ fn merge(p: Payload) -> Result<usize, String> {
         for (id, v) in p.versions {
             r.versions.entry(id).or_insert(v);
         }
+        crate::line_notes::merge(std::mem::take(&mut p.lines));
         let after: HashSet<&String> = r.marks.keys().chain(r.edges.keys()).collect();
         Ok(after.iter().filter(|id| !before.contains(**id)).count())
     })?;
@@ -1427,6 +1435,18 @@ pub fn clear() {
         r.unfolded.clear();
     });
     save();
+    crate::line_notes::clear();
+}
+
+/// Where a unit is in reading order (after every unit if it isn't one).
+pub fn unit_index(id: &str) -> usize {
+    REVIEW.with(|r| {
+        let r = r.borrow();
+        r.units
+            .iter()
+            .position(|u| u == id)
+            .unwrap_or(r.units.len())
+    })
 }
 
 /// The version a unit had when it was marked, if it was saved.
@@ -1561,7 +1581,7 @@ fn control_class(id: &str, m: Mark) -> String {
 
 /// The verdict buttons, as on GitHub. Approving needs no comment; the
 /// other two ask for a comment first.
-const ACTIONS: &str = r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve, and go on to the next item if Next ▸ led here (a)">✓ Approve</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Add a comment (c)">✎ Comment</button>"#;
+const ACTIONS: &str = r#"<button class="rv-btn approve" data-rv-act="approve" title="Approve, and go on to the next item if Next ▸ led here, except on the canvas (a)">✓ Approve</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Add a comment (c)">✎ Comment</button>"#;
 
 /// One line of a comment, shortened, for the button that edits it.
 fn snippet(text: &str) -> String {
@@ -1589,14 +1609,14 @@ fn actions(id: &str) -> String {
             format!("{same} other items")
         };
         return format!(
-            r#"<span class="rv-same" title="Their only change is the same: the same names now refer to the same other items.">Same change as {others}.</span><button class="rv-btn approve" data-rv-act="approve" data-rv-all title="Approve this item and the {same} others, and go on to the next item if Next ▸ led here (a)">✓ Approve all {all}</button><button class="rv-btn approve" data-rv-act="approve" title="Approve only this item">✓ Only this</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on this item (c)">✎ Comment</button>"#,
+            r#"<span class="rv-same" title="Their only change is the same: the same names now refer to the same other items.">Same change as {others}.</span><button class="rv-btn approve" data-rv-act="approve" data-rv-all title="Approve this item and the {same} others, and go on to the next item if Next ▸ led here, except on the canvas (a)">✓ Approve all {all}</button><button class="rv-btn approve" data-rv-act="approve" title="Approve only this item">✓ Only this</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on this item (c)">✎ Comment</button>"#,
             all = same + 1
         );
     }
     let n = hunks_of(id).len();
     if n > 1 {
         return format!(
-            r#"<span class="rv-scope" title="These buttons give the whole item one verdict. Each change also has its own buttons.">Whole item ({n} changes):</span><button class="rv-btn approve" data-rv-act="approve" title="Approve the whole item, and go on to the next one if Next ▸ led here (a)">✓ Approve item</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on the whole item (c)">✎ Comment</button>"#
+            r#"<span class="rv-scope" title="These buttons give the whole item one verdict. Each change also has its own buttons.">Whole item ({n} changes):</span><button class="rv-btn approve" data-rv-act="approve" title="Approve the whole item, and go on to the next one if Next ▸ led here, except on the canvas (a)">✓ Approve item</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on the whole item (c)">✎ Comment</button>"#
         );
     }
     ACTIONS.to_string()

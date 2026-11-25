@@ -8,8 +8,9 @@ use crate::impact::CardImpact;
 use model::{Item, Kind, Status, UseCtx};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// A badge for related items that are not visible from the canvas's scope:
-/// a click views the canvas from the module that hides them.
+/// A badge for related items that are not visible from `scope` (the
+/// privacy view's module, or the card's own): a click turns the privacy
+/// view on from the module that hides them.
 fn hidden_badge(d: &Data, scope: &str, list: &[String], what: &str) -> String {
     let hidden: Vec<&String> = list
         .iter()
@@ -34,7 +35,10 @@ fn hidden_badge(d: &Data, scope: &str, list: &[String], what: &str) -> String {
             .join(", "),
         d.mod_label(scope),
         mods.first()
-            .map(|m| format!(" Click to view from {}.", d.mod_label(m)))
+            .map(|m| format!(
+                " Click to look from {} with the privacy view.",
+                d.mod_label(m)
+            ))
             .unwrap_or_default()
     );
     let drill = mods
@@ -85,7 +89,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     let Some(it) = d.item(&g.active) else {
         return String::new();
     };
-    let scope = c.scope.as_str();
+    let scope = c.looks_from(d, it);
     let id = &it.info.id;
     let tabs = if g.tabs.len() > 1 {
         format!(
@@ -257,7 +261,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         let vis: Vec<&Item> = ms
             .iter()
             .copied()
-            .filter(|m| d.visible_from(&m.info.id, scope))
+            .filter(|m| c.shows(d, &m.info.id))
             .collect();
         let mut groups: BTreeMap<String, Vec<&Item>> = BTreeMap::new();
         for m in &vis {

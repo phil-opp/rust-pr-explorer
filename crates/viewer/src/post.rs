@@ -25,7 +25,8 @@ use model::{ChangedFile, Item, PrMeta, SourceLine, Status};
 use serde_json::{Value, json};
 
 /// Where a comment goes in GitHub's diff: one line, or the lines from
-/// `start_line` to `line`, all on one side.
+/// `start_line` to `line`, on one side unless `start_side` says the first
+/// line is on the other.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Loc {
     pub path: String,
@@ -34,6 +35,9 @@ pub struct Loc {
     pub start_line: Option<usize>,
     /// `RIGHT` for the PR's version of a line, `LEFT` for the base's.
     pub side: &'static str,
+    /// The side of `start_line`, if it isn't `side`: a comment from a
+    /// removed line to an added one.
+    pub start_side: Option<&'static str>,
 }
 
 impl Loc {
@@ -42,11 +46,18 @@ impl Loc {
         self.start_line.unwrap_or(self.line)
     }
 
-    /// "line 10" or "lines 10–14".
+    /// The side of its first line.
+    pub fn first_side(&self) -> &'static str {
+        self.start_side.unwrap_or(self.side)
+    }
+
+    /// "line 10", "lines 10–14", or "base line 10 to line 12" when it
+    /// starts on the other side.
     pub fn lines(&self) -> String {
-        match self.start_line {
-            Some(s) => format!("lines {s}–{}", self.line),
-            None => format!("line {}", self.line),
+        match (self.start_line, self.start_side) {
+            (Some(s), Some(_)) => format!("base line {s} to line {}", self.line),
+            (Some(s), None) => format!("lines {s}–{}", self.line),
+            (None, _) => format!("line {}", self.line),
         }
     }
 }
@@ -203,6 +214,7 @@ fn first_of(rows: &[Row], path: &str, tag: char, lines: &[usize]) -> Option<Loc>
             line: r.num(),
             start_line: None,
             side: side_of(tag),
+            start_side: None,
         })
 }
 
@@ -226,6 +238,7 @@ fn span_of(rows: &[Row], path: &str, tag: char, lines: &[usize]) -> Option<Loc> 
         line: last,
         start_line: (last > first.num()).then_some(first.num()),
         side: side_of(tag),
+        start_side: None,
     })
 }
 
@@ -246,6 +259,7 @@ pub fn file_loc(f: &ChangedFile) -> Option<Loc> {
         line: r.num(),
         start_line: None,
         side: side_of(r.tag),
+        start_side: None,
     })
 }
 
@@ -305,6 +319,99 @@ pub fn hunk_loc(files: &[ChangedFile], it: &Item, h: &review::Hunk) -> Option<Lo
         .or_else(|| span_of(&rows_of(files, base), base, '-', &h.old))
 }
 
+/// Where a comment on chosen lines of an item goes (see `line_notes`): on
+/// those lines, from the first that GitHub's diff shows to the last,
+/// removed lines (`old`, base line numbers) and the PR's (`new`) alike.
+/// `None` unless the diff shows all of them in one of its hunks: GitHub
+/// takes a comment on several lines only within one hunk, and a comment on
+/// fewer lines than were chosen would say something else. Both sides only
+/// within one file: for a renamed file, the PR's lines.
+pub fn lines_loc(
+    files: &[ChangedFile],
+    it: &Item,
+    old: Option<(usize, usize)>,
+    new: Option<(usize, usize)>,
+) -> Option<Loc> {
+    let head = it.info.file.as_str();
+    let base = it.old_file.as_deref().unwrap_or(head);
+    let old = if new.is_some() && base != head {
+        None
+    } else {
+        old
+    };
+    let path = if new.is_some() { head } else { base };
+    // The item's lines in the ranges: removed ones by their base number,
+    // the others by the PR's.
+    let (o0, n0) = crate::line_notes::starts(it);
+    let (mut o, mut n) = (o0, n0);
+    let (mut want_old, mut want_new) = (Vec::new(), Vec::new());
+    let within = |r: Option<(usize, usize)>, x: usize| r.is_some_and(|(a, b)| (a..=b).contains(&x));
+    for l in &it.source {
+        match l.0 {
+            '-' => {
+                if within(old, o) {
+                    want_old.push(o);
+                }
+                o += 1;
+            }
+            tag => {
+                if within(new, n) {
+                    want_new.push(n);
+                }
+                n += 1;
+                o += usize::from(tag != '+');
+            }
+        }
+    }
+    let rows = rows_of(files, path);
+    let hit: Vec<&Row> = rows
+        .iter()
+        .filter(|r| {
+            if r.tag == '-' {
+                want_old.contains(&r.old)
+            } else {
+                want_new.contains(&r.new)
+            }
+        })
+        .collect();
+    let (first, last) = (hit.first()?, hit.last()?);
+    if hit.len() != want_old.len() + want_new.len() || first.hunk != last.hunk {
+        return None;
+    }
+    let several = hit.len() > 1;
+    let (side, start_side) = (side_of(last.tag), side_of(first.tag));
+    Some(Loc {
+        path: path.to_string(),
+        line: last.num(),
+        start_line: several.then_some(first.num()),
+        side,
+        start_side: (several && start_side != side).then_some(start_side),
+    })
+}
+
+/// A Markdown link to chosen lines of an item on GitHub, for the review's
+/// text: to the PR's lines, or the base's if only those were chosen.
+pub fn lines_link(
+    d: &Data,
+    it: &Item,
+    old: Option<(usize, usize)>,
+    new: Option<(usize, usize)>,
+) -> Option<String> {
+    let (path, side, (a, b)) = match (old, new) {
+        (_, Some(r)) => (it.info.file.as_str(), "RIGHT", r),
+        (Some(r), None) => (it.old_file.as_deref().unwrap_or(&it.info.file), "LEFT", r),
+        (None, None) => return None,
+    };
+    let l = Loc {
+        path: path.to_string(),
+        line: b,
+        start_line: (b > a).then_some(a),
+        side,
+        start_side: None,
+    };
+    place_link(d, "", Some(&l))
+}
+
 /// The address of a line in the pull request's "Files changed" view on
 /// GitHub. Its anchor is `diff-` with the SHA-256 of the file's path, then
 /// `L` (base) or `R` (PR) and the line number.
@@ -315,7 +422,7 @@ pub fn github_url(d: &Data, l: &Loc) -> Option<String> {
         pr.repo,
         pr.number,
         crate::sha256::hex(l.path.as_bytes()),
-        if l.side == "LEFT" { 'L' } else { 'R' },
+        if l.first_side() == "LEFT" { 'L' } else { 'R' },
         l.first()
     ))
 }
@@ -515,6 +622,8 @@ pub struct Summary {
     pub open: usize,
     /// Comments on units that changed since: left out.
     pub stale_comments: usize,
+    /// Comments on chosen lines that changed since: left out too.
+    pub stale_line_comments: usize,
     /// Some hunk needs changes, also of an item without a verdict yet.
     pub hunk_changes: bool,
 }
@@ -543,6 +652,7 @@ pub fn summary(d: &Data) -> Summary {
         commented: 0,
         open: total,
         stale_comments: 0,
+        stale_line_comments: 0,
         hunk_changes: false,
     };
     for (unit, mark, Note { verdict, text }) in review::notes() {
@@ -574,6 +684,11 @@ pub fn summary(d: &Data) -> Summary {
             });
         }
     }
+    // Comments on chosen lines need changes like a hunk's.
+    let (lines, stale) = crate::line_notes::comments(d);
+    s.hunk_changes |= lines.iter().any(|c| c.verdict == Verdict::Changes);
+    s.stale_line_comments = stale;
+    s.comments.extend(lines);
     s
 }
 
@@ -644,7 +759,7 @@ fn review_value(
                 });
                 if let Some(start) = l.start_line {
                     o["start_line"] = json!(start);
-                    o["start_side"] = json!(l.side);
+                    o["start_side"] = json!(l.first_side());
                 }
                 Some(o)
             })
@@ -855,6 +970,15 @@ pub fn finish_html(d: &Data) -> String {
             "{} on items that changed since you reviewed them {} left out. Review them again to include them.",
             count(s.stale_comments, "comment", "comments"),
             if s.stale_comments == 1 { "is" } else { "are" }
+        ));
+    }
+    if s.stale_line_comments > 0 {
+        notes.push(format!(
+            "{} on lines that changed since you wrote {} left out. Remove {} or write {} again on the new lines.",
+            count(s.stale_line_comments, "comment", "comments"),
+            if s.stale_line_comments == 1 { "it is" } else { "them are" },
+            if s.stale_line_comments == 1 { "it" } else { "them" },
+            if s.stale_line_comments == 1 { "it" } else { "them" },
         ));
     }
     if unplaced > 0 {
@@ -1079,6 +1203,7 @@ mod tests {
             line,
             start_line: start,
             side,
+            start_side: None,
         })
     }
 
@@ -1101,6 +1226,67 @@ mod tests {
                 sl(' ', "}"),
             ],
         )
+    }
+
+    #[test]
+    fn comments_go_on_chosen_lines() {
+        let files = [lib()];
+        let f = item(
+            Status::Changed,
+            8,
+            vec![
+                sl(' ', "fn f() {"),
+                sl(' ', "    a();"),
+                sl('-', "    b();"),
+                sl('+', "    b(1);"),
+                sl('+', "    c();"),
+                sl(' ', "}"),
+            ],
+        );
+        // Added lines.
+        assert_eq!(
+            lines_loc(&files, &f, None, Some((10, 11))),
+            at("src/lib.rs", Some(10), 11, "RIGHT")
+        );
+        // An unchanged line, on the PR's side.
+        assert_eq!(
+            lines_loc(&files, &f, None, Some((9, 9))),
+            at("src/lib.rs", None, 9, "RIGHT")
+        );
+        // From the removed line to the added ones: starts on the base side.
+        let both = lines_loc(&files, &f, Some((10, 10)), Some((10, 11))).unwrap();
+        assert_eq!(
+            (both.start_line, both.line, both.first_side(), both.side),
+            (Some(10), 11, "LEFT", "RIGHT")
+        );
+        assert_eq!(both.lines(), "base line 10 to line 11");
+        let v = review_value(
+            &[Comment {
+                name: "f".into(),
+                part: String::new(),
+                verdict: Verdict::Comment,
+                text: "x".into(),
+                loc: Some(both),
+                link: None,
+            }],
+            "",
+            Verdict::Comment,
+            "",
+            true,
+            "",
+        );
+        assert_eq!(v["comments"][0]["start_side"], "LEFT");
+        assert_eq!(v["comments"][0]["side"], "RIGHT");
+        // Lines GitHub's diff doesn't show: no place.
+        let far = item(Status::Changed, 1, vec![sl(' ', "a"), sl('+', "b")]);
+        assert_eq!(lines_loc(&files, &far, None, Some((1, 2))), None);
+        // Renamed: only the PR's lines, in the new file.
+        let mut moved = f.clone();
+        moved.old_file = Some("src/old.rs".into());
+        assert_eq!(
+            lines_loc(&files, &moved, Some((10, 10)), Some((10, 11))),
+            at("src/lib.rs", Some(10), 11, "RIGHT")
+        );
     }
 
     #[test]

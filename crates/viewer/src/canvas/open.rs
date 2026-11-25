@@ -58,14 +58,17 @@ fn open_at(
     let d = app.d.clone();
     let it = d.item(id)?;
     let c = &mut app.s.canvas;
-    if !d.visible_from(id, &c.scope) {
-        let before = d.mod_label(&c.scope);
-        c.scope = d.mod_of(it).to_string();
+    // Opening an item never hides cards: if the privacy view would hide
+    // it, the privacy view goes off rather than to another module.
+    if let Some(s) = &c.scope
+        && !d.visible_from(id, s)
+    {
         toast(&format!(
-            "Now viewing from {}: {} is not visible from {before}",
-            d.mod_label(&c.scope),
-            d.display_name(it)
+            "Privacy view off: {} is not visible from {}",
+            d.display_name(it),
+            d.mod_label(s)
         ));
+        c.scope = None;
     }
     let gi = match c.group_of(id) {
         Some(gi) => {
@@ -329,17 +332,16 @@ pub(crate) fn expand(app: &mut App, id: &str, kind: Related) {
     targets.dedup();
     targets.retain(|t| d.item(t).is_some());
     let c = &mut app.s.canvas;
-    let (mut vis, hidden): (Vec<String>, Vec<String>) = targets
-        .into_iter()
-        .partition(|t| d.visible_from(t, &c.scope));
+    let (mut vis, hidden): (Vec<String>, Vec<String>) =
+        targets.into_iter().partition(|t| c.shows(&d, t));
     if vis.is_empty() {
         toast(&if hidden.is_empty() {
             "Nothing to show".to_string()
         } else {
             format!(
-                "All {} are private to submodules of {}",
+                "All {} are hidden by the privacy view from {}",
                 hidden.len(),
-                d.mod_label(&c.scope)
+                d.mod_label(c.scope.as_deref().unwrap_or_default())
             )
         });
         return;
@@ -431,7 +433,7 @@ pub(crate) fn expand(app: &mut App, id: &str, kind: Related) {
     }
     if !hidden.is_empty() {
         notes.push(format!(
-            "{} {} private to submodules and hidden at this scope",
+            "{} {} hidden by the privacy view",
             hidden.len(),
             if hidden.len() > 1 { "are" } else { "is" }
         ));
@@ -459,9 +461,7 @@ impl Related {
 /// Opens the chains from the public API down to `id` left of its card,
 /// like "◂ callers" clicked again and again: each item a column further
 /// left the more calls it is away, with connectors along the chains. Cards
-/// already open are connected, not moved. If the chains go through items
-/// that the canvas's scope can't see, the canvas is viewed from a module
-/// that sees them.
+/// already open are connected, not moved.
 fn open_chains(app: &mut App, id: &str) {
     let d = app.d.clone();
     let paths = crate::impact::impact(&d, id).paths;
@@ -485,34 +485,6 @@ fn open_chains(app: &mut App, id: &str) {
         return;
     }
     let c = &mut app.s.canvas;
-    let all_visible = |scope: &str, c: &super::Canvas| {
-        dist.iter().all(|(t, _)| d.visible_from(t, scope))
-            && d.visible_from(id, scope)
-            && c.groups
-                .iter()
-                .all(|g| !d.visible_from(&g.active, &c.scope) || d.visible_from(&g.active, scope))
-    };
-    let mut scope_note = String::new();
-    if !all_visible(&c.scope, c) {
-        // The modules of the items, innermost first: one of them sees the
-        // chains and, if possible, the cards that are visible now.
-        let mut scopes: Vec<String> = std::iter::once(id)
-            .chain(dist.iter().map(|(t, _)| t.as_str()))
-            .filter_map(|t| d.item(t))
-            .map(|it| d.mod_of(it).to_string())
-            .collect();
-        scopes.dedup();
-        let new_ids_visible =
-            |s: &str| dist.iter().all(|(t, _)| d.visible_from(t, s)) && d.visible_from(id, s);
-        if let Some(s) = scopes
-            .iter()
-            .find(|s| all_visible(s, c))
-            .or_else(|| scopes.iter().find(|s| new_ids_visible(s)))
-        {
-            scope_note = format!(" · Now viewing from {}, which sees them", d.mod_label(s));
-            c.scope = s.clone();
-        }
-    }
     let Some(fi) = c.group_of(id) else { return };
     let (fx, fy) = (c.groups[fi].x, c.groups[fi].y);
     let mut record = Expansion {
@@ -591,20 +563,16 @@ fn open_chains(app: &mut App, id: &str) {
         format!("{from}, all already open")
     };
     let c = &app.s.canvas;
-    let hidden = dist
-        .iter()
-        .filter(|(t, _)| !d.visible_from(t, &c.scope))
-        .count();
+    let hidden = dist.iter().filter(|(t, _)| !c.shows(&d, t)).count();
     let hidden_note = if hidden > 0 {
-        // Private items of sibling modules: no module sees all of them.
         format!(
-            " · {hidden} {} private to other modules and hidden at this scope",
+            " · {hidden} {} hidden by the privacy view",
             if hidden > 1 { "are" } else { "is" }
         )
     } else {
         String::new()
     };
-    toast(&(what + &scope_note + &hidden_note));
+    toast(&(what + &hidden_note));
 }
 
 /// Opens all members of a type in one tabbed card.
@@ -615,7 +583,7 @@ pub(super) fn members_as_tabs(app: &mut App, id: &str) {
     let members: Vec<&Item> = d
         .members(it)
         .into_iter()
-        .filter(|m| m.info.kind != Kind::Impl && d.visible_from(&m.info.id, &c.scope))
+        .filter(|m| m.info.kind != Kind::Impl && c.shows(&d, &m.info.id))
         .collect();
     if members.is_empty() {
         return;

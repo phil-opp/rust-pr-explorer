@@ -103,23 +103,44 @@ fn site_path(a: Rect, y: f64, b: Rect) -> String {
     )
 }
 
-/// The height, in canvas coordinates, of the first visible call site of
-/// `to` in the expanded source of card `g`. A call on a removed line counts
-/// only if no other line calls `to`: the connector shows the current call.
-pub(super) fn call_site_y(g: &Group, to: &str, k: f64) -> Option<f64> {
-    let card = card_el(g.gid)?;
+/// The heights, in canvas coordinates, of the call sites of `to` in the
+/// expanded source of card `g`, top to bottom. A call in folded lines is at
+/// the row that unfolds them. Calls on removed lines count only if no other
+/// line calls `to`: the connectors show the current calls.
+fn call_site_ys(g: &Group, to: &str, k: f64) -> Vec<f64> {
+    let Some(card) = card_el(g.gid) else {
+        return Vec::new();
+    };
     let top = card.get_bounding_client_rect().top();
     let (removed, current): (Vec<_>, Vec<_>) =
         dom::query_all_in(&card, "details.src[open] a.ref[data-id]")
             .into_iter()
             .filter(|a| dom::data(a, "id").as_deref() == Some(to))
             .partition(|a| dom::closest(a, ".ln.del").is_some());
-    current
-        .into_iter()
-        .chain(removed)
-        .map(|a| a.get_bounding_client_rect())
-        .find(|r| r.height() > 0.0)
+    let sites = if current.is_empty() { removed } else { current };
+    let mut ys: Vec<f64> = sites
+        .iter()
+        .filter_map(|a| {
+            let r = a.get_bounding_client_rect();
+            if r.height() > 0.0 {
+                return Some(r);
+            }
+            let fold = dom::closest(a, ".fold[hidden]")?;
+            let r = fold.previous_element_sibling()?.get_bounding_client_rect();
+            (r.height() > 0.0).then_some(r)
+        })
         .map(|r| g.y + (r.top() + r.height() / 2.0 - top) / k)
+        .collect();
+    ys.sort_by(f64::total_cmp);
+    // Calls on one line, or in one fold, share a connector.
+    ys.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+    ys
+}
+
+/// The height of the first call site of `to` in card `g`, see
+/// [`call_site_ys`].
+pub(super) fn call_site_y(g: &Group, to: &str, k: f64) -> Option<f64> {
+    call_site_ys(g, to, k).first().copied()
 }
 
 /// Cards closer than this, side by side, are connected through their tops
@@ -161,6 +182,9 @@ struct Conn {
     title: String,
     /// Height of the call site in `a`, which the connector starts at.
     site_y: Option<f64>,
+    /// Heights of further call sites in `a`, whose connectors join this
+    /// one on the way to `b`.
+    more_sites: Vec<f64>,
     route: Route,
 }
 
@@ -262,7 +286,7 @@ fn ports(conns: &[Conn]) -> Vec<Ends> {
 /// they can.
 fn lanes(conns: &[Conn], ends: &[Ends]) -> Vec<f64> {
     // Per gap (whether horizontal, from, to): (order, connector).
-    type Gaps = BTreeMap<(bool, i64, i64), Vec<((bool, f64), usize)>>;
+    type Gaps = BTreeMap<(bool, i64, i64), Vec<((bool, f64), usize, Crossing)>>;
     let mut gaps: Gaps = BTreeMap::new();
     let mut out = vec![0.0; conns.len()];
     // Connectors between two cards' right sides run beside the cards: per
@@ -302,9 +326,26 @@ fn lanes(conns: &[Conn], ends: &[Ends]) -> Vec<f64> {
         } else {
             far.0.min(near.0 + 40.0)
         };
+        // Where the connector meets the cards, along the gap: its first
+        // call site and any further ones are on `a`'s side.
+        let a_near = p.0 <= q.0;
+        let mut at_a = vec![p.1];
+        at_a.extend(c.more_sites.iter().copied());
+        let (near_vs, far_vs) = if a_near {
+            (at_a, vec![q.1])
+        } else {
+            (vec![q.1], at_a)
+        };
         gaps.entry((horizontal, near.0.round() as i64, far_u.round() as i64))
             .or_default()
-            .push(((!down, order), i));
+            .push((
+                (!down, order),
+                i,
+                Crossing {
+                    near: near_vs,
+                    far: far_vs,
+                },
+            ));
     }
     for (edge, mut list) in beside {
         list.sort_by(|x, y| x.0.total_cmp(&y.0));
@@ -314,17 +355,111 @@ fn lanes(conns: &[Conn], ends: &[Ends]) -> Vec<f64> {
     }
     for ((_, u0, u1), mut list) in gaps {
         list.sort_by(|x, y| x.0.0.cmp(&y.0.0).then(x.0.1.total_cmp(&y.0.1)));
+        let shapes: Vec<Crossing> = list.iter().map(|x| x.2.clone()).collect();
+        let order = lane_order(&shapes);
         let (u0, u1) = (u0 as f64, u1 as f64);
         let n = list.len() as f64;
         let gap = LANE_GAP.min((u1 - u0) / (n + 1.0));
-        for (k, &(_, i)) in list.iter().enumerate() {
-            out[i] = (u0 + u1) / 2.0 + (k as f64 - (n - 1.0) / 2.0) * gap;
+        for (k, &o) in order.iter().enumerate() {
+            out[list[o].1] = (u0 + u1) / 2.0 + (k as f64 - (n - 1.0) / 2.0) * gap;
         }
     }
     out
 }
 
-fn conn_path(c: &Conn, ends: Ends, lane: f64) -> String {
+/// The SVG paths of a connector.
+#[derive(Default)]
+struct Paths {
+    /// The connector itself, from the first call site.
+    main: String,
+    /// The connectors of further call sites, up to where they join `main`.
+    branches: String,
+    /// Where the branches join `main`.
+    joins: Vec<(f64, f64)>,
+    /// The corners of `main` and of each branch, for orthogonal connectors.
+    lines: Vec<Vec<(f64, f64)>>,
+}
+
+/// Where a connector through a gap meets the cards on either side, along
+/// the gap (`v` in [`lanes`]): it runs from each of these points across
+/// to its lane, and along the lane between them.
+#[derive(Clone)]
+struct Crossing {
+    near: Vec<f64>,
+    far: Vec<f64>,
+}
+
+impl Crossing {
+    fn span(&self) -> (f64, f64) {
+        let all = self.near.iter().chain(&self.far).copied();
+        let lo = all.clone().fold(f64::MAX, f64::min);
+        (lo, all.fold(f64::MIN, f64::max))
+    }
+}
+
+/// Up to this many connectors through one gap, [`lane_order`] tries every
+/// order of their lanes.
+const MAX_EXACT: usize = 7;
+
+/// The order of the lanes in a gap, from the near side: the one with the
+/// fewest crossings, then the one whose connectors cross others at the
+/// fewest places of their own (a connector that crosses two others in one
+/// run is easier to follow than one that crosses them on two), then the
+/// one closest to the given order. With more than [`MAX_EXACT`]
+/// connectors, the given order.
+fn lane_order(shapes: &[Crossing]) -> Vec<usize> {
+    let n = shapes.len();
+    if n > MAX_EXACT {
+        return (0..n).collect();
+    }
+    let spans: Vec<(f64, f64)> = shapes.iter().map(Crossing::span).collect();
+    let inside = |v: f64, (lo, hi): (f64, f64)| v > lo + 0.5 && v < hi - 0.5;
+    let count = |vs: &[f64], span| vs.iter().filter(|&&v| inside(v, span)).count();
+    let score = |order: &[usize]| {
+        let (mut total, mut places, mut moved) = (0, 0, 0);
+        for (k, &i) in order.iter().enumerate() {
+            // Crossings on the runs to the near side, the runs to the far
+            // side, and the run along the lane.
+            let (mut near, mut far, mut along) = (0, 0, 0);
+            for (l, &j) in order.iter().enumerate() {
+                if l < k {
+                    near += count(&shapes[i].near, spans[j]);
+                    along += count(&shapes[j].far, spans[i]);
+                } else if l > k {
+                    far += count(&shapes[i].far, spans[j]);
+                    along += count(&shapes[j].near, spans[i]);
+                    moved += usize::from(j < i);
+                }
+            }
+            total += near + far;
+            places += [near, far, along].iter().filter(|&&x| x > 0).count();
+        }
+        (total, places, moved)
+    };
+    let mut order: Vec<usize> = (0..n).collect();
+    let mut best = (score(&order), order.clone());
+    // Heap's algorithm: every permutation, one swap at a time.
+    let mut c = vec![0; n];
+    let mut k = 1;
+    while k < n {
+        if c[k] < k {
+            order.swap(if k % 2 == 0 { 0 } else { c[k] }, k);
+            let s = score(&order);
+            if s < best.0 {
+                best = (s, order.clone());
+            }
+            c[k] += 1;
+            k = 1;
+        } else {
+            c[k] = 0;
+            k += 1;
+        }
+    }
+    best.1
+}
+
+fn conn_path(c: &Conn, ends: Ends, lane: f64) -> Paths {
+    let mut out = Paths::default();
     match c.route {
         Route::Ortho(sa, sb) => {
             let (p, q) = ends;
@@ -333,11 +468,168 @@ fn conn_path(c: &Conn, ends: Ends, lane: f64) -> String {
                 Side::Left | Side::Right => vec![p, (lane, p.1), (lane, q.1), q],
                 Side::Top | Side::Bottom => vec![p, (p.0, lane), (q.0, lane), q],
             };
-            route::path_d(&points)
+            out.main = route::path_d(&points);
+            out.lines.push(points);
+            // Further call sites run into the main connector's lane and
+            // join it where its run along the lane is straight (its bends
+            // are rounded).
+            let (lo, hi) = (p.1.min(q.1), p.1.max(q.1));
+            let r = 8.0_f64.min((hi - lo) / 2.0);
+            let (lo, hi) = (lo + r, hi - r);
+            for &y in &c.more_sites {
+                let join = y.clamp(lo, hi);
+                let end = if join == y {
+                    // Beside the lane: a bend into it, towards `b`.
+                    let s = if q.1 >= y { 1.0 } else { -1.0 };
+                    (y + s * 12.0).clamp(lo, hi)
+                } else {
+                    join
+                };
+                let points = vec![(p.0, y), (lane, y), (lane, end)];
+                out.branches.push_str(&route::path_d(&points));
+                out.lines.push(points);
+                out.branches.push(' ');
+                out.joins.push((lane, join));
+            }
         }
-        Route::Site(y) => site_path(c.a.1, y, c.b.1),
-        Route::Curve => edge_path(c.a.1, c.b.1),
+        Route::Site(y) => {
+            out.main = site_path(c.a.1, y, c.b.1);
+            for &y in &c.more_sites {
+                out.branches.push_str(&site_path(c.a.1, y, c.b.1));
+                out.branches.push(' ');
+            }
+        }
+        Route::Curve => out.main = edge_path(c.a.1, c.b.1),
     }
+    out
+}
+
+/// Which connectors cross a longer one: those are drawn over it, a bit
+/// bolder, with a gap cut into the longer one. Only orthogonal connectors
+/// are checked, by their straight runs.
+fn over_longer(lines: &[&[Vec<(f64, f64)>]]) -> Vec<bool> {
+    type Seg = ((f64, f64), (f64, f64));
+    let segs: Vec<Vec<Seg>> = lines
+        .iter()
+        .map(|ls| {
+            ls.iter()
+                .flat_map(|l| l.windows(2).map(|w| (w[0], w[1])))
+                .collect()
+        })
+        .collect();
+    let len = |i: usize| -> f64 {
+        lines[i]
+            .first()
+            .map(|l| {
+                l.windows(2)
+                    .map(|w| (w[1].0 - w[0].0).abs() + (w[1].1 - w[0].1).abs())
+                    .sum()
+            })
+            .unwrap_or(0.0)
+    };
+    let between = |v: f64, a: f64, b: f64| v > a.min(b) + 1.0 && v < a.max(b) - 1.0;
+    let cross = |(a, b): Seg, (c, d): Seg| {
+        let horizontal = |p: (f64, f64), q: (f64, f64)| p.1 == q.1 && p.0 != q.0;
+        let vertical = |p: (f64, f64), q: (f64, f64)| p.0 == q.0 && p.1 != q.1;
+        let hv = |(a, b): Seg, (c, d): Seg| {
+            horizontal(a, b) && vertical(c, d) && between(c.0, a.0, b.0) && between(a.1, c.1, d.1)
+        };
+        hv((a, b), (c, d)) || hv((c, d), (a, b))
+    };
+    let n = lines.len();
+    let mut out = vec![false; n];
+    for i in 0..n {
+        for j in 0..n {
+            if i != j
+                && len(i) < len(j)
+                && segs[i]
+                    .iter()
+                    .any(|&x| segs[j].iter().any(|&y| cross(x, y)))
+            {
+                out[i] = true;
+            }
+        }
+    }
+    out
+}
+
+/// Number of colors for call connectors (`--call-0` … in the CSS).
+const CALL_COLORS: usize = 5;
+
+/// The bounding box of a connector: (x0, y0, x1, y1).
+fn conn_box(c: &Conn, ends: Ends, lane: f64) -> (f64, f64, f64, f64) {
+    let (p, q) = ends;
+    let mut xs = vec![c.a.1.x, c.a.1.x + c.a.1.w];
+    let mut ys = vec![];
+    match c.route {
+        Route::Ortho(sa, _) => {
+            xs = vec![p.0, q.0];
+            ys = vec![p.1, q.1];
+            if matches!(sa, Side::Left | Side::Right) {
+                xs.push(lane);
+            } else {
+                ys.push(lane);
+            }
+        }
+        Route::Site(y) => {
+            ys.push(y);
+            xs.extend([c.b.1.x, c.b.1.x + c.b.1.w]);
+            ys.push(c.b.1.y);
+        }
+        Route::Curve => {
+            xs.extend([c.b.1.x, c.b.1.x + c.b.1.w]);
+            ys.extend([c.a.1.y, c.b.1.y]);
+        }
+    }
+    ys.extend(c.more_sites.iter().copied());
+    let min = |v: &[f64]| v.iter().copied().fold(f64::MAX, f64::min);
+    let max = |v: &[f64]| v.iter().copied().fold(f64::MIN, f64::max);
+    (min(&xs), min(&ys), max(&xs), max(&ys))
+}
+
+/// A color for each call connector, one per callee: callees whose
+/// connectors run near each other get different colors where there are
+/// enough, so that one can tell neighboring connectors apart.
+fn call_colors(conns: &[Conn], ends: &[Ends], lanes: &[f64]) -> Vec<usize> {
+    const NEAR: f64 = 24.0;
+    let calls: Vec<usize> = (0..conns.len())
+        .filter(|&i| conns[i].class.split(' ').next() == Some("call"))
+        .collect();
+    let boxes: HashMap<usize, (f64, f64, f64, f64)> = calls
+        .iter()
+        .map(|&i| (i, conn_box(&conns[i], ends[i], lanes[i])))
+        .collect();
+    let near = |i: usize, j: usize| {
+        let (a, b) = (boxes[&i], boxes[&j]);
+        a.0 <= b.2 + NEAR && b.0 <= a.2 + NEAR && a.1 <= b.3 + NEAR && b.1 <= a.3 + NEAR
+    };
+    // Callees in reading order, top to bottom.
+    let mut targets: Vec<(u32, Rect)> = calls.iter().map(|&i| conns[i].b).collect();
+    targets.sort_by(|x, y| x.1.y.total_cmp(&y.1.y).then(x.1.x.total_cmp(&y.1.x)));
+    targets.dedup_by_key(|t| t.0);
+    let mut color: HashMap<u32, usize> = HashMap::new();
+    for (t, _) in targets {
+        let mine: Vec<usize> = calls
+            .iter()
+            .copied()
+            .filter(|&i| conns[i].b.0 == t)
+            .collect();
+        let mut taken = [0usize; CALL_COLORS];
+        for &j in &calls {
+            if let Some(&cj) = color.get(&conns[j].b.0)
+                && mine.iter().any(|&i| near(i, j))
+            {
+                taken[cj] += 1;
+            }
+        }
+        // The first free color, or else the one used least nearby.
+        let pick = (0..CALL_COLORS).min_by_key(|&k| (taken[k], k)).unwrap_or(0);
+        color.insert(t, pick);
+    }
+    conns
+        .iter()
+        .map(|c| color.get(&c.b.0).copied().unwrap_or(0))
+        .collect()
 }
 
 /// Draws call, use, member and link connectors between visible cards.
@@ -362,16 +654,18 @@ pub fn draw_edges(app: &App) {
             return;
         };
         seen.insert((ga.gid, gb.gid));
-        let site_y = match base {
-            "call" => call_site_y(ga, &gb.active, k),
-            _ => None,
+        let mut sites = match base {
+            "call" => call_site_ys(ga, &gb.active, k),
+            _ => Vec::new(),
         };
+        let site_y = (!sites.is_empty()).then(|| sites.remove(0));
         conns.push(Conn {
             a: (ga.gid, a),
             b: (gb.gid, b),
             class: class.to_string(),
             title,
             site_y,
+            more_sites: sites,
             route: choose_route(a, b, site_y),
         });
     };
@@ -444,31 +738,100 @@ pub fn draw_edges(app: &App) {
     }
     let ends = ports(&conns);
     let lanes = lanes(&conns, &ends);
+    let colors = call_colors(&conns, &ends, &lanes);
+    let ids: HashMap<u32, &str> = vis.iter().map(|g| (g.gid, g.active.as_str())).collect();
+    mark_callees(&conns, &colors, &ids);
+    let paths: Vec<Paths> = conns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| conn_path(c, ends[i], lanes[i]))
+        .collect();
+    let lines: Vec<&[Vec<(f64, f64)>]> = paths.iter().map(|p| p.lines.as_slice()).collect();
+    let over = over_longer(&lines);
+    // Those drawn over others last.
+    let mut order: Vec<usize> = (0..conns.len()).collect();
+    order.sort_by_key(|&i| over[i]);
     let mut out = String::new();
-    for (i, c) in conns.iter().enumerate() {
+    for i in order {
+        let c = &conns[i];
         let base = c.class.split(' ').next().unwrap_or("");
-        let marker = if base == "call" || base == "use" {
-            format!(r#"marker-end="url(#arrow-{base})""#)
-        } else {
-            String::new()
+        let (mut class, marker) = match base {
+            "call" => (
+                format!("{} c{}", c.class, colors[i]),
+                format!(r#"marker-end="url(#arrow-call-{})""#, colors[i]),
+            ),
+            "use" => (c.class.clone(), r#"marker-end="url(#arrow-use)""#.into()),
+            _ => (c.class.clone(), String::new()),
         };
+        let paths = &paths[i];
+        if over[i] {
+            class.push_str(" over");
+            // A gap in the connectors below, along this one.
+            out.push_str(&format!(
+                r#"<path class="edge-gap" d="{} {}"/>"#,
+                paths.branches, paths.main
+            ));
+        }
+        let title = esc(&c.title);
+        if !paths.branches.is_empty() {
+            out.push_str(&format!(
+                r#"<path class="edge {class} branch" d="{}"><title>{title}</title></path>"#,
+                paths.branches
+            ));
+        }
         out.push_str(&format!(
-            r#"<path class="edge {}" d="{}" {marker}><title>{}</title></path>"#,
-            c.class,
-            conn_path(c, ends[i], lanes[i]),
-            esc(&c.title)
+            r#"<path class="edge {class}" d="{}" {marker}><title>{title}</title></path>"#,
+            paths.main
         ));
+        for &(x, y) in &paths.joins {
+            out.push_str(&format!(
+                r#"<circle class="join c{}" cx="{x:.1}" cy="{y:.1}" r="3"/>"#,
+                colors[i]
+            ));
+        }
     }
+    let call_markers: String = (0..CALL_COLORS)
+        .map(|k| {
+            format!(
+                r#"<marker id="arrow-call-{k}" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--call-{k})"/></marker>"#
+            )
+        })
+        .collect();
     dom::set_html(
         "edges",
         &format!(
-            r#"<defs>
-            <marker id="arrow-call" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--fn)"/></marker>
+            r#"<defs>{call_markers}
             <marker id="arrow-use" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--type)"/></marker>
             </defs>{out}"#
         ),
     );
     draw_frames(app, &rects);
+}
+
+/// Gives each callee card, and the names that call it in the source of
+/// its callers' cards, the color of the connectors that reach it.
+fn mark_callees(conns: &[Conn], colors: &[usize], ids: &HashMap<u32, &str>) {
+    for el in dom::query_all("#cards [data-callc]") {
+        let _ = el.remove_attribute("data-callc");
+    }
+    for (c, &color) in conns.iter().zip(colors) {
+        if c.class.split(' ').next() != Some("call") {
+            continue;
+        }
+        let color = color.to_string();
+        let (Some(caller), Some(callee)) = (card_el(c.a.0), card_el(c.b.0)) else {
+            continue;
+        };
+        let _ = callee.set_attribute("data-callc", &color);
+        let Some(&id) = ids.get(&c.b.0) else {
+            continue;
+        };
+        for a in dom::query_all_in(&caller, "a.ref[data-id]") {
+            if dom::data(&a, "id").as_deref() == Some(id) {
+                let _ = a.set_attribute("data-callc", &color);
+            }
+        }
+    }
 }
 
 /// Module boundaries around the cards they contain, with a private zone.
@@ -599,6 +962,7 @@ mod tests {
             class: "use".into(),
             title: String::new(),
             site_y: None,
+            more_sites: Vec::new(),
             route: choose_route(a.1, b.1, None),
         }
     }
@@ -655,5 +1019,83 @@ mod tests {
         let ends = ports(&conns);
         let lanes = lanes(&conns, &ends);
         assert!(lanes[0] > 400.0 && lanes[0] < 440.0, "lane {}", lanes[0]);
+    }
+
+    /// A card that calls another one from two lines gets a connector from
+    /// each line; the second joins the first in its lane, so that both end
+    /// in one arrow head on the callee.
+    #[test]
+    fn every_call_site_gets_a_connector() {
+        let a = (1, rect(0.0, 0.0, 600.0));
+        let b = (2, rect(660.0, 100.0, 300.0));
+        let mut c = conn(a, b);
+        c.class = "call".into();
+        c.site_y = Some(120.0);
+        c.more_sites = vec![480.0];
+        c.route = choose_route(a.1, b.1, c.site_y);
+        let conns = vec![c];
+        let ends = ports(&conns);
+        let lanes = lanes(&conns, &ends);
+        let paths = conn_path(&conns[0], ends[0], lanes[0]);
+        let (q, lane) = (ends[0].1, lanes[0]);
+        // The main connector starts at the first call and ends at `b`.
+        assert!(paths.main.starts_with("M580.0,120.0"), "{}", paths.main);
+        let end = format!("L{:.1},{:.1}", q.0, q.1);
+        assert!(paths.main.ends_with(&end), "{}", paths.main);
+        // The second one runs into the main one's lane and ends there.
+        let b = &paths.branches;
+        assert_eq!(b.matches('M').count(), 1, "{b}");
+        assert!(b.starts_with("M580.0,480.0"), "{b}");
+        assert_eq!(paths.joins.len(), 1);
+        assert_eq!(paths.joins[0].0, lane);
+        assert!(paths.joins[0].1 > 120.0 && paths.joins[0].1 < q.1.max(480.0));
+    }
+
+    /// A short connector that crosses a long one is drawn over it.
+    #[test]
+    fn short_connectors_cross_over_long_ones() {
+        let long = vec![vec![(0.0, 0.0), (50.0, 0.0), (50.0, 500.0), (100.0, 500.0)]];
+        let short = vec![vec![
+            (0.0, 200.0),
+            (40.0, 200.0),
+            (40.0, 100.0),
+            (100.0, 100.0),
+        ]];
+        let over = over_longer(&[long.as_slice(), short.as_slice()]);
+        assert_eq!(over, vec![false, true]);
+    }
+
+    /// Calls into two callees whose connectors run through one gap get
+    /// different colors; a third, far away, may reuse one.
+    #[test]
+    fn neighboring_call_connectors_differ_in_color() {
+        let a = (1, rect(0.0, 0.0, 600.0));
+        let call = |b: (u32, Rect), y: f64| {
+            let mut c = conn(a, b);
+            c.class = "call".into();
+            c.site_y = Some(y);
+            c.route = choose_route(a.1, b.1, c.site_y);
+            c
+        };
+        let far = (
+            9,
+            Rect {
+                x: 5000.0,
+                y: 5000.0,
+                w: 100.0,
+                h: 100.0,
+            },
+        );
+        let conns = vec![
+            // Crossing in the gap: down from the first call, up from the
+            // second.
+            call((2, rect(660.0, 400.0, 300.0)), 100.0),
+            call((3, rect(660.0, 0.0, 300.0)), 200.0),
+            call(far, 300.0),
+        ];
+        let ends = ports(&conns);
+        let lanes = lanes(&conns, &ends);
+        let colors = call_colors(&conns, &ends, &lanes);
+        assert_ne!(colors[0], colors[1]);
     }
 }

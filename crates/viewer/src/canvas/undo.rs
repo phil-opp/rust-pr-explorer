@@ -12,7 +12,7 @@ const LIMIT: usize = 50;
 pub struct Snapshot {
     groups: Vec<Group>,
     links: Vec<(String, String)>,
-    scope: String,
+    scope: Option<String>,
     /// Whether module frames were drawn: laying the cards out by module
     /// turns them on, and undoing that turns them off again.
     frames: bool,
