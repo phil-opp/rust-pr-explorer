@@ -577,8 +577,8 @@ fn mark_on_canvas(app: &App) {
     }
 }
 
-/// The items that have a card (as any of its tabs), also those hidden at
-/// the canvas's scope.
+/// The items that have a card (as any of its tabs), also those hidden by
+/// the privacy view.
 pub fn items_on_canvas(app: &App) -> Vec<String> {
     app.s
         .canvas
