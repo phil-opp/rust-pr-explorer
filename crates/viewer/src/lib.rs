@@ -159,7 +159,7 @@ pub fn start() {
             module: root.clone(),
             show_unchanged: false,
             side_all: false,
-            canvas: canvas::Canvas::new(root),
+            canvas: canvas::Canvas::new(None),
             canvas_focus: None,
             canvas_graph: None,
             anchor: None,
@@ -466,6 +466,14 @@ fn install_listeners() {
         with_app(|app| {
             if settings::on_change(&el) {
                 set_view(app, app.s.view);
+            } else if el.id() == "cv-scope" {
+                let value = el
+                    .dyn_ref::<web_sys::HtmlSelectElement>()
+                    .map(|s| s.value())
+                    .unwrap_or_default();
+                canvas::before_change(app);
+                canvas::set_privacy_view(app, Some(value).filter(|v| !v.is_empty()));
+                canvas::after_change(app);
             } else if el.id() == "commit-filter" {
                 let value = el
                     .dyn_ref::<web_sys::HtmlSelectElement>()

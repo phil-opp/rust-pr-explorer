@@ -5,7 +5,7 @@ use super::{
     edges::draw_edges,
     layout::{arrange_by_module, fit_view},
     open::{Related, close_tab, expand, members_as_tabs},
-    place, render, visible, zoom,
+    place, render, set_privacy_view, visible, zoom,
 };
 use crate::data::within;
 use crate::{App, View, dom, toast};
@@ -72,10 +72,7 @@ pub fn on_click(app: &mut App, el: &Element) -> bool {
                 app.s.canvas.groups[gi].expanded.remove(&id);
                 render(app);
             }
-            Some("drill") => {
-                app.s.canvas.scope = id;
-                render(app);
-            }
+            Some("drill") => set_privacy_view(app, Some(id)),
             Some("page") => {
                 app.s.module = id;
                 crate::set_view(app, View::Module);
@@ -96,15 +93,7 @@ pub fn on_click(app: &mut App, el: &Element) -> bool {
         return true;
     }
     if let Some(a) = dom::closest(el, "[data-drill]") {
-        let m = dom::data(&a, "drill").unwrap_or_default();
-        toast(&format!("Now viewing from {}", app.d.mod_label(&m)));
-        app.s.canvas.scope = m;
-        render(app);
-        return true;
-    }
-    if let Some(a) = dom::closest(el, "[data-scope]") {
-        app.s.canvas.scope = dom::data(&a, "scope").unwrap_or_default();
-        render(app);
+        set_privacy_view(app, dom::data(&a, "drill"));
         return true;
     }
     match el
