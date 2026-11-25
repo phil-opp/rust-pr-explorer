@@ -567,9 +567,8 @@ fn install_listeners() {
     }
     // Back and Forward.
     dom::listen(&dom::window().into(), "hashchange", |_| {
+        // Showing an entry's cards again can be undone, like a click.
         with_app(|app| {
-            // Back to another call graph lays it out again: Undo brings
-            // the cards back.
             canvas::before_change(app);
             nav::on_hash_change(app);
             canvas::after_change(app);

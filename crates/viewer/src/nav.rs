@@ -224,6 +224,8 @@ thread_local! {
     /// The items of the canvas's cards when its entry was last set (see
     /// [`sync_canvas`]).
     static CARDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The cards of each canvas entry as last seen, by fragment.
+    static CANVASES: RefCell<HashMap<String, crate::canvas::Saved>> = RefCell::new(HashMap::new());
 }
 
 /// Splits the artifact's id (`~<id>`, see the module docs) off a fragment.
@@ -297,6 +299,22 @@ fn learn_artifact(app: &App) {
     if let Some(id) = id.filter(|id| id.bytes().all(|b| b.is_ascii_digit())) {
         ARTIFACT.with(|a| *a.borrow_mut() = Some(format!("{run}/artifacts/{id}")));
     }
+}
+
+/// After each event on the canvas: keeps its cards for the current entry,
+/// so that coming back to the entry with Back or Forward shows them as
+/// they were, also after another graph replaced them (see [`show`]).
+pub fn remember_canvas(app: &App) {
+    if app.s.view != View::Canvas {
+        return;
+    }
+    CURRENT.with(|c| {
+        let c = c.borrow();
+        if matches!(*c, Route::Canvas(_)) {
+            let saved = crate::canvas::save(&app.s.canvas);
+            CANVASES.with(|m| m.borrow_mut().insert(c.hash(), saved));
+        }
+    });
 }
 
 fn location_route() -> Route {
@@ -383,8 +401,11 @@ pub fn sync_canvas(app: &mut App) {
     }
     app.s.canvas_focus = shows;
     let route = route_of(app);
-    CURRENT.with(|c| *c.borrow_mut() = route.clone());
+    let old = CURRENT.with(|c| std::mem::replace(&mut *c.borrow_mut(), route.clone()));
     let _ = dom::window().location().replace(&route.hash());
+    // The entry's cards (see [`remember_canvas`]) under its new fragment.
+    CANVASES.with(|m| m.borrow_mut().remove(&old.hash()));
+    remember_canvas(app);
 }
 
 /// Points the view buttons at what each view shows now, so that one opened
@@ -488,6 +509,16 @@ fn show(app: &mut App, wanted: Route, first: bool) {
     match route.clone() {
         Route::Overview(a) => show_page(app, View::Overview, None, a, first),
         Route::Module(m, a) => show_page(app, View::Module, Some(m), a, first),
+        // Back or Forward to a canvas entry seen before: its cards as the
+        // reader left them, not laid out again.
+        Route::Canvas(shows)
+            if !first
+                && let Some(saved) = CANVASES.with(|m| m.borrow().get(&route.hash()).cloned()) =>
+        {
+            crate::canvas::restore(app, &saved);
+            app.s.canvas_focus = shows;
+            crate::set_view(app, View::Canvas);
+        }
         Route::Canvas(Some(OnCanvas::Item(id))) if crate::narrow() => crate::calls::focus(app, &id),
         Route::Canvas(Some(OnCanvas::Item(id))) => crate::canvas::open(app, &id, None, true),
         // Back to the call graph that the canvas shows, or to cards that
