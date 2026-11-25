@@ -1048,9 +1048,9 @@ impl Data {
         // or removed lines.
         let mut rows: Vec<(Option<usize>, Option<usize>)> = Vec::new();
         let split = opts.split && it.status == Status::Changed;
-        // Changed lines that pair up (the first old one with the first new
-        // one, and so on), to have their changed words marked.
-        let mut pairs: Vec<(usize, usize)> = Vec::new();
+        // Blocks of removed lines and the added lines that replace them,
+        // to have their changed words marked.
+        let mut blocks: Vec<(Range<usize>, Range<usize>)> = Vec::new();
         // Lines that were reformatted (see `Item::reformatted`), with their
         // group: groups are shown in their new form, as unchanged lines
         // with any added or removed tokens marked, and the lines between
@@ -1094,7 +1094,7 @@ impl Data {
                 let o = op.old_range().start + so.start..op.old_range().end + so.start;
                 let n = op.new_range().start + sn.start..op.new_range().end + sn.start;
                 if let DiffOp::Replace { .. } = op {
-                    pairs.extend(o.clone().zip(n.clone()));
+                    blocks.push((o.clone(), n.clone()));
                 }
                 match op {
                     DiffOp::Equal { .. } => rows.extend(o.zip(n).map(|(a, b)| (Some(a), Some(b)))),
@@ -1201,23 +1201,33 @@ impl Data {
         let mut marked_old: HashMap<usize, String> = HashMap::new();
         let mut marked_new: HashMap<usize, String> = HashMap::new();
         if it.status == Status::Changed {
-            for &(o, n) in &pairs {
-                if moved('-', o).is_some() || moved('+', n).is_some() {
+            for (o, n) in &blocks {
+                let o: Vec<usize> = o.clone().filter(|&a| moved('-', a).is_none()).collect();
+                let n: Vec<usize> = n.clone().filter(|&b| moved('+', b).is_none()).collect();
+                if o.is_empty() || n.is_empty() {
                     continue;
                 }
-                let old_html = code_html(self, old[o], old_links(o));
-                let new_html = code_html(
-                    self,
-                    new[n],
-                    Links::Source {
-                        line: new_start + n,
-                        refs: &it.info.source_refs,
-                        of: &it.info.id,
-                    },
-                );
-                if let Some((a, b)) = crate::code::mark_changed_tokens(&old_html, &new_html) {
-                    marked_old.insert(o, a);
-                    marked_new.insert(n, b);
+                let old_html: Vec<String> = o
+                    .iter()
+                    .map(|&a| code_html(self, old[a], old_links(a)))
+                    .collect();
+                let new_html: Vec<String> = n
+                    .iter()
+                    .map(|&b| {
+                        code_html(
+                            self,
+                            new[b],
+                            Links::Source {
+                                line: new_start + b,
+                                refs: &it.info.source_refs,
+                                of: &it.info.id,
+                            },
+                        )
+                    })
+                    .collect();
+                if let Some((ma, mb)) = crate::code::mark_changed_lines(&old_html, &new_html) {
+                    marked_old.extend(o.into_iter().zip(ma));
+                    marked_new.extend(n.into_iter().zip(mb));
                 }
             }
         }

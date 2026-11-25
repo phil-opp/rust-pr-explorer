@@ -866,12 +866,6 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
         let id = dom::data(&c, "rv").unwrap_or_default();
         if dom::closest(el, "[data-rv-go-next]").is_some() {
             go_next(app, Some(id), false);
-        } else if let Some(b) = dom::closest(el, "[data-rv-go-add]") {
-            let next = dom::data(&b, "rv-go-add").unwrap_or_default();
-            show_unit(app, &next, Some(&id));
-        } else if let Some(b) = dom::closest(el, "[data-rv-go-new]") {
-            let next = dom::data(&b, "rv-go-new").unwrap_or_default();
-            new_canvas_for(app, &next);
         } else if let Some(b) = dom::closest(el, "[data-rv-go-graph]") {
             let i = dom::data(&b, "rv-go-graph").unwrap_or_default();
             if app.s.view != View::Overview {
@@ -1099,25 +1093,20 @@ fn next_steps_html(app: &App, unit: &str) -> String {
         )
     });
     let on = if app.s.view == View::Canvas {
-        let cards = canvas_items(app);
-        match review::next_open_where(Some(unit), |u| cards.contains(u)) {
-            Some(next) => format!(
+        match canvas_next(d, &canvas_items(app), Some(unit)) {
+            CanvasNext::Card(next) => format!(
                 r#"<button class="rv-go-btn" data-rv-go-next title="The next card on the canvas that needs a review, in review order (j)">Next unreviewed: <code>{}</code> ▸</button>"#,
                 name(&next)
             ),
-            None => match review::next_open(Some(unit)) {
-                Some(next) if connected(d, &cards, &next) => format!(
-                    r#"<button class="rv-go-btn" data-rv-go-add="{}" title="Every card on the canvas is reviewed. Adds the next item that needs a review, in review order, next to the cards it is connected to">Add <code>{}</code> ▸</button>"#,
-                    esc(&next),
-                    name(&next)
-                ),
-                Some(next) => format!(
-                    r#"<button class="rv-go-btn" data-rv-go-new="{}" title="Every card on the canvas is reviewed, and the next item that needs a review isn't connected to them: opens its call graph on a new canvas, in place of these cards (Ctrl+Z brings them back)">Next call graph on a new canvas: <code>{}</code> ▸</button>"#,
-                    esc(&next),
-                    name(&next)
-                ),
-                None => String::new(),
-            },
+            CanvasNext::Add(next) => format!(
+                r#"<button class="rv-go-btn" data-rv-go-next title="Every card on the canvas is reviewed. Adds the next item that needs a review, in review order, next to the cards it is connected to (j)">Add <code>{}</code> ▸</button>"#,
+                name(&next)
+            ),
+            CanvasNext::NewCanvas(next) => format!(
+                r#"<button class="rv-go-btn" data-rv-go-next title="Every card on the canvas is reviewed, and the next item that needs a review isn't connected to them: opens its call graph on a new canvas, in place of these cards (Ctrl+Z brings them back) (j)">Next call graph on a new canvas: <code>{}</code> ▸</button>"#,
+                name(&next)
+            ),
+            CanvasNext::Done => String::new(),
         }
     } else {
         review::next_open(Some(unit)).map_or(String::new(), |next| {
@@ -1131,6 +1120,32 @@ fn next_steps_html(app: &App, unit: &str) -> String {
         return String::new();
     }
     format!(r#"<span class="rv-next">{back}{on}</span>"#)
+}
+
+/// Where Next ▸ goes on a canvas that shows `cards`, after unit `from`.
+#[derive(Debug, PartialEq)]
+enum CanvasNext {
+    /// The next unit in review order that needs a review and has a card.
+    Card(String),
+    /// Every card is reviewed: the next unit in review order, which is
+    /// connected to the cards, gets a card next to them.
+    Add(String),
+    /// Every card is reviewed, and the next unit in review order isn't
+    /// connected to them: its call graph replaces them.
+    NewCanvas(String),
+    /// Nothing needs a review.
+    Done,
+}
+
+fn canvas_next(d: &Data, cards: &HashSet<String>, from: Option<&str>) -> CanvasNext {
+    if let Some(next) = review::next_open_where(from, |u| cards.contains(u)) {
+        return CanvasNext::Card(next);
+    }
+    match review::next_open(from) {
+        Some(next) if connected(d, cards, &next) => CanvasNext::Add(next),
+        Some(next) => CanvasNext::NewCanvas(next),
+        None => CanvasNext::Done,
+    }
 }
 
 /// The items that have a card on the canvas (in any of its tabs), if the
@@ -1347,33 +1362,22 @@ fn show_since_review(app: &App, id: &str) {
 /// files, and it says so when the tab has nothing left.
 fn go_next(app: &mut App, from: Option<String>, stay: bool) {
     // On a canvas with cards, Next ▸ goes to the next card that needs a
-    // review, and adds none: when every card is reviewed, the current
-    // card suggests where to go (see `next_steps_html`).
+    // review. Only when every card is reviewed does it add a card or open
+    // a new canvas, as the button under a verdict says (see
+    // `next_steps_html`).
     let cards = canvas_items(app);
     if app.s.view == View::Canvas && !cards.is_empty() {
-        if let Some(next) = review::next_open_where(from.as_deref(), |u| cards.contains(u)) {
-            review::set_stayed(None);
-            app.s.rv_current = Some(next.clone());
-            app.s.rv_hunk = None;
-            // Pans only if the card is out of view.
-            nav::step(|| canvas::open(app, &next, None, true));
-            return;
-        }
-        if review::next_open(from.as_deref()).is_none() {
-            toast(&all_reviewed());
-            return;
-        }
-        let at = from
-            .filter(|u| cards.contains(u))
-            .or_else(|| app.s.canvas.groups.first().map(|g| g.active.clone()));
-        // No toast: it would cover the buttons of the row under the verdict, which
-        // say what is left. The card flashes instead.
-        match at {
-            Some(at) => {
-                self::stay(app, &at);
-                canvas::open(app, &at, None, true);
+        match canvas_next(&app.d, &cards, from.as_deref()) {
+            CanvasNext::Card(next) => {
+                review::set_stayed(None);
+                app.s.rv_current = Some(next.clone());
+                app.s.rv_hunk = None;
+                // Pans only if the card is out of view.
+                nav::step(|| canvas::open(app, &next, None, true));
             }
-            None => toast("Every card on the canvas is reviewed."),
+            CanvasNext::Add(next) => show_unit(app, &next, from.as_deref()),
+            CanvasNext::NewCanvas(next) => new_canvas_for(app, &next),
+            CanvasNext::Done => toast(&all_reviewed()),
         }
         return;
     }
