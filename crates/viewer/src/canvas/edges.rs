@@ -589,6 +589,8 @@ pub fn draw_edges(app: &App) {
     let ends = ports(&conns);
     let lanes = lanes(&conns, &ends);
     let colors = call_colors(&conns, &ends, &lanes);
+    let ids: HashMap<u32, &str> = vis.iter().map(|g| (g.gid, g.active.as_str())).collect();
+    mark_callees(&conns, &colors, &ids);
     let mut out = String::new();
     for (i, c) in conns.iter().enumerate() {
         let base = c.class.split(' ').next().unwrap_or("");
@@ -635,6 +637,32 @@ pub fn draw_edges(app: &App) {
         ),
     );
     draw_frames(app, &rects);
+}
+
+/// Gives each callee card, and the names that call it in the source of
+/// its callers' cards, the color of the connectors that reach it.
+fn mark_callees(conns: &[Conn], colors: &[usize], ids: &HashMap<u32, &str>) {
+    for el in dom::query_all("#cards [data-callc]") {
+        let _ = el.remove_attribute("data-callc");
+    }
+    for (c, &color) in conns.iter().zip(colors) {
+        if c.class.split(' ').next() != Some("call") {
+            continue;
+        }
+        let color = color.to_string();
+        let (Some(caller), Some(callee)) = (card_el(c.a.0), card_el(c.b.0)) else {
+            continue;
+        };
+        let _ = callee.set_attribute("data-callc", &color);
+        let Some(&id) = ids.get(&c.b.0) else {
+            continue;
+        };
+        for a in dom::query_all_in(&caller, "a.ref[data-id]") {
+            if dom::data(&a, "id").as_deref() == Some(id) {
+                let _ = a.set_attribute("data-callc", &color);
+            }
+        }
+    }
 }
 
 /// Module boundaries around the cards they contain, with a private zone.

@@ -337,6 +337,18 @@ a.ref:hover { text-decoration: underline; }
 .frame text.priv { fill: var(--private); font-size: 11px; font-weight: 400; }
 .edge { fill: none; stroke-width: 1.6; }
 .edge.call { stroke: var(--fn); }
+/* A callee card and the names that call it, in the color of the
+   connectors into it. */
+[data-callc="0"] { --callc: var(--call-0); }
+[data-callc="1"] { --callc: var(--call-1); }
+[data-callc="2"] { --callc: var(--call-2); }
+[data-callc="3"] { --callc: var(--call-3); }
+[data-callc="4"] { --callc: var(--call-4); }
+/* For text in that color: a bit closer to the text color, for contrast. */
+[data-callc] { --callc-text: color-mix(in srgb, var(--callc) 75%, var(--text)); }
+.card[data-callc] .card-h .title-name, .card[data-callc] .card-h .title-name * { color: var(--callc-text); }
+.card[data-callc]::before { content: ""; position: absolute; left: -1px; top: -1px; bottom: -1px; width: 5px; border-radius: 8px 0 0 8px; background: var(--callc); }
+.ref.on-canvas[data-callc] { color: var(--callc-text); background: color-mix(in srgb, var(--callc) 12%, var(--bg)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--callc) 70%, transparent); }
 .edge.call.c0 { stroke: var(--call-0); } .join.c0 { fill: var(--call-0); }
 .edge.call.c1 { stroke: var(--call-1); } .join.c1 { fill: var(--call-1); }
 .edge.call.c2 { stroke: var(--call-2); } .join.c2 { fill: var(--call-2); }
