@@ -1071,7 +1071,12 @@ fn next_steps_html(app: &App, unit: &str) -> String {
     } else {
         r#"<span class="rv-next-label">Next:</span>"#
     };
-    format!(r#"<span class="rv-next">{back}{label}{on}</span>"#)
+    // The label and the ways on in one box, so that a line break never
+    // puts "Next:" with the way back and the ways on on the next line;
+    // the ways on wrap in a column of their own, right of the label.
+    format!(
+        r#"<span class="rv-next">{back}<span class="rv-on">{label}<span class="rv-ways">{on}</span></span></span>"#
+    )
 }
 
 /// The items that have a card on the canvas (in any of its tabs), if the
@@ -1280,13 +1285,15 @@ fn go_next(app: &mut App, from: Option<String>, stay: bool) {
         let at = from
             .filter(|u| cards.contains(u))
             .or_else(|| app.s.canvas.groups.first().map(|g| g.active.clone()));
-        if let Some(at) = at {
-            self::stay(app, &at);
-            canvas::open(app, &at, None, true);
+        // No toast: it would cover the buttons of the "Next:" row, which
+        // say what is left. The card flashes instead.
+        match at {
+            Some(at) => {
+                self::stay(app, &at);
+                canvas::open(app, &at, None, true);
+            }
+            None => toast("Every card on the canvas is reviewed."),
         }
-        toast(
-            "Every card on the canvas is reviewed: the buttons under the card show where to go next.",
-        );
         return;
     }
     review::set_stayed(None);

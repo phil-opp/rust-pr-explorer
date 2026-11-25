@@ -758,6 +758,8 @@ body:not(.reviewing) .rv-edit, .card-rv .rv-fold { display: none; }
    `next_steps_html` in lib.rs): on its own line below the buttons. */
 .rvc:has(.rv-next) { flex-wrap: wrap; }
 .rv-next { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; margin-top: 4px; font-size: 12px; }
+.rv-next .rv-on { display: flex; gap: 12px; align-items: baseline; }
+.rv-next .rv-ways { display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; }
 .rv-next .rv-next-label { font-weight: 600; color: var(--muted); }
 .rv-next .rv-go code { font-size: 12px; }
 .rvc .rv-go-btn { color: var(--link); }
