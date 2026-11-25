@@ -14,6 +14,7 @@ mod layout;
 mod open;
 mod reflow;
 mod undo;
+mod zoom;
 
 pub use edges::draw_edges;
 pub use events::{
