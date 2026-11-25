@@ -151,6 +151,32 @@ try {
       }
     }
 
+    // Approving a changed file folds it to its header row, also when its
+    // diff is split into parts (the demo's YAML workflow), and Expand shows
+    // it again. Undone afterwards, so the checks below see no marks.
+    await page.click('#views [data-view="overview"]');
+    // Picked by position: once approved, a file no longer matches `.rvc.open`.
+    const entries = page.locator("#view-overview .ientry.file");
+    const unreviewed = await entries.evaluateAll((els) =>
+      els.flatMap((el, i) => (el.querySelector(":scope > .irow:not(.part) .rvc.open") ? [i] : [])),
+    );
+    if (unreviewed.length === 0) fail("the overview has no changed file to approve");
+    for (const i of unreviewed) {
+      const file = entries.nth(i);
+      const name = (await file.locator(":scope > .irow .title-name").first().textContent())?.trim();
+      // The rows below the header, shown or not.
+      const shown = () =>
+        file.evaluate((el) =>
+          [...el.children].slice(1).filter((c) => c.getClientRects().length > 0).length,
+        );
+      const all = await file.evaluate((el) => el.children.length - 1);
+      await file.locator(":scope > .irow .rv-btn.approve").first().click();
+      if ((await shown()) !== 0) fail(`approving ${name} leaves ${await shown()} of its ${all} rows shown`);
+      await file.locator(":scope > .irow .rv-fold").first().click();
+      if ((await shown()) !== all) fail(`Expand on ${name} shows ${await shown()} of its ${all} rows`);
+      await file.locator(":scope > .irow [data-rv-undo]").first().click();
+    }
+
     // The review keys: `j` outlines the next unreviewed item, `?` shows
     // the list of shortcuts and hides it again.
     await page.click('#views [data-view="overview"]');
