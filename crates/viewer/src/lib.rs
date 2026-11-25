@@ -15,6 +15,7 @@ mod data;
 mod dom;
 mod files;
 mod graphs;
+mod icons;
 mod impact;
 mod js;
 mod keys;
@@ -331,7 +332,7 @@ fn install_listeners() {
             // The app's links lead to a fragment (see `nav::href`). With a
             // modifier key the browser opens it in a new tab or window (a
             // middle click fires no `click`); else the app handles it.
-            if dom::closest(&el, r##"a[href^="#/"]"##).is_some() {
+            if dom::closest(&el, r##"a[href^="#/"], a[data-permalink]"##).is_some() {
                 if ev
                     .dyn_ref::<web_sys::MouseEvent>()
                     .is_some_and(|m| m.ctrl_key() || m.meta_key() || m.shift_key() || m.alt_key())
@@ -349,6 +350,7 @@ fn install_listeners() {
                 canvas::before_change(app);
                 on_click(app, &el, &ev);
                 canvas::after_change(app);
+                nav::sync_canvas(app);
                 nav::update_view_links(app);
             });
             mark_current_later();
@@ -418,6 +420,7 @@ fn install_listeners() {
             with_app(|app| {
                 canvas::on_pointer_up(app, &pev);
                 canvas::after_change(app);
+                nav::sync_canvas(app);
                 space::on_pointer_up(app);
             });
         });
@@ -512,6 +515,7 @@ fn install_listeners() {
                 canvas::before_change(app);
                 let done = keys::on_key(app, k);
                 canvas::after_change(app);
+                nav::sync_canvas(app);
                 done
             }) == Some(true)
         {
@@ -652,6 +656,18 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         if open && dom::closest(el, ".tree-row").is_some() {
             dom::toggle_class(&body, "side-open", false);
         }
+    }
+    // A permalink: copied, also to paste it where links can't be
+    // right-clicked.
+    if let Some(a) = dom::closest(el, "a[data-permalink]") {
+        if let Some(url) = a.get_attribute("href") {
+            copy_with(
+                &url,
+                "The link is copied.",
+                "The browser didn't allow copying: right-click the link icon and copy the link.",
+            );
+        }
+        return;
     }
     if line_notes::on_click(app, el, ev) {
         return;
@@ -1256,12 +1272,20 @@ fn finish_output(app: &App, what: &str) {
 
 /// Copies a text to the clipboard and says whether that worked.
 fn copy(text: &str, label: &str) {
+    copy_with(
+        text,
+        &format!("{label} is copied."),
+        "The browser didn't allow copying: the text below is selected, press Ctrl+C.",
+    );
+}
+
+/// Copies `text`, then shows `done`, or `failed` if the browser refused.
+fn copy_with(text: &str, done: &str, failed: &str) {
     use wasm_bindgen::{JsValue, closure::Closure};
-    let done = format!("{label} is copied.");
+    let done = done.to_string();
+    let failed = failed.to_string();
     let ok = Closure::<dyn FnMut(JsValue)>::new(move |_| toast(&done));
-    let failed = Closure::<dyn FnMut(JsValue)>::new(|_| {
-        toast("The browser didn't allow copying: the text below is selected, press Ctrl+C.")
-    });
+    let failed = Closure::<dyn FnMut(JsValue)>::new(move |_| toast(&failed));
     let _ = dom::window()
         .navigator()
         .clipboard()

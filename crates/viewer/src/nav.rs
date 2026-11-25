@@ -19,6 +19,12 @@
 //! `lib.rs`). A canvas that shows a call graph has a route of its own
 //! ([`OnCanvas`]), which a new tab lays out again.
 //!
+//! A page that the action uploaded is opened from the PR comment through
+//! its artifact's address on github.com, which redirects to a storage host
+//! whose address can't be shared. The comment's links tell the page its
+//! artifact's id (`#~<id>/…`), and the page's permalinks (see
+//! [`permalink`]) are the artifact's address with a fragment.
+//!
 //! Stepping through the review (Next ▸, `j`, `k`) adds one entry for the
 //! first step that changes the view and replaces it for the steps after,
 //! so that Back returns to where the review steps started instead of going
@@ -212,8 +218,87 @@ thread_local! {
     static STEP_ENTRY: Cell<bool> = const { Cell::new(false) };
     /// Whether the view of an entry is being shown (see [`show`]).
     static SHOWING: Cell<bool> = const { Cell::new(false) };
+    /// The address of the page's artifact on github.com, if known (see
+    /// [`start`]).
+    static ARTIFACT: RefCell<Option<String>> = const { RefCell::new(None) };
+    /// The items of the canvas's cards when its entry was last set (see
+    /// [`sync_canvas`]).
+    static CARDS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     /// The cards of each canvas entry as last seen, by fragment.
     static CANVASES: RefCell<HashMap<String, crate::canvas::Saved>> = RefCell::new(HashMap::new());
+}
+
+/// Splits the artifact's id (`~<id>`, see the module docs) off a fragment.
+fn split_artifact(hash: &str) -> (Option<&str>, &str) {
+    let path = hash.trim_start_matches('#');
+    let Some(rest) = path.strip_prefix('~') else {
+        return (None, hash);
+    };
+    let end = rest.find('/').unwrap_or(rest.len());
+    let id = &rest[..end];
+    let id = (!id.is_empty() && id.bytes().all(|b| b.is_ascii_digit())).then_some(id);
+    (id, &rest[end..])
+}
+
+/// The address of a page with `fragment` (`#/…`): on github.com, if the
+/// page knows its artifact, else where the page is now.
+pub fn permalink(route: &Route) -> String {
+    let base = ARTIFACT.with(|a| a.borrow().clone()).unwrap_or_else(|| {
+        let href = dom::window().location().href().unwrap_or_default();
+        href.split('#').next().unwrap_or_default().to_string()
+    });
+    format!("{base}{}", route.hash())
+}
+
+/// A link icon that copies the permalink of `route` (see [`permalink`]),
+/// next to a link to GitHub. `what` completes its tooltip.
+pub fn permalink_html(route: &Route, what: &str) -> String {
+    format!(
+        r#"<a class="perma-link" href="{}" data-permalink title="Copy a link to {what} on this page" aria-label="Copy a link to {what}">{}</a>"#,
+        crate::code::esc(&permalink(route)),
+        crate::icons::LINK
+    )
+}
+
+/// Learns the page's artifact from the address it was opened with, or
+/// from an earlier visit, and removes its id from the address.
+fn learn_artifact(app: &App) {
+    let meta = &app.d.out.meta;
+    let Some(run) = meta
+        .run_url
+        .as_deref()
+        .filter(|u| u.starts_with("https://") && !u.contains(['"', '<', '>', '#', '?', ' ']))
+    else {
+        return;
+    };
+    // The page of the whole PR and the page of the changes since an
+    // earlier commit are two artifacts of one run.
+    let since = meta
+        .pr
+        .as_ref()
+        .and_then(|p| p.since.as_deref())
+        .unwrap_or("");
+    let key = format!("rust-semantic-review.artifact:{run}:{since}");
+    let storage = dom::window().local_storage().ok().flatten();
+    let location = dom::window().location();
+    let hash = location.hash().unwrap_or_default();
+    let (id, rest) = split_artifact(&hash);
+    let id = match id {
+        Some(id) => {
+            if let Some(s) = &storage {
+                let _ = s.set_item(&key, id);
+            }
+            Some(id.to_string())
+        }
+        None => storage.and_then(|s| s.get_item(&key).ok().flatten()),
+    };
+    if hash.trim_start_matches('#').starts_with('~') {
+        let rest = if rest.is_empty() { "#/" } else { rest };
+        let _ = location.replace(&format!("#{}", rest.trim_start_matches('#')));
+    }
+    if let Some(id) = id.filter(|id| id.bytes().all(|b| b.is_ascii_digit())) {
+        ARTIFACT.with(|a| *a.borrow_mut() = Some(format!("{run}/artifacts/{id}")));
+    }
 }
 
 /// After each event on the canvas: keeps its cards for the current entry,
@@ -234,7 +319,7 @@ pub fn remember_canvas(app: &App) {
 
 fn location_route() -> Route {
     let hash = dom::window().location().hash().unwrap_or_default();
-    Route::parse(&hash, decode)
+    Route::parse(split_artifact(&hash).1, decode)
 }
 
 /// The route of what the app shows now.
@@ -258,6 +343,9 @@ fn route_of(app: &App) -> Route {
 /// Adds a history entry for what the app shows now, unless it is the
 /// current entry already.
 pub fn record(app: &App) {
+    if app.s.view == View::Canvas {
+        CARDS.with(|c| *c.borrow_mut() = crate::canvas::shown_items(app));
+    }
     let route = route_of(app);
     let changed = CURRENT.with(|c| {
         let mut c = c.borrow_mut();
@@ -280,6 +368,44 @@ pub fn record(app: &App) {
         let _ = dom::window().location().set_hash(&route.hash());
     }
     STEP_ENTRY.set(stepping);
+}
+
+/// The canvas's cards changed (opened, closed, combined): the current
+/// entry names them, so that the address shows them, without an entry of
+/// its own for each change. A call graph that was laid out keeps its own
+/// route as long as its cards are the same.
+pub fn sync_canvas(app: &mut App) {
+    if app.s.view != View::Canvas {
+        return;
+    }
+    let mut cards = crate::canvas::shown_items(app);
+    let laid_out = matches!(
+        app.s.canvas_focus,
+        Some(OnCanvas::Items(_) | OnCanvas::ModuleGraph(_) | OnCanvas::Impact(_))
+    );
+    if laid_out && CARDS.with(|c| *c.borrow() == cards) {
+        return;
+    }
+    CARDS.with(|c| *c.borrow_mut() = cards.clone());
+    let shows = match cards.len() {
+        0 => None,
+        1 => cards.pop().map(OnCanvas::Item),
+        _ => Some(OnCanvas::Items(cards)),
+    };
+    if app.s.canvas_focus == shows {
+        return;
+    }
+    if let Some(OnCanvas::Items(_)) = &shows {
+        // Back to this entry keeps the cards.
+        app.s.canvas_graph = shows.clone();
+    }
+    app.s.canvas_focus = shows;
+    let route = route_of(app);
+    let old = CURRENT.with(|c| std::mem::replace(&mut *c.borrow_mut(), route.clone()));
+    let _ = dom::window().location().replace(&route.hash());
+    // The entry's cards (see [`remember_canvas`]) under its new fragment.
+    CANVASES.with(|m| m.borrow_mut().remove(&old.hash()));
+    remember_canvas(app);
 }
 
 /// Points the view buttons at what each view shows now, so that one opened
@@ -330,6 +456,7 @@ pub fn on_scroll(ev: &Event) {
 
 /// Shows the view that the URL names, when the page loads.
 pub fn start(app: &mut App) {
+    learn_artifact(app);
     show(app, location_route(), true);
 }
 
@@ -394,9 +521,14 @@ fn show(app: &mut App, wanted: Route, first: bool) {
         }
         Route::Canvas(Some(OnCanvas::Item(id))) if crate::narrow() => crate::calls::focus(app, &id),
         Route::Canvas(Some(OnCanvas::Item(id))) => crate::canvas::open(app, &id, None, true),
-        // Back to the call graph that the canvas shows: the cards stay as
-        // the reader left them.
-        Route::Canvas(Some(shows)) if !first && app.s.canvas_graph.as_ref() == Some(&shows) => {
+        // Back to the call graph that the canvas shows, or to cards that
+        // are all still there: the cards stay as the reader left them.
+        Route::Canvas(Some(shows))
+            if !first
+                && (app.s.canvas_graph.as_ref() == Some(&shows)
+                    || matches!(&shows, OnCanvas::Items(ids)
+                        if ids.iter().all(|id| app.s.canvas.groups.iter().any(|g| g.active == *id)))) =>
+        {
             app.s.canvas_focus = Some(shows);
             crate::set_view(app, View::Canvas);
         }
@@ -533,6 +665,18 @@ mod tests {
             Route::Calls(Some("demo::eval".into()))
         );
         assert_eq!(parse("#/structure"), Route::Space);
+    }
+
+    #[test]
+    fn splits_the_artifact_id() {
+        assert_eq!(split_artifact("#~123"), (Some("123"), ""));
+        assert_eq!(
+            split_artifact("#~123/overview/item/a"),
+            (Some("123"), "/overview/item/a")
+        );
+        assert_eq!(split_artifact("#~12x/module/m"), (None, "/module/m"));
+        assert_eq!(split_artifact("#/module/m"), (None, "#/module/m"));
+        assert_eq!(split_artifact(""), (None, ""));
     }
 
     #[test]

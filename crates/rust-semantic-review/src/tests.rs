@@ -22,6 +22,7 @@ fn analyze_dirs(base: &Path, head: &Path) -> Output {
             project: None,
             commits: Vec::new(),
             versions: Default::default(),
+            run_url: None,
         },
     )
 }

@@ -73,15 +73,10 @@ fn toggle_button(
     }
 }
 
-/// "GitHub ↗": the item's first changed line in the pull request's diff.
+/// GitHub's icon, linking the item's first changed line in the pull
+/// request's diff, and the item's permalink.
 fn gh_link(d: &Data, it: &Item) -> String {
-    crate::post::github_link(
-        d,
-        crate::post::item_loc(&d.out.files, it),
-        "gh-link",
-        "GitHub ↗",
-        "this item",
-    )
+    crate::post::item_links(d, it)
 }
 
 pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {

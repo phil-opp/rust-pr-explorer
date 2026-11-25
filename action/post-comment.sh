@@ -17,16 +17,25 @@
 # previous-analysis.sh).
 set -euo pipefail
 
+# A link to a page that tells the page its artifact's id (`#~ID`), from
+# which the page builds its permalinks (see the viewer's `nav.rs`).
+page_link() {
+  if [[ "$2" =~ ^[0-9]+$ ]]; then printf '%s#~%s' "$1" "$2"; else printf '%s' "$1"; fi
+}
+PAGE=$(page_link "$URL" "$ARTIFACT_ID")
+SINCE_PAGE=
+if [ -n "$SINCE_URL" ]; then SINCE_PAGE=$(page_link "$SINCE_URL" "$SINCE_ARTIFACT_ID"); fi
+
 # The breaking changes, with links into the page (see breaking.jq).
-breaking=$(jq -r --arg url "$URL" -f "$(dirname "$0")/breaking.jq" <<< "${COUNTS:-null}")
+breaking=$(jq -r --arg url "$URL" --arg id "$ARTIFACT_ID" -f "$(dirname "$0")/breaking.jq" <<< "${COUNTS:-null}")
 
 {
   echo "### Rust Semantic Review"
   echo
-  echo "[Open the page]($URL): $SUMMARY"
+  echo "[Open the page]($PAGE): $SUMMARY"
   if [ -n "$SINCE_URL" ]; then
     echo
-    echo "[Changes since ${PREVIOUS:0:7}]($SINCE_URL): $SINCE_SUMMARY"
+    echo "[Changes since ${PREVIOUS:0:7}]($SINCE_PAGE): $SINCE_SUMMARY"
   fi
   if [ -n "$breaking" ]; then
     echo
@@ -73,7 +82,7 @@ else
   mode=new
   since=
   if [ "$SINCE" = "changes" ]; then
-    since=$(jq -nc --arg from "$PREVIOUS" --arg to "$HEAD" --arg url "$SINCE_URL" \
+    since=$(jq -nc --arg from "$PREVIOUS" --arg to "$HEAD" --arg url "$SINCE_PAGE" \
       --arg summary "$SINCE_SUMMARY" --arg expires "$(expiry "$SINCE_ARTIFACT_ID")" \
       '{$from, $to, $url, $summary} + (if $expires != "" then {$expires} else {} end)')
   fi
@@ -85,7 +94,7 @@ state=$(jq -nc --arg head "$HEAD" --arg run "${RUN_ID:-}" --argjson since "${sin
 body="<!-- rust-semantic-review $state -->
 ### Rust Semantic Review
 
-- **[All changes]($URL)** up to $HEAD: $SUMMARY"
+- **[All changes]($PAGE)** up to $HEAD: $SUMMARY"
 footer="Built by [this run]($RUN_URL)."
 if [ -n "$since" ]; then
   from=$(jq -r '.from' <<< "$since")

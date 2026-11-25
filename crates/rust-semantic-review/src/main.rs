@@ -79,6 +79,12 @@ struct Cli {
         requires = "trust_project_code"
     )]
     target_dir: Option<PathBuf>,
+    /// The GitHub Actions run that builds the page, as
+    /// `https://github.com/OWNER/REPO/actions/runs/N`, when the page is
+    /// uploaded as one of its artifacts: the page's permalinks then point
+    /// at the artifact (see the action's `post-comment.sh`).
+    #[arg(long, global = true)]
+    run_url: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -224,9 +230,11 @@ fn main() -> Result<()> {
             }
         }
     }
+    output.meta.run_url = cli.run_url.clone();
     write_outputs(&output, &cli.out, cli.json.as_deref())?;
     match (&checkout.since, since) {
-        (Some(source::Since::Changes(s)), Some(since)) => {
+        (Some(source::Since::Changes(s)), Some(mut since)) => {
+            since.meta.run_url = cli.run_url.clone();
             eprintln!("changes since {}:", s.commit);
             write_outputs(
                 &since,
@@ -363,6 +371,7 @@ fn analyze_all(
         project: checkout.project.clone(),
         commits: Vec::new(),
         versions: Default::default(),
+        run_url: None,
     };
     let since = match &checkout.since {
         Some(source::Since::Changes(s)) => {

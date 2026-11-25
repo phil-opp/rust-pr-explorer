@@ -318,13 +318,7 @@ fn item_row(
         crate::unsafety::tag(it),
         d.api_badge(it),
         crate::review::control_html(&it.info.id),
-        crate::post::github_link(
-            d,
-            crate::post::item_loc(&d.out.files, it),
-            "gh-link",
-            "GitHub ↗",
-            "this item",
-        ),
+        crate::post::item_links(d, it),
         esc(&it.info.id),
         crate::nav::item_href(&it.info.id),
     )

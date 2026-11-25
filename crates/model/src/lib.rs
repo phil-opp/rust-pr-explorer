@@ -622,6 +622,11 @@ pub struct Meta {
     /// The library crates' versions in `Cargo.toml`, by crate name.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub versions: BTreeMap<String, CrateVersion>,
+    /// The GitHub Actions run that built the page
+    /// (`https://github.com/OWNER/REPO/actions/runs/N`), whose artifact
+    /// holds it. The page's permalinks point at that artifact.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_url: Option<String>,
 }
 
 /// A library crate's version on both sides.
