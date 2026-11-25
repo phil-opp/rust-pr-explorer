@@ -1441,8 +1441,10 @@ impl Data {
             }
         }
         // In review mode, each part between folds starts with the review
-        // controls of the hunks that start in it (see `review::hunks`).
-        let hunk_head = |part: std::ops::Range<usize>| -> String {
+        // controls of the hunks that start in it (see `review::hunks`), and
+        // a part with controls is boxed together with them (`.hunk`), so
+        // that the controls clearly belong to the lines below them.
+        let part_html = |part: std::ops::Range<usize>| -> String {
             let (mut olds, mut news) = (Vec::new(), Vec::new());
             for &(o, n) in rows[part.clone()].iter().filter(|r| changed_row(r)) {
                 olds.extend(o.map(|a| old_start + a));
@@ -1466,12 +1468,13 @@ impl Data {
                 "GitHub ↗",
                 "this change",
             );
+            let lines: String = part.map(&row_html).collect();
             match crate::review::hunk_controls(&it.info.id, &olds, &news) {
-                c if c.is_empty() && gh.is_empty() => c,
-                c if c.is_empty() => format!(r#"<span class="hunk-gh">{gh}</span>"#),
+                c if c.is_empty() && gh.is_empty() => lines,
+                c if c.is_empty() => format!(r#"<span class="hunk-gh">{gh}</span>{lines}"#),
                 // In review mode the link goes into the hunk's bar.
                 c => format!(
-                    r#"<span class="hunk-rv">{c}{gh}</span><span class="hunk-gh">{gh}</span>"#
+                    r#"<span class="hunk"><span class="hunk-rv">{c}{gh}</span><span class="hunk-gh">{gh}</span>{lines}</span>"#
                 ),
             }
         };
@@ -1479,8 +1482,7 @@ impl Data {
         let mut body = String::new();
         let mut r = 0;
         for g in &gaps {
-            body += &hunk_head(r..g.start);
-            body.extend((r..g.start).map(&row_html));
+            body += &part_html(r..g.start);
             let inner: String = g.clone().map(&row_html).collect();
             if unfolded.contains(&g.start) {
                 body += &inner;
@@ -1502,8 +1504,7 @@ impl Data {
             }
             r = g.end;
         }
-        body += &hunk_head(r..rows.len());
-        body.extend((r..rows.len()).map(&row_html));
+        body += &part_html(r..rows.len());
         let code = format!(
             r#"<div class="src-code" data-item="{}">{}{}</div>"#,
             esc(&it.info.id),
