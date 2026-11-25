@@ -3,7 +3,9 @@
 use super::{
     Canvas, EXPAND_LIMIT, Expansion, Group, MIN_W, apply_pan, card_el,
     edges::{Rect, call_site_y, card_rect, draw_edges},
-    height_of, place, render, spot, visible, width_of,
+    height_of,
+    layout::arrange_by_module,
+    place, render, spot, visible, width_of,
 };
 use crate::data::{Data, changed};
 use crate::{App, View, dom, toast};
@@ -70,6 +72,7 @@ fn open_at(
         ));
         c.scope = None;
     }
+    let added = c.group_of(id).is_none();
     let gi = match c.group_of(id) {
         Some(gi) => {
             c.groups[gi].active = id.to_string();
@@ -99,6 +102,9 @@ fn open_at(
         }
     };
     let gid = c.groups[gi].gid;
+    if added && app.s.view == View::Canvas {
+        keep_arranged(app, from.unwrap_or(id));
+    }
     if switch_view {
         // Opened from outside the canvas, or jumped to: a history entry.
         app.s.canvas_focus = Some(crate::nav::OnCanvas::Item(id.to_string()));
@@ -119,6 +125,25 @@ fn open_at(
         nudge_into_view(gid);
     }
     Some(gid)
+}
+
+/// With module frames on, lays the cards out by module again after cards
+/// were opened or closed, so that the frames stay apart: a card placed
+/// freely would stretch its module's frame across other modules. Moves the
+/// view along so that the card of `keep` stays where it is on screen.
+fn keep_arranged(app: &mut App, keep: &str) {
+    if !app.s.canvas.frames {
+        return;
+    }
+    let at = |c: &Canvas| c.group_of(keep).map(|gi| (c.groups[gi].x, c.groups[gi].y));
+    let before = at(&app.s.canvas);
+    arrange_by_module(app);
+    let c = &mut app.s.canvas;
+    if let (Some((x0, y0)), Some((x1, y1))) = (before, at(c)) {
+        c.pan.x += (x0 - x1) * c.pan.k;
+        c.pan.y += (y0 - y1) * c.pan.k;
+    }
+    render(app);
 }
 
 /// Where to put the new card `gi`, opened from card `fi`: see [`spot`].
@@ -312,6 +337,7 @@ pub(crate) fn expand(app: &mut App, id: &str, kind: Related) {
     if let Some(i) = app.s.canvas.live_expansion(id, kind) {
         let n = app.s.canvas.collapse(i);
         render(app);
+        keep_arranged(app, id);
         toast(&format!("Closed {n} {}", kind.noun(n)));
         return;
     }
@@ -415,10 +441,14 @@ pub(crate) fn expand(app: &mut App, id: &str, kind: Related) {
         }
     }
     let added = !record.cards.is_empty() || !record.links.is_empty();
+    let opened_cards = !record.cards.is_empty();
     if added {
         app.s.canvas.expansions.push(record);
     }
     render(app);
+    if opened_cards {
+        keep_arranged(app, id);
+    }
     let mut notes = Vec::new();
     if opened > 0 {
         notes.push(format!(
@@ -548,6 +578,9 @@ fn open_chains(app: &mut App, id: &str) {
         c.expansions.push(record);
     }
     render(app);
+    if n > 0 {
+        keep_arranged(app, id);
+    }
     let tops = paths.len();
     let from = format!(
         "{tops} public item{} reach{} it",
