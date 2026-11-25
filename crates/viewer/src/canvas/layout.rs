@@ -1,11 +1,12 @@
 //! Arranging cards: by module, fitting the view, and module graphs.
 
 use super::{
-    CARD_W, Canvas, Pan, apply_pan,
+    Canvas, Pan, apply_pan,
     edges::{Rect, card_rect, draw_edges},
-    height_of, render, visible,
+    height_of, render, visible, width_of,
 };
 use crate::data::{Data, changed, within};
+use crate::nav::OnCanvas;
 use crate::{App, View, dom, toast};
 use model::{Item, Kind, Status};
 use std::collections::{BTreeSet, HashMap};
@@ -17,7 +18,11 @@ pub fn arrange_by_module(app: &mut App) {
     render(app);
     let d = app.d.clone();
     let c = &mut app.s.canvas;
-    let heights: HashMap<u32, f64> = c.groups.iter().map(|g| (g.gid, height_of(&d, g))).collect();
+    let sizes: HashMap<u32, (f64, f64)> = c
+        .groups
+        .iter()
+        .map(|g| (g.gid, (width_of(g), height_of(&d, g))))
+        .collect();
     let mut by_mod: HashMap<String, Vec<usize>> = HashMap::new();
     for (i, g) in c.groups.iter().enumerate() {
         if visible(&d, c, g)
@@ -35,7 +40,7 @@ pub fn arrange_by_module(app: &mut App) {
         d: &'a Data,
         c: &'a mut Canvas,
         by_mod: &'a HashMap<String, Vec<usize>>,
-        heights: &'a HashMap<u32, f64>,
+        sizes: &'a HashMap<u32, (f64, f64)>,
     }
     impl Layout<'_> {
         fn has_cards(&self, m: &str) -> bool {
@@ -58,15 +63,32 @@ pub fn arrange_by_module(app: &mut App) {
                     na.cmp(&nb)
                 })
             });
-            for row in list.chunks(COLS) {
-                let mut rh: f64 = 0.0;
-                for (j, &gi) in row.iter().enumerate() {
-                    let g = &mut self.c.groups[gi];
-                    g.x = x + 24.0 + j as f64 * (CARD_W + COL_GAP);
-                    g.y = *cy;
-                    rh = rh.max(self.heights.get(&g.gid).copied().unwrap_or(200.0));
+            let sizes: Vec<(usize, (f64, f64))> = list
+                .iter()
+                .map(|&gi| {
+                    let gid = self.c.groups[gi].gid;
+                    let size = self.sizes.get(&gid).copied();
+                    (gi, size.unwrap_or((super::MIN_W, 200.0)))
+                })
+                .collect();
+            // Columns as wide as their widest card.
+            let mut cols = [0.0f64; COLS];
+            for row in sizes.chunks(COLS) {
+                for (j, &(_, (cw, _))) in row.iter().enumerate() {
+                    cols[j] = cols[j].max(cw);
                 }
-                *w = w.max(row.len() as f64 * (CARD_W + COL_GAP) - COL_GAP + GAP);
+            }
+            for row in sizes.chunks(COLS) {
+                let mut rh: f64 = 0.0;
+                let mut cx = x + 24.0;
+                for (j, &(gi, (_, ch))) in row.iter().enumerate() {
+                    let g = &mut self.c.groups[gi];
+                    g.x = cx;
+                    g.y = *cy;
+                    cx += cols[j] + COL_GAP;
+                    rh = rh.max(ch);
+                }
+                *w = w.max(cx - x - 24.0 - COL_GAP + GAP);
                 *cy += rh + GAP;
             }
         }
@@ -109,7 +131,7 @@ pub fn arrange_by_module(app: &mut App) {
         d: &d,
         c,
         by_mod: &by_mod,
-        heights: &heights,
+        sizes: &sizes,
     };
     let mut x = 0.0;
     for r in roots {
@@ -228,7 +250,9 @@ pub fn show_module_graph(app: &mut App, m: &str) {
     for id in &ids {
         c.add_group(id, 0.0, 0.0);
     }
-    app.s.canvas_focus = None;
+    let shows = OnCanvas::ModuleGraph(m.to_string());
+    app.s.canvas_focus = Some(shows.clone());
+    app.s.canvas_graph = Some(shows);
     crate::set_view(app, View::Canvas);
     arrange_by_module(app);
     render(app);
@@ -255,7 +279,7 @@ pub fn show_impact(app: &mut App, id: &str) {
         toast(&format!("No public item reaches {}", d.display_name(it)));
         return;
     }
-    show_items_from(app, &ids, d.mod_of(it));
+    show_items_from(app, &ids, d.mod_of(it), OnCanvas::Impact(id.to_string()));
 }
 
 /// Opens `ids` on the canvas, arranged by module, viewed from a module
@@ -265,10 +289,11 @@ pub fn show_items(app: &mut App, ids: &[String]) {
     let Some(first) = ids.first().and_then(|i| d.item(i)) else {
         return;
     };
-    show_items_from(app, ids, d.mod_of(first));
+    show_items_from(app, ids, d.mod_of(first), OnCanvas::Items(ids.to_vec()));
 }
 
-fn show_items_from(app: &mut App, ids: &[String], first: &str) {
+/// `shows` is what the history entry names.
+fn show_items_from(app: &mut App, ids: &[String], first: &str, shows: OnCanvas) {
     let d = app.d.clone();
     let mut scopes: Vec<String> = ids
         .iter()
@@ -288,7 +313,8 @@ fn show_items_from(app: &mut App, ids: &[String], first: &str) {
     for id in ids {
         c.add_group(id, 0.0, 0.0);
     }
-    app.s.canvas_focus = None;
+    app.s.canvas_focus = Some(shows.clone());
+    app.s.canvas_graph = Some(shows);
     crate::set_view(app, View::Canvas);
     arrange_by_module(app);
     render(app);

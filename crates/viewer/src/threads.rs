@@ -301,14 +301,16 @@ pub fn overview_html(d: &Data) -> String {
         let link = match d.placement.at.get(&i) {
             Some(Where::Item(id)) => d.item(id).map(|it| {
                 format!(
-                    r#"<a data-open="{}" title="Open on the canvas">{}</a>"#,
+                    r#"<a data-open="{}" title="Open on the canvas"{}>{}</a>"#,
                     esc(id),
+                    crate::nav::item_href(id),
                     esc(&d.display_name(it))
                 )
             }),
             Some(Where::File(path)) => Some(format!(
-                r#"<a data-goto-file="{}">{}</a>"#,
+                r#"<a data-goto-file="{}"{}>{}</a>"#,
                 esc(path),
+                crate::nav::file_href(path),
                 esc(path)
             )),
             None => None,

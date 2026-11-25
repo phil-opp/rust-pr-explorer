@@ -193,6 +193,23 @@ fn compare(ctx: &semver::Context, b: ItemData, h: ItemData, moved_from: Option<S
         &exports_removed,
         sig_diff.as_ref(),
     );
+    let reformatted = if b.source != h.source {
+        let lines = |s: &str| s.lines().map(str::to_string).collect::<Vec<_>>();
+        let (old, new) = (lines(&b.source), lines(&h.source));
+        let old: Vec<&str> = old.iter().map(String::as_str).collect();
+        let new: Vec<&str> = new.iter().map(String::as_str).collect();
+        // A path that was shortened or spelled out still names the
+        // same item if it resolves to the same one in both versions.
+        let (old_refs, new_refs) = (refs_by_pos(&b), refs_by_pos(&h));
+        crate::reformat::find(&old, &new, |o, n| {
+            match (old_refs.get(&o), new_refs.get(&n)) {
+                (Some(was), Some(now)) => same(&was.path, &now.path),
+                _ => false,
+            }
+        })
+    } else {
+        Vec::new()
+    };
     Item {
         api,
         unsafe_code: crate::unsafety::compare(&b.unsafe_sites, &h.unsafe_sites),
@@ -210,15 +227,7 @@ fn compare(ctx: &semver::Context, b: ItemData, h: ItemData, moved_from: Option<S
         } else {
             BTreeMap::new()
         },
-        reformatted: if b.source != h.source {
-            let lines = |s: &str| s.lines().map(str::to_string).collect::<Vec<_>>();
-            let (old, new) = (lines(&b.source), lines(&h.source));
-            let old: Vec<&str> = old.iter().map(String::as_str).collect();
-            let new: Vec<&str> = new.iter().map(String::as_str).collect();
-            crate::reformat::find(&old, &new)
-        } else {
-            Vec::new()
-        },
+        reformatted,
         source,
         moved_lines: Vec::new(),
         retargeted,
@@ -246,19 +255,7 @@ fn retargets(
     equal: &[(usize, usize)],
     same: impl Fn(&str, &str) -> bool,
 ) -> Vec<Retarget> {
-    // The refs by (line index in the item's source, column).
-    let by_pos = |d: &ItemData| -> BTreeMap<(usize, usize), Ref> {
-        d.info
-            .source_refs
-            .iter()
-            .filter_map(|(k, r)| {
-                let (l, c) = k.split_once(':')?;
-                let l = l.parse::<usize>().ok()?.checked_sub(d.info.line)?;
-                Some(((l, c.parse().ok()?), r.clone()))
-            })
-            .collect()
-    };
-    let (old, new) = (by_pos(b), by_pos(h));
+    let (old, new) = (refs_by_pos(b), refs_by_pos(h));
     let head_lines: Vec<&str> = h.source.lines().collect();
     let mut out = Vec::new();
     for &(o, n) in equal {
@@ -297,6 +294,20 @@ fn retargets(
         }
     }
     out
+}
+
+/// What the names in an item's source refer to, by (line index in the
+/// item's source, column in chars) of their first segment.
+fn refs_by_pos(d: &ItemData) -> BTreeMap<(usize, usize), Ref> {
+    d.info
+        .source_refs
+        .iter()
+        .filter_map(|(k, r)| {
+            let (l, c) = k.split_once(':')?;
+            let l = l.parse::<usize>().ok()?.checked_sub(d.info.line)?;
+            Some(((l, c.parse().ok()?), r.clone()))
+        })
+        .collect()
 }
 
 fn lines(text: &str, tag: char) -> Vec<SourceLine> {

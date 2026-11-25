@@ -156,18 +156,37 @@ fn rewritten_items_with_the_same_name_are_not_a_move() {
 #[test]
 fn rewrapped_lines_are_found_in_the_demo() {
     let out = demo();
+    // `Error` became `crate::Error` (the base imports it), and
     // `Ok(Parser { tokens: …, pos: 0 })` was rewrapped onto four lines.
     let new = &out.items["tinycalc::parser::Parser::new"];
     assert_eq!(
         new.reformatted,
-        [model::Reformatted {
-            old: 2,
-            old_len: 1,
-            new: 2,
-            new_len: 4,
-            added: Vec::new(),
-            removed: Vec::new(),
-        }]
+        [
+            model::Reformatted {
+                old: 1,
+                old_len: 1,
+                new: 1,
+                new_len: 1,
+                added: Vec::new(),
+                removed: Vec::new(),
+                requalified_added: vec![model::TokenSpan {
+                    line: 1,
+                    start: 44,
+                    end: 51,
+                }],
+                requalified_removed: Vec::new(),
+            },
+            model::Reformatted {
+                old: 2,
+                old_len: 1,
+                new: 2,
+                new_len: 4,
+                added: Vec::new(),
+                removed: Vec::new(),
+                requalified_added: Vec::new(),
+                requalified_removed: Vec::new(),
+            },
+        ]
     );
     // Items without a rewrap have none.
     assert!(out.items["tinycalc::calc"].reformatted.is_empty());
@@ -1739,4 +1758,102 @@ fn a_reused_analysis_compares_like_a_fresh_one() {
         serde_json::to_string(&out).unwrap()
     };
     assert_eq!(compare(loaded), compare(analyze_semantic(&second)));
+}
+
+#[test]
+fn a_path_shortened_by_an_import_is_no_change() {
+    // As in dora#4304: `std::process::Command::new` became `Command::new`
+    // with a new `use std::process::Command`, in a function that changed.
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "mod m {\n    pub fn helper() {}\n}\n\
+         pub fn f() -> u32 {\n    \
+         let _ = std::process::Command::new(\"cargo\");\n    \
+         crate::m::helper();\n    \
+         1\n}\n",
+    )]);
+    let head = write_crate(&[(
+        "src/lib.rs",
+        "use std::process::Command;\nuse m::helper;\n\
+         mod m {\n    pub fn helper() {}\n}\n\
+         pub fn f() -> u32 {\n    \
+         let _ = Command::new(\"cargo\");\n    \
+         helper();\n    \
+         2\n}\n",
+    )]);
+    let out = analyze_dirs(base.path(), head.path());
+    let f = &out.items["t::f"];
+    assert_eq!(f.status, Status::Changed);
+    let lines: Vec<(u32, u32)> = f.reformatted.iter().map(|g| (g.old, g.new)).collect();
+    assert_eq!(lines, [(1, 1), (2, 2)], "{:#?}", f.reformatted);
+    assert!(f.reformatted.iter().all(|g| g.only_reformatted()));
+    assert_eq!(
+        f.reformatted[0].requalified_removed[0].text,
+        "std::process::"
+    );
+    assert_eq!(f.reformatted[1].requalified_removed[0].text, "crate::m::");
+    // The changed line stays a change.
+    assert_eq!(crate_lines_changed(f), ["    1", "    2"]);
+}
+
+#[test]
+fn a_path_to_another_item_of_the_same_name_is_a_change() {
+    // Shadowed by a new import of another `Command`, or unknown because
+    // a glob import of another crate might bring one: shown as changed.
+    let base = write_crate(&[(
+        "src/lib.rs",
+        "mod m {\n    pub struct Command;\n    impl Command {\n        pub fn new(_: &str) {}\n    }\n}\n\
+         pub fn f() {\n    let _ = std::process::Command::new(\"cargo\");\n}\n",
+    )]);
+    for import in [
+        "use m::Command;",
+        "use std::process::*;\nuse std::os::unix::process::*;",
+    ] {
+        let head = write_crate(&[(
+            "src/lib.rs",
+            format!(
+                "{import}\nmod m {{\n    pub struct Command;\n    impl Command {{\n        pub fn new(_: &str) {{}}\n    }}\n}}\n\
+                 pub fn f() {{\n    let _ = Command::new(\"cargo\");\n}}\n"
+            )
+            .as_str(),
+        )]);
+        let out = analyze_dirs(base.path(), head.path());
+        let f = &out.items["t::f"];
+        assert!(f.reformatted.is_empty(), "{import}: {:#?}", f.reformatted);
+    }
+}
+
+/// The source lines of an item that were removed or added and are not
+/// part of a reformatted group.
+fn crate_lines_changed(it: &model::Item) -> Vec<String> {
+    let (mut o, mut n) = (0u32, 0u32);
+    let mut out = Vec::new();
+    for l in &it.source {
+        let (side_old, i) = match l.0 {
+            '-' => (true, o),
+            '+' => (false, n),
+            _ => {
+                o += 1;
+                n += 1;
+                continue;
+            }
+        };
+        let rf = it.reformatted.iter().any(|g| {
+            let (start, len) = if side_old {
+                (g.old, g.old_len)
+            } else {
+                (g.new, g.new_len)
+            };
+            (start..start + len).contains(&i)
+        });
+        if !rf {
+            out.push(l.1.clone());
+        }
+        if side_old {
+            o += 1;
+        } else {
+            n += 1;
+        }
+    }
+    out
 }
