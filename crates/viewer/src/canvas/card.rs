@@ -8,10 +8,12 @@ use crate::impact::CardImpact;
 use model::{Item, Kind, Status, UseCtx};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// A badge for related items that are not visible from `scope` (the
-/// privacy view's module, or the card's own): a click turns the privacy
-/// view on from the module that hides them.
-fn hidden_badge(d: &Data, scope: &str, list: &[String], what: &str) -> String {
+/// With the privacy view on, a badge that counts the related items it
+/// hides; its tooltip names the modules they are private to.
+fn hidden_badge(d: &Data, scope: Option<&str>, list: &[String], what: &str) -> String {
+    let Some(scope) = scope else {
+        return String::new();
+    };
     let hidden: Vec<&String> = list
         .iter()
         .filter(|t| d.item(t).is_some() && !d.visible_from(t, scope))
@@ -27,26 +29,16 @@ fn hidden_badge(d: &Data, scope: &str, list: &[String], what: &str) -> String {
     mods.dedup();
     let n = hidden.len();
     let title = format!(
-        "{n} {what}{} private to {}, so not visible from {}.{}",
+        "{n} {what}{} private to {}, so hidden by the privacy view from {}.",
         if n > 1 { "s are" } else { " is" },
         mods.iter()
             .map(|m| d.mod_label(m))
             .collect::<Vec<_>>()
             .join(", "),
         d.mod_label(scope),
-        mods.first()
-            .map(|m| format!(
-                " Click to look from {} with the privacy view.",
-                d.mod_label(m)
-            ))
-            .unwrap_or_default()
     );
-    let drill = mods
-        .first()
-        .map(|m| format!(r#" data-drill="{}""#, esc(m)))
-        .unwrap_or_default();
     format!(
-        r#"<a class="card-badge private"{drill} title="{}">{n} private {what}{}</a>"#,
+        r#"<span class="card-badge private" title="{}">{n} hidden {what}{}</span>"#,
         esc(&title),
         if n > 1 { "s" } else { "" }
     )
@@ -378,8 +370,8 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
                 )
             } else {
                 String::new()
-            } + &hidden_badge(d, scope, &callees, "callee")
-                + &hidden_badge(d, scope, &callers, "caller")
+            } + &hidden_badge(d, c.scope.as_deref(), &callees, "callee")
+                + &hidden_badge(d, c.scope.as_deref(), &callers, "caller")
                 + match &impact {
                     CardImpact::Unreached(badge) => badge,
                     _ => "",

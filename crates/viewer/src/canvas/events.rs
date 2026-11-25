@@ -93,10 +93,6 @@ pub fn on_click(app: &mut App, el: &Element) -> bool {
         }
         return true;
     }
-    if let Some(a) = dom::closest(el, "[data-drill]") {
-        set_privacy_view(app, dom::data(&a, "drill"));
-        return true;
-    }
     match el
         .closest("button")
         .ok()
