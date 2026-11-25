@@ -428,8 +428,9 @@ pub fn entries(d: &Data, g: &Graph) -> Vec<Vec<String>> {
 fn item_link(d: &Data, id: &str) -> String {
     let kind = d.item(id).map_or("fn", |it| it.info.kind.css());
     format!(
-        r#"<a class="ref" data-id="{}" data-kind="{kind}"><code>{}</code></a>"#,
+        r#"<a class="ref" data-id="{}" data-kind="{kind}"{}><code>{}</code></a>"#,
         esc(id),
+        crate::nav::item_href(id),
         crate::review::item_tag(id, &d.display_name_of(id)),
     )
 }
@@ -438,9 +439,10 @@ fn item_link(d: &Data, id: &str) -> String {
 fn plain_link(d: &Data, id: &str, title: &str) -> String {
     let kind = d.item(id).map_or("fn", |it| it.info.kind.css());
     format!(
-        r#"<a class="ref" data-id="{}" data-kind="{kind}" title="{}"><code>{}</code></a>"#,
+        r#"<a class="ref" data-id="{}" data-kind="{kind}" title="{}"{}><code>{}</code></a>"#,
         esc(id),
         esc(title),
+        crate::nav::item_href(id),
         esc(&d.display_name_of(id))
     )
 }
@@ -624,9 +626,12 @@ fn graph_html(d: &Data, i: usize, g: &Graph) -> String {
         );
     format!(
         r#"<div class="irow cgraph" id="cgraph-{i}"><div class="ihead"><span class="cg-roots">{head}{more_roots}</span></div>
-        <div class="iacts"><button data-cgraph="{i}" title="{}">{}</button></div>
+        <div class="iacts"><a class="btn" data-cgraph="{i}"{} title="{}">{}</a></div>
         <div class="cg-sub"><span class="dim">{count}</span><span class="rv-group">{}</span></div>
         <div class="cg-facts">{}{}{}{}</div></div>"#,
+        crate::nav::href(&crate::nav::Route::Canvas(Some(
+            crate::nav::OnCanvas::Items(g.rows.iter().map(|r| r.id.clone()).collect())
+        ))),
         if crate::narrow() {
             "Show the root in the call view"
         } else {

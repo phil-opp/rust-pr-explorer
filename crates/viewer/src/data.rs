@@ -550,10 +550,11 @@ impl Data {
         let path = esc(self.short_path(&r.path));
         match r.id.as_deref().and_then(|id| self.item(id)) {
             Some(o) => format!(
-                r#"<a class="ref" data-id="{}" data-kind="{}" data-path="{}">{path}</a>"#,
+                r#"<a class="ref" data-id="{}" data-kind="{}" data-path="{}"{}>{path}</a>"#,
                 esc(&o.info.id),
                 o.info.kind.css(),
                 esc(&o.info.id),
+                crate::nav::item_href(&o.info.id),
             ),
             None => format!("<code>{path}</code>"),
         }
@@ -1183,10 +1184,11 @@ impl Data {
             };
             let target = match self.item(&m.other) {
                 Some(o) if m.other != it.info.id => format!(
-                    r#"<a class="ref" data-id="{}" data-kind="{}" data-path="{}">{}</a>, line {}"#,
+                    r#"<a class="ref" data-id="{}" data-kind="{}" data-path="{}"{}>{}</a>, line {}"#,
                     esc(&o.info.id),
                     o.info.kind.css(),
                     esc(&o.info.id),
+                    crate::nav::item_href(&o.info.id),
                     esc(&self.display_name(o)),
                     m.other_line
                 ),

@@ -159,9 +159,12 @@ pub fn line_html(d: &Data, it: &Item) -> String {
         return format!(r#"<div class="impact none">{}</div>"#, no_path_note(d, it));
     }
     format!(
-        r#"<div class="impact"><span class="impact-h">Affects public API:</span> {} <button data-impact="{}" title="{}">{}</button></div>"#,
+        r#"<div class="impact"><span class="impact-h">Affects public API:</span> {} <a class="btn" data-impact="{}"{} title="{}">{}</a></div>"#,
         reached_html(d, &imp),
         esc(&it.info.id),
+        crate::nav::href(&crate::nav::Route::Canvas(Some(
+            crate::nav::OnCanvas::Impact(it.info.id.clone())
+        ))),
         impact_button().0,
         impact_button().1,
     )

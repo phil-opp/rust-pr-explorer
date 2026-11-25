@@ -56,7 +56,9 @@ body {
   display: flex;
   flex-direction: column;
 }
-button {
+/* Links that look like buttons: they lead to a view, so that a middle
+   click opens it in a new tab (see nav.rs). */
+button, a.btn {
   font: inherit;
   font-size: 13px;
   color: inherit;
@@ -66,8 +68,9 @@ button {
   padding: 2px 8px;
   cursor: pointer;
 }
-button:hover { border-color: var(--link); }
-button.on { background: var(--link); color: var(--bg); border-color: var(--link); }
+a.btn { display: inline-block; line-height: normal; white-space: nowrap; }
+button:hover, a.btn:hover { border-color: var(--link); }
+button.on, a.btn.on { background: var(--link); color: var(--bg); border-color: var(--link); }
 a { color: var(--link); text-decoration: none; cursor: pointer; }
 /* The code font and size are viewer settings (see settings.rs). */
 /* No ligatures: a reviewer must see the characters as written (`->`, `=>`, `!=`). */
@@ -103,7 +106,7 @@ code { font-size: .92em; }
 #pr-title { transition: opacity .15s; }
 #pr-title.on-page { opacity: 0; visibility: hidden; }
 #views { display: flex; gap: 4px; }
-#views button { padding: 4px 12px; }
+#views a.btn { padding: 4px 12px; }
 .search { position: relative; }
 #search { font: inherit; font-size: 13px; padding: 4px 8px; width: 220px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); }
 #search-results {
@@ -131,7 +134,7 @@ code { font-size: .92em; }
 .tree { list-style: none; margin: 0; padding: 0 0 0 12px; }
 .tree > li { margin: 0; }
 #sidebar > .tree { padding-left: 6px; }
-.tree-row { display: flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.tree-row { color: inherit; display: flex; align-items: center; gap: 6px; padding: 2px 8px; border-radius: 4px; cursor: pointer; white-space: nowrap; }
 .tree-row:hover { background: var(--bg-alt); }
 .tree-row.sel { background: var(--bg-alt); box-shadow: inset 3px 0 0 var(--link); }
 .tree-row .nm { font-family: var(--mono); font-size: 13px; color: var(--mod); }
@@ -181,7 +184,7 @@ code { font-size: .92em; }
 .impact { font: 13px var(--sans); margin: 2px 0 6px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
 .impact-h { font-weight: 600; }
 .impact.none { color: var(--muted); }
-.impact button { font-size: 12px; padding: 0 6px; }
+.impact a.btn { font-size: 12px; padding: 0 6px; }
 .semver-sum { margin: 0 0 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
 /* Code */
@@ -1015,7 +1018,7 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
   #commit-menu:empty { display: none; }
   #views { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
   #views::-webkit-scrollbar { display: none; }
-  #views button { flex: none; padding: 4px 10px; }
+  #views a.btn { flex: none; padding: 4px 10px; }
   .reviewing #rv-bar { flex: 1 1 100%; flex-wrap: wrap; row-gap: 6px; }
   #sidebar {
     display: none; position: absolute; top: 0; bottom: 0; left: 0; z-index: 40;

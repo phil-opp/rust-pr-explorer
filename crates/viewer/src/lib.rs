@@ -81,9 +81,13 @@ pub struct State {
     /// Whether the sidebar lists unchanged modules too.
     pub side_all: bool,
     pub canvas: canvas::Canvas,
-    /// The item last opened on the canvas from outside it, for the history
-    /// entry (see [`nav`]).
-    pub canvas_focus: Option<String>,
+    /// What the canvas was last asked to show from outside it, for the
+    /// history entry (see [`nav`]).
+    pub canvas_focus: Option<nav::OnCanvas>,
+    /// The call graph last laid out on the canvas, if any: Back to its
+    /// history entry shows the canvas as it is, instead of laying it out
+    /// again.
+    pub canvas_graph: Option<nav::OnCanvas>,
     /// Where on the overview or module page a link last jumped to, for the
     /// history entry (see [`nav`]).
     pub anchor: Option<nav::PageAnchor>,
@@ -154,6 +158,7 @@ pub fn start() {
             side_all: false,
             canvas: canvas::Canvas::new(root),
             canvas_focus: None,
+            canvas_graph: None,
             anchor: None,
             calls: calls::Calls::default(),
             space: space::Space::new(),
@@ -196,7 +201,7 @@ pub fn set_view_at(app: &mut App, view: View, anchor: Option<nav::Anchor>) {
         app.s.canvas_focus = None;
     }
     app.s.view = view;
-    for b in dom::query_all("#views button") {
+    for b in dom::query_all("#views [data-view]") {
         dom::toggle_class(
             &b,
             "on",
@@ -227,6 +232,7 @@ pub fn set_view_at(app: &mut App, view: View, anchor: Option<nav::Anchor>) {
     pages::sync_header_title();
     keys::mark_current(app);
     nav::record(app);
+    nav::update_view_links(app);
 }
 
 thread_local! {
@@ -303,6 +309,11 @@ fn note_pointer(ev: &PointerEvent) {
     }
 }
 
+thread_local! {
+    /// Whether reading the marks that another tab saved is due.
+    static MARKS_SYNC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 fn install_listeners() {
     let doc: web_sys::EventTarget = dom::document().into();
     if let Some(overview) = dom::by_id("view-overview") {
@@ -313,6 +324,18 @@ fn install_listeners() {
     // Not passive: clicks on cross links prevent the default navigation.
     dom::listen_with(&doc, "click", false, false, |ev| {
         if let Some(el) = dom::target_element(&ev) {
+            // The app's links lead to a fragment (see `nav::href`). With a
+            // modifier key the browser opens it in a new tab or window (a
+            // middle click fires no `click`); else the app handles it.
+            if dom::closest(&el, r##"a[href^="#/"]"##).is_some() {
+                if ev
+                    .dyn_ref::<web_sys::MouseEvent>()
+                    .is_some_and(|m| m.ctrl_key() || m.meta_key() || m.shift_key() || m.alt_key())
+                {
+                    return;
+                }
+                ev.prevent_default();
+            }
             with_app(|app| {
                 // A touch that moved the view isn't a tap.
                 if dom::closest(&el, "#viewport").is_some() && canvas::swallow_click(app) {
@@ -322,6 +345,7 @@ fn install_listeners() {
                 canvas::before_change(app);
                 on_click(app, &el, &ev);
                 canvas::after_change(app);
+                nav::update_view_links(app);
             });
             mark_current_later();
         }
@@ -333,6 +357,11 @@ fn install_listeners() {
         };
         note_pointer(&pev);
         with_app(|app| {
+            // Before the browser opens a view button's link in a new tab
+            // (or its menu): what the view shows now.
+            if dom::closest(&el, "#views").is_some() {
+                nav::update_view_links(app);
+            }
             // Search results are picked on press, before the input's blur hides them.
             if let Some(r) = dom::closest(&el, "#search-results [data-i]") {
                 let i = dom::data(&r, "i").and_then(|i| i.parse().ok()).unwrap_or(0);
@@ -515,6 +544,21 @@ fn install_listeners() {
     dom::listen(&dom::window().into(), "hashchange", |_| {
         with_app(nav::on_hash_change);
     });
+    // Marks saved in another tab: shown here too. Saving writes several
+    // keys; they are read once.
+    dom::listen(&dom::window().into(), "storage", |ev| {
+        let key = ev.dyn_ref::<web_sys::StorageEvent>().and_then(|e| e.key());
+        if review::is_marks_key(key.as_deref()) && !MARKS_SYNC.replace(true) {
+            dom::timeout(0, || {
+                MARKS_SYNC.set(false);
+                with_app(|app| {
+                    if review::sync_from_storage() {
+                        pages::render_sidebar(app);
+                    }
+                });
+            });
+        }
+    });
     // `scroll` does not bubble; listen in the capture phase.
     dom::listen_with(&doc, "scroll", true, true, |ev| nav::on_scroll(&ev));
     dom::listen(&dom::window().into(), "resize", |_| {
@@ -580,13 +624,7 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
     }
     if let Some(b) = dom::closest(el, "[data-impact]") {
         let id = dom::data(&b, "impact").unwrap_or_default();
-        // On a phone: the item's callers in the call view, which lead up
-        // to the public API.
-        if narrow() {
-            calls::show_callers(app, &id);
-        } else {
-            canvas::show_impact(app, &id);
-        }
+        show_on_canvas(app, &nav::OnCanvas::Impact(id));
         return;
     }
     if dom::closest(el, "#view-canvas").is_some() && canvas::on_click(app, el) {
@@ -647,17 +685,12 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
             .and_then(|i| i.parse().ok())
             .unwrap_or(0);
         let ids = graphs::graph_items(&app.d, i);
-        if narrow() {
-            if let Some(root) = ids.first() {
-                calls::focus(app, root);
-            }
-        } else {
-            canvas::show_items(app, &ids);
-        }
+        show_on_canvas(app, &nav::OnCanvas::Items(ids));
         return;
     }
     if let Some(b) = dom::closest(el, "[data-graph]") {
-        show_module_graph(app, &dom::data(&b, "graph").unwrap_or_default());
+        let m = dom::data(&b, "graph").unwrap_or_default();
+        show_on_canvas(app, &nav::OnCanvas::ModuleGraph(m));
         return;
     }
     if let Some(f) = dom::closest(el, "[data-goto-item]") {
@@ -690,7 +723,7 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
     }
     if dom::closest(el, "#mod-graph").is_some() {
         let m = app.s.module.clone();
-        show_module_graph(app, &m);
+        show_on_canvas(app, &nav::OnCanvas::ModuleGraph(m));
     }
 }
 
@@ -735,13 +768,23 @@ pub fn show_on_module_page(app: &mut App, id: &str) {
     }
 }
 
-/// A module's internal call graph: on a phone, its changed items in the
-/// call view; else laid out on the canvas.
-fn show_module_graph(app: &mut App, m: &str) {
-    if narrow() {
-        calls::focus(app, m);
-    } else {
-        canvas::show_module_graph(app, m);
+/// Shows a call graph on the canvas. On a phone, in the call view, which
+/// needs no panning and zooming: the graph's first item, a module's
+/// changed items, or an item's callers, which lead up to the public API.
+pub fn show_on_canvas(app: &mut App, shows: &nav::OnCanvas) {
+    use nav::OnCanvas;
+    match shows {
+        OnCanvas::Item(id) => open_item(app, id),
+        OnCanvas::Items(ids) if narrow() => {
+            if let Some(root) = ids.first() {
+                calls::focus(app, root);
+            }
+        }
+        OnCanvas::Items(ids) => canvas::show_items(app, ids),
+        OnCanvas::ModuleGraph(m) if narrow() => calls::focus(app, m),
+        OnCanvas::ModuleGraph(m) => canvas::show_module_graph(app, m),
+        OnCanvas::Impact(id) if narrow() => calls::show_callers(app, id),
+        OnCanvas::Impact(id) => canvas::show_impact(app, id),
     }
 }
 
@@ -978,8 +1021,9 @@ fn next_steps_html(d: &Data, unit: &str) -> String {
     let link = |id: &str| {
         let kind = d.item(id).map_or("fn", |it| it.info.kind.css());
         format!(
-            r#"<a class="ref" data-id="{}" data-kind="{kind}"><code>{}</code></a>"#,
+            r#"<a class="ref" data-id="{}" data-kind="{kind}"{}><code>{}</code></a>"#,
             esc(id),
+            nav::item_href(id),
             esc(&d.display_name_of(id))
         )
     };

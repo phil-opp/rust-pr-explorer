@@ -274,11 +274,12 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
                     m.status.css()
                 };
                 html.push_str(&format!(
-                    r#"<div class="mitem {}"><span class="dot {dot}"></span><a class="ref" data-id="{}" data-kind="{}" data-path="{}">{}</a>{}{}</div>"#,
+                    r#"<div class="mitem {}"><span class="dot {dot}"></span><a class="ref" data-id="{}" data-kind="{}" data-path="{}"{}>{}</a>{}{}</div>"#,
                     if m.info.vis_scope.is_some() { "private" } else { "" },
                     esc(&m.info.id),
                     m.info.kind.css(),
                     esc(&m.info.id),
+                    crate::nav::item_href(&m.info.id),
                     esc(&m.info.name),
                     crate::data::test_tag_of(m).to_string() + &crate::unsafety::tag(m),
                     if m.info.vis_scope.is_some() { format!(r#"<span class="vis">{}</span>"#, esc(&m.info.vis_label)) } else { String::new() }

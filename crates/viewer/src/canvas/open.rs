@@ -94,7 +94,7 @@ fn open_at(
     let gid = c.groups[gi].gid;
     if switch_view {
         // Opened from outside the canvas, or jumped to: a history entry.
-        app.s.canvas_focus = Some(id.to_string());
+        app.s.canvas_focus = Some(crate::nav::OnCanvas::Item(id.to_string()));
     }
     if switch_view && app.s.view != View::Canvas {
         crate::set_view(app, View::Canvas);

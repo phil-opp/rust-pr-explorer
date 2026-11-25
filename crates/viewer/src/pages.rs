@@ -54,8 +54,16 @@ fn files_html(d: &Data) -> String {
                 })
                 .flatten();
             let target = match module {
-                Some(m) => format!(r#"data-mod="{}""#, esc(&m.info.id)),
-                None => format!(r#"data-goto-file="{}""#, esc(&f.path)),
+                Some(m) => format!(
+                    r#"data-mod="{}"{}"#,
+                    esc(&m.info.id),
+                    crate::nav::module_href(&m.info.id)
+                ),
+                None => format!(
+                    r#"data-goto-file="{}"{}"#,
+                    esc(&f.path),
+                    crate::nav::file_href(&f.path)
+                ),
             };
             let (dir, name) = match f.path.rsplit_once('/') {
                 Some((dir, name)) => (dir.to_string(), name),
@@ -70,7 +78,7 @@ fn files_html(d: &Data) -> String {
                 )
             };
             format!(
-                r#"<li><div class="tree-row file-row {}" {target} title="{}{}"><span class="dot {}"></span><span class="fn">{}<span class="fdir">{}</span></span><span class="cnt">{counts}</span></div></li>"#,
+                r#"<li><a class="tree-row file-row {}" {target} title="{}{}"><span class="dot {}"></span><span class="fn">{}<span class="fdir">{}</span></span><span class="cnt">{counts}</span></a></li>"#,
                 if f.generated.is_some() { "gen" } else { "" },
                 esc(&f.path),
                 f.generated
@@ -174,10 +182,11 @@ pub fn render_sidebar(app: &App) {
             it.status.css()
         };
         format!(
-            r#"<li><div class="tree-row {} {}" data-mod="{}" title="{} {}"><span class="dot {dot}"></span><span class="nm">{}</span>{}<span class="cnt">{}</span></div>{}</li>"#,
+            r#"<li><a class="tree-row {} {}" data-mod="{}"{} title="{} {}"><span class="dot {dot}"></span><span class="nm">{}</span>{}<span class="cnt">{}</span></a>{}</li>"#,
             if private { "priv" } else { "" },
             if sel { "sel" } else { "" },
             esc(m),
+            crate::nav::module_href(m),
             esc(&it.info.vis_label),
             esc(m),
             esc(&if d.is_root(it) {
@@ -283,7 +292,7 @@ fn item_row(
     format!(
         r#"<div class="irow {} {} {} {}" data-id="{}">
         <div class="ihead"><span class="kind">{}</span>{} {} {} {}{}</div>
-        <div class="iacts">{}{}<button data-open="{}" title="Open on the canvas">Open ▸</button></div>
+        <div class="iacts">{}{}<a class="btn" data-open="{}"{} title="Open on the canvas">Open ▸</a></div>
         {body}</div>"#,
         it.status.css(),
         if context { "context" } else { "" },
@@ -309,6 +318,7 @@ fn item_row(
             "this item",
         ),
         esc(&it.info.id),
+        crate::nav::item_href(&it.info.id),
     )
 }
 
@@ -398,7 +408,7 @@ fn impl_line(d: &Data, m: &Item, badge: bool) -> String {
         },
     );
     format!(
-        r#"<div class="impl-line {}" data-id="{}"><code>{header}</code> {}{}<span class="grow"></span>{}<button data-open="{}" title="Open on the canvas">Open ▸</button></div>"#,
+        r#"<div class="impl-line {}" data-id="{}"><code>{header}</code> {}{}<span class="grow"></span>{}<a class="btn" data-open="{}"{} title="Open on the canvas">Open ▸</a></div>"#,
         m.status.css(),
         esc(&m.info.id),
         if badge || !matches!(m.status, Status::Added | Status::Removed) {
@@ -409,6 +419,7 @@ fn impl_line(d: &Data, m: &Item, badge: bool) -> String {
         crate::unsafety::tag(m),
         crate::review::control_html(&m.info.id),
         esc(&m.info.id),
+        crate::nav::item_href(&m.info.id),
     )
 }
 
@@ -651,9 +662,10 @@ fn changes_list(d: &Data) -> String {
             format!(r#"<span class="kind">{}</span>"#, it.info.kind.label())
         };
         format!(
-            r#"<li>{} {kind}<a data-goto-item="{}"><code>{}</code></a>{why}</li>"#,
+            r#"<li>{} {kind}<a data-goto-item="{}"{}><code>{}</code></a>{why}</li>"#,
             d.api_badge(it),
             esc(&it.info.id),
+            crate::nav::row_href(&it.info.id),
             crate::review::item_tag(&it.info.id, &path),
         )
     };
@@ -891,10 +903,11 @@ pub fn render_module_page(app: &App) {
         let body = section(visible) + &nested;
         let note = if hidden_changed > 0 {
             format!(
-                r#"<div class="hidden-note">{hidden_changed} changed item{} private to <b>{}</b> and not visible from here. <a data-mod="{}">Open the module</a> to see {}.</div>"#,
+                r#"<div class="hidden-note">{hidden_changed} changed item{} private to <b>{}</b> and not visible from here. <a data-mod="{}"{}>Open the module</a> to see {}.</div>"#,
                 if hidden_changed > 1 { "s are" } else { " is" },
                 esc(&s.info.name),
                 esc(&s.info.id),
+                crate::nav::module_href(&s.info.id),
                 if hidden_changed > 1 { "them" } else { "it" }
             )
         } else {
@@ -906,13 +919,14 @@ pub fn render_module_page(app: &App) {
             ""
         };
         format!(
-            r#"<div class="modbox {}"><div class="modbox-h"><span class="kind">mod</span>{} {} {}<span style="flex:1"></span><a data-mod="{}">open ›</a></div>
+            r#"<div class="modbox {}"><div class="modbox-h"><span class="kind">mod</span>{} {} {}<span style="flex:1"></span><a data-mod="{}"{}>open ›</a></div>
             <div class="modbox-b">{body}{note}{empty}</div></div>"#,
             group_status(s).map_or(String::new(), |st| format!("whole-{}", st.css())),
             d.title_html(s, false),
             d.vis_html(s),
             d.status_html(s),
             esc(&s.info.id),
+            crate::nav::module_href(&s.info.id),
         )
     }
 
@@ -921,8 +935,9 @@ pub fn render_module_page(app: &App) {
         .iter()
         .map(|c| {
             format!(
-                r#"<a data-mod="{}">{}</a>"#,
+                r#"<a data-mod="{}"{}>{}</a>"#,
                 esc(c),
+                crate::nav::module_href(c),
                 esc(&d.item(c).map_or(String::new(), |i| d.display_name(i)))
             )
         })
@@ -959,7 +974,7 @@ pub fn render_module_page(app: &App) {
         r#"{}<div class="crumbs">{crumbs}</div>
         <h1><span class="kind">{}</span> {} {} {}</h1>
         <div class="sub">{} · <label><input type="checkbox" id="show-unchanged" {}> show unchanged items</label> ·
-          <button id="mod-graph">Internal call graph{} ▸</button></div>
+          <a class="btn" id="mod-graph"{}>Internal call graph{} ▸</a></div>
         {}
         {sections}"#,
         crate::commit_filter::banner_html(d),
@@ -978,6 +993,9 @@ pub fn render_module_page(app: &App) {
         d.status_html(module),
         esc(&module.info.file),
         if show_unchanged { "checked" } else { "" },
+        crate::nav::href(&crate::nav::Route::Canvas(Some(
+            crate::nav::OnCanvas::ModuleGraph(m.to_string())
+        ))),
         if crate::narrow() { "" } else { " on canvas" },
         if module.info.docs.is_empty() && !module.changes.docs {
             String::new()

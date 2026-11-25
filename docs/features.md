@@ -4,6 +4,8 @@ What the page shows, view by view. For running the tool, see the [README](../REA
 
 The browser's Back and Forward buttons move between what you looked at: each tab you switch to, each item a link jumped to further down a page, and each item opened on the canvas or in the call view. Back returns to where the page was scrolled. Stepping through the review with **Next ▸**, `j` or `k` adds one entry, not one per step, so that Back returns to where the steps started. The address shows the current place (`#/module/…`, `#/module/…/item/…`), so a link to it opens the page there.
 
+The view buttons, names and **Open ▸**, **Canvas ▸** and **Internal call graph ▸** buttons are links to such addresses, so a middle click or Ctrl+click (⌘+click) opens them in a new tab, for example to follow several call graphs side by side. A call graph laid out on the canvas has an address of its own (`#/graph/…`, `#/module-graph/…`, `#/impact/…`), which a new tab lays out again; the **Canvas** button opens the cards that the canvas shows now, laid out by module. Review marks made in one tab show up in the other tabs of the page right away.
+
 ## Overview
 
 Shows the PR's changed call graphs, then its public API changes as a compact list. The full entries, with their rustdoc-style signature diff, docs and every reason for their label, are on the module pages, so the overview doesn't show the same items twice.
