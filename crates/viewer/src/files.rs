@@ -489,8 +489,9 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
             r#"<div class="note">This file's items and docs are shown {}. Below is only the changed code that belongs to no item: {}.</div>"#,
             match module {
                 Some(m) => format!(
-                    r#"on the page of <a data-mod="{}"><code>{}</code></a>"#,
+                    r#"on the page of <a data-mod="{}"{}><code>{}</code></a>"#,
                     esc(&m.info.id),
+                    crate::nav::module_href(&m.info.id),
                     esc(&d.mod_label(&m.info.id))
                 ),
                 None => "with the Rust items".to_string(),

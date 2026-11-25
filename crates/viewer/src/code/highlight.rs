@@ -57,10 +57,11 @@ pub fn ref_html(d: &Data, text: &str, r: &Ref, extra: &str) -> String {
     };
     if let Some(item) = item {
         format!(
-            r#"<a class="ref {extra}" data-id="{}" data-kind="{}" data-path="{}">{}</a>"#,
+            r#"<a class="ref {extra}" data-id="{}" data-kind="{}" data-path="{}"{}>{}</a>"#,
             esc(&item.info.id),
             item.info.kind.css(),
             esc(&r.path),
+            crate::nav::item_href(&item.info.id),
             esc(text)
         )
     } else {

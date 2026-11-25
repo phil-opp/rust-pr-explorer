@@ -98,11 +98,12 @@ fn shown_items(d: &Data, all: bool) -> Vec<&Item> {
 
 fn chip(d: &Data, it: &Item) -> String {
     format!(
-        r#"<a class="ref mm-chip {}" data-id="{}" data-kind="{}" data-path="{}"><span class="dot {}"></span><span class="nm" title="{}">{}</span>{}{}</a>"#,
+        r#"<a class="ref mm-chip {}" data-id="{}" data-kind="{}" data-path="{}"{}><span class="dot {}"></span><span class="nm" title="{}">{}</span>{}{}</a>"#,
         it.status.css(),
         esc(&it.info.id),
         it.info.kind.css(),
         esc(&it.info.id),
+        crate::nav::item_href(&it.info.id),
         if it.status == Status::Unchanged && d.touched(it) {
             "changed"
         } else {
@@ -139,8 +140,9 @@ pub fn render_map(app: &App) {
             let mut html: String = v.iter().take(MAX).map(|it| chip(d, it)).collect();
             if v.len() > MAX {
                 html.push_str(&format!(
-                    r#"<a class="mm-more" data-mod="{}">+{} more</a>"#,
+                    r#"<a class="mm-more" data-mod="{}"{}>+{} more</a>"#,
                     esc(m),
+                    crate::nav::module_href(m),
                     v.len() - MAX
                 ));
             }
@@ -173,7 +175,7 @@ pub fn render_map(app: &App) {
             .collect();
         let private_mod = module.info.vis_scope.is_some();
         format!(
-            r#"<div class="mm-node"><div class="mm-box {} {}" data-mm="{}"><div class="mm-h"><span class="dot {}"></span><a data-mod="{}">{}</a>{}</div>{body}</div>{}</div>"#,
+            r#"<div class="mm-node"><div class="mm-box {} {}" data-mm="{}"><div class="mm-h"><span class="dot {}"></span><a data-mod="{}"{}>{}</a>{}</div>{body}</div>{}</div>"#,
             if private_mod { "priv" } else { "" },
             module.status.css(),
             esc(m),
@@ -183,6 +185,7 @@ pub fn render_map(app: &App) {
                 module.status.css()
             },
             esc(m),
+            crate::nav::module_href(m),
             esc(&d.mod_label(m)),
             if private_mod {
                 r#"<span class="vis">priv</span>"#
@@ -393,11 +396,12 @@ pub fn render_matrix(app: &App) {
                 .collect();
             let depth = d.mod_depth(a);
             format!(
-                r#"<tr><th class="mx-row {}" style="padding-left:{}px"><span class="mx-i">{}</span> <a data-mod="{}">{}</a> <span class="dim">{}</span></th>{cells}</tr>"#,
+                r#"<tr><th class="mx-row {}" style="padding-left:{}px"><span class="mx-i">{}</span> <a data-mod="{}"{}>{}</a> <span class="dim">{}</span></th>{cells}</tr>"#,
                 if private { "priv" } else { "" },
                 8 + depth * 14,
                 i + 1,
                 esc(a),
+                crate::nav::module_href(a),
                 esc(&d.mod_label(a)),
                 match changes(a) {
                     0 => String::new(),
