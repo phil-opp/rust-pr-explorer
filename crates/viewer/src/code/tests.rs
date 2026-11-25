@@ -525,11 +525,6 @@ fn unchanged_parts_of_a_changed_item_are_faded() {
         let h = html(id);
         assert!(!h.contains("faded"), "{h}");
     }
-    // The title is faded on changed items only.
-    let title = |id| crate::data::faded_title(d.item(id).unwrap());
-    assert_eq!(title("c::body"), " faded");
-    assert_eq!(title("c::same"), "");
-    assert_eq!(title("c::new"), "");
 }
 
 #[test]

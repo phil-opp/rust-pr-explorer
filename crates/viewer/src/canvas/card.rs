@@ -322,14 +322,13 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     format!(
         r#"<div class="card cs-{} {context}" data-gid="{}" style="left:{}px;top:{}px">
         {tabs}
-        <div class="card-h{}"><span class="kind">{}</span>{} {}{}<span class="grow"></span>{}{}<span class="x" data-close="{}" title="Close">×</span></div>
+        <div class="card-h"><span class="kind">{}</span>{} {}{}<span class="grow"></span>{}{}<span class="x" data-close="{}" title="Close">×</span></div>
         <div class="card-loc">{}</div>
         <div class="card-b">{impl_header}{unsafe_lines}{body}{}</div>{members}{}{}<div class="card-rs" title="Drag to resize. Double-click to fit the code again."></div></div>"#,
         it.status.css(),
         g.gid,
         g.x,
         g.y,
-        crate::data::faded_title(it),
         it.info.kind.label(),
         d.title_html(it, false),
         d.vis_html(it),

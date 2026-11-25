@@ -214,20 +214,17 @@ code { font-size: .92em; }
 .export s { text-decoration-color: var(--removed); }
 /* An unchanged signature, shown for reference: muted, no code background. */
 .sigbox.m-ref .sig { background: transparent; box-shadow: inset 0 0 0 1px var(--border); color: var(--muted); }
-/* The kind, name, and unchanged signature and docs of a changed item, faded
-   so that the eye goes to what changed (often a few lines in the body),
-   except for the name on a card with a call color. Not by opacity: the
+/* The unchanged signature and docs of a changed item, faded so that the eye
+   goes to what changed (often a few lines in the body). Not by opacity: the
    syntax colors are close to the WCAG AA contrast ratio (4.5:1) already, so
    any transparency takes them below it. Instead, the text takes a lighter
    gray that still keeps it, and the syntax colors lose most of their
    saturation, which leaves their lightness, and so their contrast, about
    the same. Full color again under the pointer or keyboard focus. */
-.sigbox.faded .sig, .docs.faded, .faded > .kind, .faded > .title-name { transition: color .15s, filter .15s, box-shadow .15s; }
-.sigbox.faded:not(:hover, :focus-within) .sig, .docs.faded:not(:hover, :focus-within),
-:is(.card-h, .ihead).faded:not(:hover) > :is(.kind, .title-name) {
+.sigbox.faded .sig, .docs.faded { transition: color .15s, filter .15s, box-shadow .15s; }
+.sigbox.faded:not(:hover, :focus-within) .sig, .docs.faded:not(:hover, :focus-within) {
   color: light-dark(#6b6b6b, #959599); filter: saturate(.25);
 }
-:is(.card-h, .ihead).faded:not(:hover) > .title-name * { color: inherit; }
 .sigbox.faded:not(:hover, :focus-within) .sig { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 50%, var(--bg)); }
 .mark.m-del .docs, .mark.m-del .export { opacity: .75; text-decoration: line-through; text-decoration-color: var(--removed); }
 .dblk-old { font-size: 12.5px; color: var(--muted); margin: 0 0 4px; }
@@ -382,8 +379,6 @@ a.ref:hover { text-decoration: underline; }
 /* For text in that color: a bit closer to the text color, for contrast. */
 [data-callc] { --callc-text: color-mix(in srgb, var(--callc) 75%, var(--text)); }
 .card[data-callc] .card-h .title-name, .card[data-callc] .card-h .title-name * { color: var(--callc-text); }
-/* Its call color links a card to its connectors, so it stays, unfaded. */
-.card[data-callc] .card-h.faded > .title-name { filter: none; }
 .card[data-callc]::before { content: ""; position: absolute; left: -1px; top: -1px; bottom: -1px; width: 5px; border-radius: 8px 0 0 8px; background: var(--callc); }
 .ref.on-canvas[data-callc] { color: var(--callc-text); background: color-mix(in srgb, var(--callc) 12%, var(--bg)); box-shadow: 0 0 0 1px color-mix(in srgb, var(--callc) 70%, transparent); }
 .edge.call.c0 { stroke: var(--call-0); } .join.c0 { fill: var(--call-0); }

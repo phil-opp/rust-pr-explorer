@@ -299,7 +299,7 @@ fn item_row(
     );
     format!(
         r#"<div class="irow {} {} {} {}" data-id="{}">
-        <div class="ihead{}"><span class="kind">{}</span>{} {} {} {}{}</div>
+        <div class="ihead"><span class="kind">{}</span>{} {} {} {}{}</div>
         <div class="iacts">{}{}<a class="btn" data-open="{}"{} title="Open on the canvas">Open ▸</a></div>
         {body}</div>"#,
         it.status.css(),
@@ -307,7 +307,6 @@ fn item_row(
         if member { "member" } else { "" },
         if badge { "" } else { "grouped" },
         esc(&it.info.id),
-        crate::data::faded_title(it),
         it.info.kind.label(),
         title,
         d.vis_html(it),
