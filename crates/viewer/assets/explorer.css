@@ -190,9 +190,12 @@ code { font-size: .92em; }
 .semver-tool.warn pre { white-space: pre-wrap; font-size: 12px; margin: 4px 0 0; }
 .semver-unmatched { margin: 4px 0 0; padding-left: 18px; color: var(--text); }
 /* Impact of internal changes: the public items that reach them. */
-.impact { font: 13px var(--sans); margin: 2px 0 6px; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px; }
+.impact { font: 13px var(--sans); margin: 2px 0 6px; }
+.impact > summary { cursor: pointer; }
 .impact-h { font-weight: 600; }
 .impact.none { color: var(--muted); }
+.impact-chains { margin: 4px 0 6px; padding-left: 20px; }
+.impact-chains li { margin: 2px 0; }
 .impact a.btn { font-size: 12px; padding: 0 6px; }
 .semver-sum { margin: 0 0 14px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 
@@ -1036,9 +1039,9 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
 .cg-focus .card { position: relative; left: auto !important; top: auto !important; width: auto; }
 .cg-focus .card-h .x, .cg-focus .card-badge.private,
 .cg-focus [data-act="callers"], .cg-focus [data-act="callees"], .cg-focus [data-act="uses"],
-.cg-focus [data-act="tabs"], .cg-focus [data-act="detach"] { display: none; }
+.cg-focus [data-act="tabs"], .cg-focus [data-act="detach"], .cg-focus [data-act="public-api"] { display: none; }
 .cg-focus .card-h, .cg-focus .card-loc { cursor: auto; }
-.cg-focus .card-foot:not(:has(.card-acts > :not([data-act="callers"], [data-act="callees"], [data-act="uses"], [data-act="tabs"], [data-act="detach"], .card-badge.private, .grow))) { display: none; }
+.cg-focus .card-foot:not(:has(.card-acts > :not([data-act="callers"], [data-act="callees"], [data-act="uses"], [data-act="tabs"], [data-act="detach"], [data-act="public-api"], .card-badge.private, .grow))) { display: none; }
 .cg-tools { display: flex; justify-content: flex-end; margin-top: 6px; }
 @media (min-width: 1200px) {
   .cg-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 640px) minmax(0, 1fr); align-items: start; max-width: none; }
