@@ -574,7 +574,10 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         }
         return;
     }
-    if let Some(b) = dom::closest(el, "[data-unfold], [data-unfold-all]") {
+    // A link in a fold's row opens, without unfolding the lines.
+    if let Some(b) = dom::closest(el, "[data-unfold], [data-unfold-all]")
+        && dom::closest(el, "a").is_none()
+    {
         canvas::on_unfold(app, &b);
         return;
     }
