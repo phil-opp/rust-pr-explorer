@@ -71,6 +71,10 @@ pub struct LineNote {
     #[serde(default)]
     pub verdict: Verdict,
     pub text: String,
+    /// Posted with an earlier review from this page (see
+    /// `review::Note::posted`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub posted: bool,
 }
 
 /// Where a comment's lines are now: its spans moved to their current
@@ -481,11 +485,34 @@ impl ForUnit {
     }
 }
 
-/// The comments for a posted review, and how many were left out since
-/// their lines changed.
-pub fn comments(d: &Data) -> (Vec<crate::post::Comment>, usize) {
+/// Says that the comments a review holds now (see [`comments`]) were
+/// posted with it, or (`false`) takes that back for every comment.
+pub fn set_posted(d: &Data, posted: bool) {
+    let mut sides: BTreeMap<String, Option<Sides>> = BTreeMap::new();
+    update(|notes| {
+        for n in notes.values_mut() {
+            if !posted {
+                n.posted = false;
+                continue;
+            }
+            let placed = sides
+                .entry(n.item.clone())
+                .or_insert_with(|| Sides::of_unit(d, &n.item))
+                .as_ref()
+                .and_then(|s| place(s, n));
+            if placed.is_some() && !n.text.trim().is_empty() {
+                n.posted = true;
+            }
+        }
+    });
+}
+
+/// The comments for a posted review, how many were left out since their
+/// lines changed, and how many since an earlier review posted them.
+pub fn comments(d: &Data) -> (Vec<crate::post::Comment>, usize, usize) {
     let mut out = Vec::new();
     let mut stale = 0;
+    let mut posted = 0;
     let list: Vec<(String, LineNote)> = all().into_iter().collect();
     // In reading order of their items, then by line.
     let mut sides: BTreeMap<String, Option<Sides>> = BTreeMap::new();
@@ -518,6 +545,10 @@ pub fn comments(d: &Data) -> (Vec<crate::post::Comment>, usize) {
             stale += 1;
             continue;
         };
+        if n.posted {
+            posted += 1;
+            continue;
+        }
         let (old, new) = (p.old.map(|s| s.range()), p.new.map(|s| s.range()));
         out.push(crate::post::Comment {
             name: t.name(d),
@@ -528,7 +559,7 @@ pub fn comments(d: &Data) -> (Vec<crate::post::Comment>, usize) {
             loc: t.lines_loc(d, old, new),
         });
     }
-    (out, stale)
+    (out, stale, posted)
 }
 
 /// What a line comment is on: an item, or a file outside the Rust
@@ -796,6 +827,7 @@ fn open_new(app: &crate::App, verdict: Verdict) {
         end_old,
         verdict,
         text: String::new(),
+        posted: false,
     };
     if n.old.is_none() && n.new.is_none() {
         return;
@@ -907,6 +939,8 @@ pub fn save(app: &mut crate::App, id: &str, verdict: Verdict, text: String) {
     } else {
         Verdict::Comment
     };
+    // The same text as before is still the comment that was posted.
+    n.posted &= n.text == text;
     n.text = text;
     let item = n.item.clone();
     let id = if id == NEW {
@@ -1006,6 +1040,7 @@ mod tests {
             end_old: false,
             verdict: Verdict::Comment,
             text: "x".into(),
+            posted: false,
         };
         let p = place(&it, &n).unwrap();
         assert_eq!(p.end(), Some((false, 11)));
@@ -1037,6 +1072,7 @@ mod tests {
             end_old: false,
             verdict: Verdict::Comment,
             text: "x".into(),
+            posted: false,
         };
         assert!(place(&it, &n).is_some());
         let later = sides(&[(' ', "z();"), (' ', "x();"), ('+', "y();"), (' ', "x();")]);
