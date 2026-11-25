@@ -109,9 +109,10 @@ try {
       await check_contrast(page, scheme, `${view} view`);
     }
 
-    // Open an item from the overview's call graphs on the canvas.
+    // Open an item of the overview's changed items on the canvas (a link
+    // in a call graph's summary scrolls to the item on the overview).
     await page.click('#views [data-view="overview"]');
-    const items = "#view-overview .cgraph a.ref[data-id]";
+    const items = "#view-overview .cgi .irow > .iacts [data-open]";
     const open = page.locator(items).first();
     if ((await open.count()) === 0) {
       fail("the overview has no item to open");
@@ -124,12 +125,12 @@ try {
         // Each listed item alone on the canvas, with its body diff
         // expanded, so that changed words in source diffs are checked too.
         // One at a time: axe skips text that another card covers.
-        const ids = [...new Set(await page.$$eval(items, (els) => els.map((e) => e.dataset.id)))];
+        const ids = [...new Set(await page.$$eval(items, (els) => els.map((e) => e.dataset.open)))];
         for (const id of ids) {
           await page.click('#views [data-view="canvas"]');
           await page.click("#cv-clear");
           await page.click('#views [data-view="overview"]');
-          await page.locator(`${items}[data-id="${id}"]`).first().click();
+          await page.locator(`${items}[data-open="${id}"]`).first().click();
           await page.locator("#cards .card").first().waitFor({ state: "visible", timeout: 5_000 });
           await page.$$eval("#cards details.src:not([open])", (ds) => ds.forEach((d) => (d.open = true)));
           await check_contrast(page, scheme, `canvas card of ${id} with its body diff`);
@@ -238,7 +239,7 @@ try {
   const page = await bars.newPage({ viewport: { width: 1400, height: 1600 } });
   await page.goto(url);
   await page.waitForFunction(() => document.querySelector("#sidebar")?.children.length > 0, null, { timeout: 30_000 });
-  await page.locator("#view-overview .cgraph a.ref[data-id]").first().click();
+  await page.locator("#view-overview .cgi .irow > .iacts [data-open]").first().click();
   const card = page.locator("#cards .card").first();
   await card.waitFor({ state: "visible", timeout: 5_000 });
   await page.$$eval("#cards details.src:not([open])", (ds) => ds.forEach((d) => (d.open = true)));

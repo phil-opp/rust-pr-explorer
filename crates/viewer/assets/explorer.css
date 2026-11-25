@@ -1197,6 +1197,22 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
   .irow > .iacts .rv-scope, .cg-focus .card-rv .rv-scope { display: none; }
 }
 
+/* Changed items (overview): a section per call graph, its heading kept
+   in view while its items scroll past (at the top of the page's padding,
+   which sticky positioning leaves out). */
+.cgi { margin: 0 0 24px; }
+/* A row body that is rendered once it comes near the view. */
+.irow > .lazy-body { grid-column: 1 / -1; min-height: 48px; }
+.cgi-h { position: sticky; top: -22px; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px;
+  margin: 0 -34px; padding: 8px 34px; background: var(--bg); border-bottom: 1px solid var(--border); }
+.cgi-title { font: 600 15px var(--sans); display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; }
+.cgi-title code { font: 600 15px var(--mono); }
+.cgi-acts { display: flex; gap: 4px; }
+.cgi .irow, .cgi .impl-line, .cgraph { scroll-margin-top: 52px; }
+@media (max-width: 760px) {
+  .cgi-h { top: -14px; margin: 0 -12px; padding: 8px 12px; }
+}
+
 /* Changed call graphs (overview): one card per graph, its parts
    labeled on the left (stacked on a phone). */
 .irow.cgraph { padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--border) 55%, transparent); border-radius: 8px; }

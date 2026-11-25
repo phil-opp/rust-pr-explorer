@@ -626,7 +626,7 @@ fn graph_html(d: &Data, i: usize, g: &Graph) -> String {
         );
     format!(
         r#"<div class="irow cgraph" id="cgraph-{i}"><div class="ihead"><span class="cg-roots">{head}{more_roots}</span></div>
-        <div class="iacts"><a class="btn" data-cgraph="{i}"{} title="{}">{}</a></div>
+        <div class="iacts"><a class="btn" data-cgitems="{i}" title="The graph's items with their diffs, further down">Diffs ▾</a><a class="btn" data-cgraph="{i}"{} title="{}">{}</a></div>
         <div class="cg-sub"><span class="dim">{count}</span><span class="rv-group">{}</span></div>
         <div class="cg-facts">{}{}{}{}</div></div>"#,
         crate::nav::href(&crate::nav::Route::Canvas(Some(
@@ -694,8 +694,7 @@ fn tests_html(d: &Data, tests: &[String], helpers: &[String]) -> String {
 }
 
 /// The overview's section. Empty without changed Rust items.
-pub fn overview_html(d: &Data) -> String {
-    let gs = graphs(d);
+pub fn overview_html(d: &Data, gs: &Graphs) -> String {
     let fns: usize = gs.graphs.iter().map(|g| g.rows.len()).sum();
     if gs.graphs.is_empty() && gs.tests.is_empty() && gs.other.is_empty() && gs.removed.is_empty() {
         return String::new();

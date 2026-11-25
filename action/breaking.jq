@@ -1,8 +1,8 @@
 # The comment's list of breaking changes, as Markdown, from counts.jq's
 # numbers, the page's URL (`--arg url`) and its artifact's id (`--arg id`,
 # may be empty); empty if there are none. Each item links to it on the page
-# (`#~<artifact id>/overview/item/<id>`, which opens its row on its module
-# page; the artifact's id is for the page's permalinks).
+# (`#~<artifact id>/overview/item/<id>`, which opens its row on the overview;
+# the artifact's id is for the page's permalinks).
 #
 # The comment-only action reads the list from an artifact of a run on the
 # PR's code, so all of it is reduced to what such a list needs: the ids are
