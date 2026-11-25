@@ -103,23 +103,38 @@ fn site_path(a: Rect, y: f64, b: Rect) -> String {
     )
 }
 
-/// The height, in canvas coordinates, of the first visible call site of
-/// `to` in the expanded source of card `g`. A call on a removed line counts
-/// only if no other line calls `to`: the connector shows the current call.
-fn call_site_y(g: &Group, to: &str, k: f64) -> Option<f64> {
-    let card = card_el(g.gid)?;
+/// The heights, in canvas coordinates, of the call sites of `to` in the
+/// expanded source of card `g`, top to bottom. A call in folded lines is at
+/// the row that unfolds them. Calls on removed lines count only if no other
+/// line calls `to`: the connectors show the current calls.
+fn call_site_ys(g: &Group, to: &str, k: f64) -> Vec<f64> {
+    let Some(card) = card_el(g.gid) else {
+        return Vec::new();
+    };
     let top = card.get_bounding_client_rect().top();
     let (removed, current): (Vec<_>, Vec<_>) =
         dom::query_all_in(&card, "details.src[open] a.ref[data-id]")
             .into_iter()
             .filter(|a| dom::data(a, "id").as_deref() == Some(to))
             .partition(|a| dom::closest(a, ".ln.del").is_some());
-    current
-        .into_iter()
-        .chain(removed)
-        .map(|a| a.get_bounding_client_rect())
-        .find(|r| r.height() > 0.0)
+    let sites = if current.is_empty() { removed } else { current };
+    let mut ys: Vec<f64> = sites
+        .iter()
+        .filter_map(|a| {
+            let r = a.get_bounding_client_rect();
+            if r.height() > 0.0 {
+                return Some(r);
+            }
+            let fold = dom::closest(a, ".fold[hidden]")?;
+            let r = fold.previous_element_sibling()?.get_bounding_client_rect();
+            (r.height() > 0.0).then_some(r)
+        })
         .map(|r| g.y + (r.top() + r.height() / 2.0 - top) / k)
+        .collect();
+    ys.sort_by(f64::total_cmp);
+    // Calls on one line, or in one fold, share a connector.
+    ys.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+    ys
 }
 
 /// Cards closer than this, side by side, are connected through their tops
@@ -159,6 +174,9 @@ struct Conn {
     title: String,
     /// Height of the call site in `a`, which the connector starts at.
     site_y: Option<f64>,
+    /// Heights of further call sites in `a`, whose connectors join this
+    /// one on the way to `b`.
+    more_sites: Vec<f64>,
     route: Route,
 }
 
@@ -301,19 +319,34 @@ fn lanes(conns: &[Conn], ends: &[Ends]) -> Vec<f64> {
 }
 
 fn conn_path(c: &Conn, ends: Ends, lane: f64) -> String {
+    // The connectors of further call sites come first, so that the arrow
+    // head at the end of the path is that of the main connector.
+    let mut d = String::new();
     match c.route {
         Route::Ortho(sa, _) => {
             let (p, q) = ends;
+            for &y in &c.more_sites {
+                // Into the main connector's lane, then along it to `b`.
+                d.push_str(&route::path_d(&[(p.0, y), (lane, y), (lane, q.1), q]));
+                d.push(' ');
+            }
             let points = match sa {
                 _ if p.0 == q.0 || p.1 == q.1 => vec![p, q],
                 Side::Left | Side::Right => vec![p, (lane, p.1), (lane, q.1), q],
                 Side::Top | Side::Bottom => vec![p, (p.0, lane), (q.0, lane), q],
             };
-            route::path_d(&points)
+            d.push_str(&route::path_d(&points));
         }
-        Route::Site(y) => site_path(c.a.1, y, c.b.1),
-        Route::Curve => edge_path(c.a.1, c.b.1),
+        Route::Site(y) => {
+            for &y in &c.more_sites {
+                d.push_str(&site_path(c.a.1, y, c.b.1));
+                d.push(' ');
+            }
+            d.push_str(&site_path(c.a.1, y, c.b.1));
+        }
+        Route::Curve => d.push_str(&edge_path(c.a.1, c.b.1)),
     }
+    d
 }
 
 /// Draws call, use, member and link connectors between visible cards.
@@ -338,16 +371,18 @@ pub fn draw_edges(app: &App) {
             return;
         };
         seen.insert((ga.gid, gb.gid));
-        let site_y = match base {
-            "call" => call_site_y(ga, &gb.active, k),
-            _ => None,
+        let mut sites = match base {
+            "call" => call_site_ys(ga, &gb.active, k),
+            _ => Vec::new(),
         };
+        let site_y = (!sites.is_empty()).then(|| sites.remove(0));
         conns.push(Conn {
             a: (ga.gid, a),
             b: (gb.gid, b),
             class: class.to_string(),
             title,
             site_y,
+            more_sites: sites,
             route: choose_route(a, b, site_y),
         });
     };
@@ -575,6 +610,7 @@ mod tests {
             class: "use".into(),
             title: String::new(),
             site_y: None,
+            more_sites: Vec::new(),
             route: choose_route(a.1, b.1, None),
         }
     }
@@ -609,5 +645,31 @@ mod tests {
         let ends = ports(&conns);
         let lanes = lanes(&conns, &ends);
         assert!(lanes[0] > 400.0 && lanes[0] < 440.0, "lane {}", lanes[0]);
+    }
+
+    /// A card that calls another one from two lines gets a connector from
+    /// each line; the second joins the first in its lane, so that both end
+    /// in one arrow head on the callee.
+    #[test]
+    fn every_call_site_gets_a_connector() {
+        let a = (1, rect(0.0, 0.0, 600.0));
+        let b = (2, rect(660.0, 100.0, 300.0));
+        let mut c = conn(a, b);
+        c.class = "call".into();
+        c.site_y = Some(120.0);
+        c.more_sites = vec![480.0];
+        c.route = choose_route(a.1, b.1, c.site_y);
+        let conns = vec![c];
+        let ends = ports(&conns);
+        let lanes = lanes(&conns, &ends);
+        let d = conn_path(&conns[0], ends[0], lanes[0]);
+        assert_eq!(d.matches('M').count(), 2, "{d}");
+        assert!(d.starts_with("M580.0,480.0"), "{d}");
+        assert!(d.contains("M580.0,120.0"), "{d}");
+        let (q, lane) = (ends[0].1, lanes[0]);
+        let end = format!("L{:.1},{:.1}", q.0, q.1);
+        assert!(d.ends_with(&end), "{d}");
+        // The second connector runs into the first one's lane.
+        assert!(d.contains(&format!("L{:.1},", lane)), "{d}");
     }
 }
