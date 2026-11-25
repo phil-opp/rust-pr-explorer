@@ -843,7 +843,9 @@ body:not(.reviewing) .rv-group { display: none; }
 .irow:has(> .iacts .rvc.done), .impl-line:has(.rvc.done) { box-shadow: inset 3px 0 0 var(--reviewed); padding-left: 10px !important; }
 .irow:has(> .iacts .rvc.done:not(.unfold)) > :not(.ihead, .iacts) { display: none; }
 .irow:has(> .iacts .rvc.done:not(.unfold)) > .ihead, .impl-line:has(.rvc.done:not(.unfold)) > code { opacity: .6; }
-.ientry.file:has(> .irow .rvc.done:not(.unfold)) > :not(.irow) { display: none; }
+/* A reviewed file keeps only its header row; its parts (YAML keys, Python
+   and JavaScript functions) are rows too, but fold with the rest. */
+.ientry.file:has(> .irow:not(.part) .rvc.done:not(.unfold)) > :not(.irow:not(.part)) { display: none; }
 .card:has(.card-rv .rvc.done) { outline: 2px solid var(--reviewed); }
 .card-rv { padding: 6px 10px; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; }
 .card-rv:has(.rvc.done:only-child) { justify-content: flex-start; }
