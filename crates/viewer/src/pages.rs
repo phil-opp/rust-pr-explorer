@@ -257,27 +257,11 @@ fn item_row(
     scope: &str,
     context: bool,
     member: bool,
-    with_module: bool,
     // Whether this row says "new"/"removed"; not when a group around it
     // already does.
     badge: bool,
 ) -> String {
-    // In the public API, re-exported items appear under their public name.
-    let title = match d.public_path(it) {
-        Some(path) if with_module && d.reexported(it) => format!(
-            r#"<span class="title-name"><span class="k-{}">{}</span></span> <span class="dim">re-export of <code>{}</code></span>"#,
-            it.info.kind.css(),
-            esc(path.rsplit("::").next().unwrap_or(path)),
-            esc(&match &it.info.reexport_of {
-                // Another crate's item: its full path says where it is from.
-                Some(target) => target.clone(),
-                None => d
-                    .short_path(&format!("{}::{}", it.info.module, it.info.name))
-                    .to_string(),
-            })
-        ),
-        _ => d.title_html(it, false),
-    };
+    let title = d.title_html(it, false);
     // What changed in the body, expandable to the diff; the whole source
     // of new and removed items, and of items with review threads.
     let src = if it.changes.body
@@ -335,7 +319,6 @@ fn item_with_members(
     it: &Item,
     scope: &str,
     filter: &dyn Fn(&Item) -> bool,
-    with_module: bool,
     // The status of the group the item is listed in, if that group (a new
     // or removed module) is already marked as a whole.
     group: Option<Status>,
@@ -360,15 +343,7 @@ fn item_with_members(
         return String::new();
     }
     let marked_above = group == Some(it.status);
-    let html = item_row(
-        d,
-        it,
-        scope,
-        !changed(it),
-        false,
-        with_module,
-        !marked_above,
-    );
+    let html = item_row(d, it, scope, !changed(it), false, !marked_above);
     // An added or removed item, with its members, as one marked group:
     // the item says "new" once, its members don't repeat it.
     let whole = matches!(it.status, Status::Added | Status::Removed);
@@ -387,12 +362,12 @@ fn item_with_members(
                 .map(|x| {
                     let said = (new_impl || same) && x.status == m.status;
                     let badge = !said && group != Some(x.status);
-                    item_row(d, x, scope, !changed(x), true, with_module, badge)
+                    item_row(d, x, scope, !changed(x), true, badge)
                 })
                 .collect();
             impl_line(d, m, badge) + &methods
         } else {
-            item_row(d, m, scope, !changed(m), true, with_module, badge)
+            item_row(d, m, scope, !changed(m), true, badge)
         };
         if same {
             inner.push_str(&row);
@@ -445,57 +420,6 @@ fn group_status(module: &Item) -> Option<Status> {
 /// Overview: how does the crate's public surface change?
 pub fn render_overview(app: &App) {
     let d = &app.d;
-    // Also unchanged items that cargo-semver-checks labeled, e.g. a type
-    // that is no longer `Send` because of a change elsewhere.
-    let is_pub = |it: &Item| d.in_public_api(it) && (changed(it) || it.api.is_some());
-    // Seen from outside the crate.
-    const OUTSIDE: &str = "<extern>";
-
-    // Modules and items as rustdoc shows them: each item under the module
-    // whose public path names it, re-exports included.
-    fn mod_block(d: &Data, m: &str, is_pub: &dyn Fn(&Item) -> bool) -> String {
-        let Some(module) = d.item(m) else {
-            return String::new();
-        };
-        if !d.in_public_api(module) && !d.is_root(module) {
-            return String::new();
-        }
-        let mut listed: Vec<&Item> = d
-            .items()
-            .filter(|c| {
-                c.info.kind != Kind::Mod
-                    && c.info.parent.is_none()
-                    && d.in_public_api(c)
-                    && d.public_module(c).unwrap_or(&c.info.module) == m
-            })
-            .collect();
-        listed.sort_by(|a, b| kind_order(a, b));
-        let entries: String = listed
-            .iter()
-            .map(|c| item_with_members(d, c, OUTSIDE, is_pub, true, group_status(module)))
-            .collect();
-        let mut kids = d.mod_children_items(m);
-        kids.sort_by(|a, b| kind_order(a, b));
-        let subs: String = kids
-            .iter()
-            .filter(|c| c.info.kind == Kind::Mod)
-            .map(|c| mod_block(d, &c.info.id, is_pub))
-            .collect();
-        if entries.is_empty() && subs.is_empty() {
-            return String::new();
-        }
-        format!(
-            r#"<div class="modbox {}"><div class="modbox-h"><span class="kind">{}</span>{} {}<span style="flex:1"></span><a data-mod="{}">module page ›</a></div>
-            <div class="modbox-b">{entries}{subs}</div></div>"#,
-            group_status(module).map_or(String::new(), |s| format!("whole-{}", s.css())),
-            if d.is_root(module) { "crate" } else { "mod" },
-            d.title_html(module, false),
-            d.status_html(module),
-            esc(m),
-        )
-    }
-
-    let public_html: String = d.roots().iter().map(|r| mod_block(d, r, &is_pub)).collect();
     // Sections without changes are left out. Without any Rust change, only
     // the analysis warnings remain, and only if no sidebar shows them.
     let rust_html = if !d.rust_changed() {
@@ -507,12 +431,14 @@ pub fn render_overview(app: &App) {
     } else {
         let unsafe_html = crate::unsafety::overview_html(d);
         let semver = semver_summary(d);
-        let public = if public_html.is_empty() && semver.is_empty() {
+        let public = if semver.is_empty() {
             String::new()
         } else {
             format!(
-                r#"<h2>Public API changes {}</h2>{semver}{public_html}"#,
-                help_html("Changed items that other crates can use.")
+                r#"<h2>Public API changes {}</h2>{semver}"#,
+                help_html(
+                    "Changes to what other crates can use, by their public path, with their SemVer label and its first reason. A click shows the item on its module page, with its signature, docs and all reasons. Changes to a public function's body or docs only are no API change: they are in the call graphs above."
+                )
             )
         };
         unsafe_html + &crate::graphs::overview_html(d) + &public
@@ -576,7 +502,6 @@ fn semver_summary(d: &Data) -> String {
     // Crates whose allowed breaking changes are left out of the version
     // they need.
     let mut allowed: Vec<&str> = Vec::new();
-    let mut breaking_items: Vec<&Item> = Vec::new();
     for it in d.items().filter(|it| d.in_public_api(it) && changed(it)) {
         if let Some(api) = &it.api {
             let krate = it.info.id.split("::").next().unwrap_or(&it.info.id);
@@ -588,10 +513,7 @@ fn semver_summary(d: &Data) -> String {
                     counts[1] += 1;
                     continue;
                 }
-                ApiLevel::Breaking => {
-                    breaking_items.push(it);
-                    (0, Level::Breaking)
-                }
+                ApiLevel::Breaking => (0, Level::Breaking),
                 ApiLevel::Unknown => (2, Level::Unknown),
                 ApiLevel::Compatible => (3, Level::Compatible),
             };
@@ -683,45 +605,77 @@ fn semver_summary(d: &Data) -> String {
         r#"<div class="semver-sum">{} <span class="dim">{rules} {} Hover a label for why.</span></div>{}{}"#,
         parts.join(" "),
         notes.join(" "),
-        breaking_list(d, &mut breaking_items),
+        changes_list(d),
         semver_checks_html(d),
     )
 }
 
-/// Every breaking change, by its public path, each a link to its row
-/// below: the list to go through before anything else.
-fn breaking_list(d: &Data, items: &mut [&Item]) -> String {
-    if items.is_empty() {
-        return String::new();
-    }
-    items.sort_by(|a, b| d.reading_order(a, b));
-    let rows: String = items
-        .iter()
-        .map(|it| {
-            let path = d
-                .public_path(it)
-                .map(str::to_string)
-                .unwrap_or_else(|| d.display_name(it));
-            let why = it
-                .api
-                .as_ref()
-                .and_then(|a| a.reasons.first())
-                .map(|r| format!(r#" <span class="dim">{}</span>"#, crate::code::note_html(r)))
-                .unwrap_or_default();
-            // An impl's name already says "impl".
-            let kind = if it.info.kind == Kind::Impl {
-                String::new()
-            } else {
-                format!(r#"<span class="kind">{}</span>"#, it.info.kind.label())
-            };
-            format!(
-                r#"<li>{kind}<a data-goto-item="{}"><code>{}</code></a>{why}</li>"#,
-                esc(&it.info.id),
-                crate::review::item_tag(&it.info.id, &path),
-            )
-        })
+/// Public API changes shown before the rest of their group is folded.
+const SHOWN_CHANGES: usize = 10;
+
+/// Every public API change by its public path, with its label and first
+/// reason, each a link to the item on its module page: breaking ones
+/// first, then those to check by hand, the non-breaking ones and the
+/// allowed breaking ones. Also unchanged items that cargo-semver-checks
+/// labeled, e.g. a type that is no longer `Send` because of a change
+/// elsewhere.
+fn changes_list(d: &Data) -> String {
+    use model::ApiLevel;
+    let mut items: Vec<&Item> = d
+        .items()
+        .filter(|it| it.api.is_some() && d.in_public_api(it))
         .collect();
-    format!(r#"<ul class="breaking-list">{rows}</ul>"#)
+    items.sort_by(|a, b| d.reading_order(a, b));
+    let group = |it: &Item| match it.api.as_ref().map(|a| a.level) {
+        Some(ApiLevel::Breaking) if d.breaking_allowed(it) => 3,
+        Some(ApiLevel::Breaking) => 0,
+        Some(ApiLevel::Unknown) => 1,
+        _ => 2,
+    };
+    items.sort_by_key(|it| group(it));
+    let line = |it: &&Item| {
+        let path = d
+            .public_path(it)
+            .map(str::to_string)
+            .unwrap_or_else(|| d.display_name(it));
+        let why = it
+            .api
+            .as_ref()
+            .and_then(|a| a.reasons.first())
+            .map(|r| format!(r#" <span class="dim">{}</span>"#, crate::code::note_html(r)))
+            .unwrap_or_default();
+        // An impl's name already says "impl".
+        let kind = if it.info.kind == Kind::Impl {
+            String::new()
+        } else {
+            format!(r#"<span class="kind">{}</span>"#, it.info.kind.label())
+        };
+        format!(
+            r#"<li>{} {kind}<a data-goto-item="{}"><code>{}</code></a>{why}</li>"#,
+            d.api_badge(it),
+            esc(&it.info.id),
+            crate::review::item_tag(&it.info.id, &path),
+        )
+    };
+    let mut html = String::new();
+    for g in 0..4 {
+        let of: Vec<&&Item> = items.iter().filter(|it| group(it) == g).collect();
+        if of.is_empty() {
+            continue;
+        }
+        // Breaking changes and those to check by hand are all shown.
+        let shown = if g < 2 { of.len() } else { SHOWN_CHANGES };
+        let head: String = of.iter().take(shown).copied().map(line).collect();
+        html.push_str(&format!(r#"<ul class="api-list">{head}</ul>"#));
+        if of.len() > shown {
+            let rest: String = of.iter().skip(shown).copied().map(line).collect();
+            html.push_str(&format!(
+                r#"<details class="api-fold"><summary>{} more</summary><ul class="api-list">{rest}</ul></details>"#,
+                of.len() - shown
+            ));
+        }
+    }
+    html
 }
 
 /// How cargo-semver-checks was run, and what it found that no item shows.
@@ -886,7 +840,7 @@ pub fn render_module_page(app: &App) {
             .map(|it| {
                 // Items of a new module: the module says "new" once.
                 let group = d.item(&it.info.module).and_then(group_status);
-                item_with_members(d, it, m, &filter, false, group)
+                item_with_members(d, it, m, &filter, group)
             })
             .collect();
         if hidden > 0 {

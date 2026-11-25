@@ -24,9 +24,9 @@
   --removed: light-dark(#c4302b, #f06b62);
   --removed-bg: light-dark(#fdecea, #3a1c1b);
   --changed: light-dark(#9a6700, #e3b341);
-  --changed-bg: light-dark(#fff5d6, #3a3116);
+  --changed-bg: light-dark(#fff7df, #3a3116);
   --moved: light-dark(#5b4ec2, #ada2ff);
-  --moved-bg: light-dark(#eeebfa, #29253f);
+  --moved-bg: light-dark(#f2f0fb, #29253f);
   --private: light-dark(#595959, #b4b4bc);
   --highlight: light-dark(#ffe48a, #6b5a12);
   --reviewed: light-dark(#0b7285, #4fc3d6);
@@ -515,11 +515,13 @@ a.card-badge[data-drill]:hover { border-style: solid; }
 .unsafe-why li::marker { content: "⚠ "; }
 .unsafe-why li.gone { color: var(--muted); }
 .unsafe-why li.gone::marker { content: "– "; }
-.breaking-list { margin: 4px 0 12px; padding-left: 20px; font-size: 14px; }
-.breaking-list li { padding: 2px 0; }
-.breaking-list li::marker { color: var(--removed); }
-.breaking-list .kind { margin-right: 6px; }
-.breaking-list a { cursor: pointer; }
+.api-list { margin: 4px 0; padding: 0; list-style: none; font-size: 14px; }
+.api-list li { padding: 3px 0; }
+.api-list .api { margin-right: 6px; }
+.api-list .kind { margin-right: 6px; }
+.api-list a { cursor: pointer; }
+.api-fold { margin: 0 0 4px; font-size: 14px; }
+.api-fold > summary { cursor: pointer; color: var(--link); width: fit-content; }
 .api-allowed { color: var(--muted); border: 1px dashed var(--border); }
 .api-why.api-allowed { border: none; padding: 0 0 0 18px; display: block; cursor: auto; font: 13px var(--sans); color: var(--muted); }
 .ln.mv::before, .ln.mv .sg { color: var(--moved) !important; }
@@ -1072,14 +1074,30 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
   .irow > .iacts .rv-scope, .cg-focus .card-rv .rv-scope { display: none; }
 }
 
-/* Changed call graphs (overview) */
-.cgraph .cg-roots { display: inline-flex; flex-wrap: wrap; gap: 0 4px; font-weight: 600; }
-.cgraph .cg-roots code { font: 600 14px var(--mono); }
-.cgraph > .cg-line, .cgraph > .cg-tree, .cgraph > .cg-fold { grid-column: 1 / -1; }
-.cg-line { font: 13px var(--sans); margin: 2px 0; }
-.cg-tree { list-style: none; margin: 4px 0 2px; padding: 0; font: 13px var(--sans); }
-.cg-tree li { margin: 2px 0; padding-left: calc(var(--depth, 0) * 18px); }
-.cg-tree li .badge, .cg-line .badge { margin-left: 4px; }
-.cg-fold > summary { cursor: pointer; font: 13px var(--sans); color: var(--muted); }
-.cg-fold .cg-tree { margin-top: 2px; }
-.cg-more { color: var(--muted); text-decoration: underline dotted; cursor: help; }
+/* Changed call graphs (overview): one card per graph, its parts
+   labeled on the left (stacked on a phone). */
+.irow.cgraph { padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--border) 55%, transparent); border-radius: 8px; }
+.irow.cgraph + .irow.cgraph { margin-top: 12px; }
+.cgraph .cg-roots { display: inline-flex; flex-wrap: wrap; gap: 0 4px; }
+.cgraph .cg-roots code { font: 600 15px var(--mono); }
+.cgraph .cg-title { font: 600 15px var(--sans); }
+.cgraph > .cg-sub, .cgraph > .cg-facts { grid-column: 1 / -1; }
+.cg-sub { display: flex; flex-wrap: wrap; gap: 4px 12px; font: 13px var(--sans); }
+.cg-facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 16px; margin-top: 6px; font: 13px var(--sans); }
+.cg-extra .cg-facts { display: block; }
+.cg-label { color: var(--muted); padding-top: 1px; }
+.cg-val { min-width: 0; overflow-wrap: anywhere; }
+.cg-bul { margin: 0; padding-left: 18px; }
+.cg-bul li { margin: 2px 0; }
+.cg-extra .cg-bul { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(22em, 100%), 1fr)); column-gap: 32px; }
+/* Calls: one guide line per level of depth. */
+.cg-tree { list-style: none; margin: 0; padding: 0; }
+.cg-tree li { margin: 0; padding: 1px 0 1px calc(var(--depth, 0) * 18px);
+  background: repeating-linear-gradient(to right, transparent 0 5px, color-mix(in srgb, var(--border) 60%, transparent) 5px 6px, transparent 6px 18px) no-repeat 0 0 / calc(var(--depth, 0) * 18px) 100%; }
+.cg-tree li .badge, .cg-bul li .badge, .cg-tree li .api, .cg-bul li .api { margin-left: 4px; }
+.cg-fold { margin-top: 2px; }
+.cg-fold > summary { cursor: pointer; color: var(--link); width: fit-content; }
+@media (max-width: 760px) {
+  .cg-facts { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .cg-label { margin-top: 6px; }
+}

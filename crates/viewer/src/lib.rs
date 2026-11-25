@@ -661,15 +661,10 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         return;
     }
     if let Some(f) = dom::closest(el, "[data-goto-item]") {
-        // An item's row on the overview, e.g. from the list of breaking
-        // changes.
+        // An item on its module page, e.g. from the overview's list of
+        // public API changes.
         let id = dom::data(&f, "goto-item").unwrap_or_default();
-        if let Some(row) = dom::query_all("#view-overview .irow[data-id]")
-            .into_iter()
-            .find(|r| dom::data(r, "id").as_deref() == Some(id.as_str()))
-        {
-            reveal(&row);
-        }
+        show_on_module_page(app, &id);
         return;
     }
     if let Some(f) = dom::closest(el, "[data-goto-file]") {
@@ -717,6 +712,26 @@ pub fn open_item(app: &mut App, id: &str) {
         calls::focus(app, id);
     } else {
         canvas::open(app, id, None, true);
+    }
+}
+
+/// Shows an item's row on its module page (a module: its page), or on the
+/// canvas if that page doesn't list it (an unchanged item).
+pub fn show_on_module_page(app: &mut App, id: &str) {
+    let Some(it) = app.d.item(id) else {
+        return;
+    };
+    app.s.module = app.d.mod_of(it).to_string();
+    // A module: its own page.
+    if it.info.kind == model::Kind::Mod {
+        set_view(app, View::Module);
+        return;
+    }
+    let anchor = nav::Anchor::Item(id.to_string());
+    set_view_at(app, View::Module, Some(anchor.clone()));
+    match anchor_el(View::Module, &anchor) {
+        Some(row) => reveal(&row),
+        None => open_item(app, id),
     }
 }
 
