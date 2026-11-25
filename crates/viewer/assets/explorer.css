@@ -1045,6 +1045,8 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
 .cg-name { font-family: var(--mono); overflow-wrap: anywhere; flex: 1; min-width: 0; }
 .cg-name .kind { font: 12px var(--sans); color: var(--muted); }
 .cg-mod { display: block; font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The unchanged items between a row's item and the focused one. */
+.cg-via { display: block; font: italic 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cg-n { font: 12px var(--mono); color: var(--muted); flex: none; }
 .cg-done { color: var(--added); flex: none; }
 .cg-more { width: 100%; min-height: 44px; border: none; border-radius: 0; background: var(--panel); color: var(--link); font-size: 14px; }

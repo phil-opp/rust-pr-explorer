@@ -3,6 +3,7 @@
 use super::{Group, card_el, visible};
 use crate::code::esc;
 use crate::data::Data;
+use crate::indirect;
 use crate::{App, dom, route};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -650,28 +651,29 @@ fn call_colors(conns: &[Conn], ends: &[Ends], lanes: &[f64]) -> Vec<usize> {
         .collect()
 }
 
-/// Calls from one card to another through one item that has no card, such
+/// Calls from one card to another through items that have no card, such
 /// as a test that calls a changed function through an unchanged helper:
-/// (caller, callee, the items in between, in the caller's call order).
-/// Only where the canvas shows no path of calls between the two cards
-/// otherwise, and only through one item: through two or more, nearly
-/// every card would be connected to every other one.
-fn calls_via<'a>(d: &Data, vis: &[&'a Group]) -> Vec<(&'a Group, &'a Group, Vec<String>)> {
+/// (caller, callee, the paths of items in between, see
+/// [`indirect::reach`]). Only where the canvas shows no path of calls
+/// between the two cards otherwise.
+type CallsVia<'a> = Vec<(&'a Group, &'a Group, Vec<Vec<String>>)>;
+
+fn calls_via<'a>(d: &Data, vis: &[&'a Group]) -> CallsVia<'a> {
     let mut on: HashMap<&str, usize> = HashMap::new();
     for (i, g) in vis.iter().enumerate() {
         on.entry(g.active.as_str()).or_insert(i);
     }
-    let calls = |id: &str| -> Vec<&str> {
+    let calls = |id: &str| -> Vec<String> {
         d.item(id)
-            .map(|it| it.info.calls.iter().map(|c| c.to.as_str()).collect())
+            .map(|it| it.info.calls.iter().map(|c| c.to.clone()).collect())
             .unwrap_or_default()
     };
     let direct: Vec<Vec<usize>> = vis
         .iter()
         .map(|g| {
             calls(&g.active)
-                .into_iter()
-                .filter_map(|to| on.get(to).copied())
+                .iter()
+                .filter_map(|to| on.get(to.as_str()).copied())
                 .collect()
         })
         .collect();
@@ -686,30 +688,12 @@ fn calls_via<'a>(d: &Data, vis: &[&'a Group]) -> Vec<(&'a Group, &'a Group, Vec<
                 }
             }
         }
-        // Callee → the items in between, in call order.
-        let mut via: Vec<(usize, Vec<String>)> = Vec::new();
-        for x in calls(&ga.active) {
-            if on.contains_key(x) || x == ga.active {
-                continue;
-            }
-            for to in calls(x) {
-                let Some(&j) = on.get(to) else { continue };
-                if reached.contains(&j) {
-                    continue;
-                }
-                let k = match via.iter().position(|(v, _)| *v == j) {
-                    Some(k) => k,
-                    None => {
-                        via.push((j, Vec::new()));
-                        via.len() - 1
-                    }
-                };
-                if !via[k].1.iter().any(|v| v == x) {
-                    via[k].1.push(x.to_string());
-                }
+        for r in indirect::reach(&ga.active, calls, |x| on.contains_key(x)) {
+            let j = on[r.to.as_str()];
+            if !reached.contains(&j) {
+                out.push((*ga, vis[j], r.paths));
             }
         }
-        out.extend(via.into_iter().map(|(j, v)| (*ga, vis[j], v)));
     }
     out
 }
@@ -778,19 +762,30 @@ pub fn draw_edges(app: &App) {
             }
         }
     }
-    for (ga, gb, via) in calls_via(d, &vis) {
-        let names: Vec<String> = via.iter().map(|v| d.display_name_of(v)).collect();
+    let mut via_labels: HashMap<(u32, u32), String> = HashMap::new();
+    for (ga, gb, paths) in calls_via(d, &vis) {
+        let names =
+            |p: &[String]| -> Vec<String> { p.iter().map(|v| d.display_name_of(v)).collect() };
+        let all: Vec<String> = paths
+            .iter()
+            .map(|p| indirect::path_label(&names(p)))
+            .collect();
+        let mut label = format!("via {}", all[0]);
+        if all.len() > 1 {
+            label.push_str(&format!(" +{}", all.len() - 1));
+        }
+        via_labels.insert((ga.gid, gb.gid), label);
         add(
             ga,
             gb,
             "call via",
             format!(
-                "{} calls {} via {}, which has no card",
+                "{} calls {} via {}, without a card",
                 d.display_name_of(&ga.active),
                 d.display_name_of(&gb.active),
-                names.join(" and ")
+                all.join(" or via ")
             ),
-            via,
+            paths.into_iter().map(|p| p[0].clone()).collect(),
         );
     }
     for ga in &vis {
@@ -897,10 +892,9 @@ pub fn draw_edges(app: &App) {
     }
     // Labels of calls through items without a card, over the connectors.
     for (i, c) in conns.iter().enumerate() {
-        if let Some(first) = c.via.first() {
+        if let (Some(first), Some(text)) = (c.via.first(), via_labels.get(&(c.a.0, c.b.0))) {
             out.push_str(&via_label(
-                &app.d.display_name_of(first),
-                c.via.len() - 1,
+                text,
                 paths[i].label,
                 colors[i],
                 &c.title,
@@ -930,22 +924,17 @@ pub fn draw_edges(app: &App) {
 /// Approximate width of a character of the labels' font, in pixels.
 const LABEL_CHAR: f64 = 6.6;
 
-/// The label "via `name`" of a call through an item without a card,
-/// centered at `at`. A click opens that item's card next to the caller's.
+/// The label ("via `a` → `b`") of a call through items without a card,
+/// centered at `at`. A click opens the first item's card (`via`) next to
+/// the caller's.
 fn via_label(
-    name: &str,
-    more: usize,
+    text: &str,
     at: (f64, f64),
     color: usize,
     title: &str,
     via: &str,
     from: &str,
 ) -> String {
-    let text = if more > 0 {
-        format!("via {name} +{more}")
-    } else {
-        format!("via {name}")
-    };
     let w = text.chars().count() as f64 * LABEL_CHAR + 12.0;
     let h = 18.0;
     format!(
@@ -957,7 +946,7 @@ fn via_label(
         at.1 - h / 2.0,
         at.0,
         at.1 + 4.0,
-        esc(&text)
+        esc(text)
     )
 }
 
@@ -1304,36 +1293,53 @@ mod tests {
         }
     }
 
-    /// A test that calls a changed function through an unchanged helper
-    /// without a card is connected to it, via the helper. Once the helper
-    /// has a card, or the canvas shows another path, or the path runs
-    /// through two items without a card, it is not.
+    /// A test that calls a changed function through unchanged helpers
+    /// without a card is connected to it, via the helpers: through one or
+    /// two, not three. Once the helper has a card, or the canvas shows
+    /// another path, it is not.
     #[test]
-    fn calls_through_an_item_without_a_card() {
+    fn calls_through_items_without_a_card() {
         let d = data(&[
-            ("test", &["helper", "other", "deep"]),
+            ("test", &["helper", "other", "deep", "deeper2"]),
             ("helper", &["changed", "test"]),
             ("other", &["changed"]),
             ("changed", &[]),
             ("deep", &["deeper"]),
             ("deeper", &["far"]),
             ("far", &[]),
+            ("deeper2", &["d3"]),
+            ("d3", &["d4"]),
+            ("d4", &["farther"]),
+            ("farther", &[]),
         ]);
-        let pairs = |gs: &[Group]| -> Vec<(String, String, Vec<String>)> {
+        let pairs = |gs: &[Group]| -> Vec<(String, String, Vec<Vec<String>>)> {
             let vis: Vec<&Group> = gs.iter().collect();
             calls_via(&d, &vis)
                 .into_iter()
                 .map(|(a, b, v)| (a.active.clone(), b.active.clone(), v))
                 .collect()
         };
-        let both = [group(1, "test"), group(2, "changed"), group(3, "far")];
+        let v = |p: &[&str]| p.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let gs = [
+            group(1, "test"),
+            group(2, "changed"),
+            group(3, "far"),
+            group(4, "farther"),
+        ];
         assert_eq!(
-            pairs(&both),
-            vec![(
-                "test".to_string(),
-                "changed".to_string(),
-                vec!["helper".to_string(), "other".to_string()]
-            )]
+            pairs(&gs),
+            vec![
+                (
+                    "test".to_string(),
+                    "changed".to_string(),
+                    vec![v(&["helper"]), v(&["other"])]
+                ),
+                (
+                    "test".to_string(),
+                    "far".to_string(),
+                    vec![v(&["deep", "deeper"])]
+                ),
+            ]
         );
         // The helper has a card: its own connectors show the path.
         let with_helper = [group(1, "test"), group(2, "changed"), group(3, "helper")];
