@@ -193,7 +193,14 @@ pub fn overview_html(d: &Data, gs: &Graphs) -> String {
 }
 
 fn section_html(d: &Data, gs: &Graphs, s: &Section) -> String {
-    let groups: String = s.groups.iter().map(|g| group_html(d, g)).collect();
+    let mut groups: String = s.groups.iter().map(|g| group_html(d, g)).collect();
+    // With several graphs, the summaries are far above: the section starts
+    // with its graph's summary again.
+    if let Part::Graph(i) = s.part
+        && gs.graphs.len() > 1
+    {
+        groups = crate::graphs::graph_html(d, i, &gs.graphs[i], true) + &groups;
+    }
     let (id, head) = match s.part {
         Part::Graph(i) => (format!("cgitems-{i}"), graph_head(d, i, &gs.graphs[i])),
         part => {

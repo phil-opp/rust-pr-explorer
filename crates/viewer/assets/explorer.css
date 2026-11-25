@@ -1217,6 +1217,7 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
    labeled on the left (stacked on a phone). */
 .irow.cgraph { padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--border) 55%, transparent); border-radius: 8px; }
 .irow.cgraph + .irow.cgraph { margin-top: 12px; }
+.irow.cgraph.cg-again { margin: 12px 0; }
 .cgraph .cg-roots { display: inline-flex; flex-wrap: wrap; gap: 0 4px; }
 .cgraph .cg-roots code { font: 600 15px var(--mono); }
 .cgraph .cg-title { font: 600 15px var(--sans); }
