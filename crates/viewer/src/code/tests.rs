@@ -401,12 +401,14 @@ fn source_diff_follows_the_settings() {
     );
     assert!(
         html.contains(
-            r#"<span class="no o">6</span><span class="ln del" data-t="-">    <span class="wc">b</span>();"#
+            r#"<span class="no o" data-lc="o6">6</span><span class="ln del" data-t="-">    <span class="wc">b</span>();"#
         ),
         "{html}"
     );
     assert!(
-        html.contains(r#"<span class="no n">12</span><span class="ln add" data-t="+">"#),
+        html.contains(
+            r#"<span class="no n" data-lc="n12">12</span><span class="ln add" data-t="+">"#
+        ),
         "{html}"
     );
 }

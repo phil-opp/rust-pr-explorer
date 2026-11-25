@@ -1297,6 +1297,36 @@ impl Data {
             }
             (" uns", crate::unsafety::note_at(&it.unsafe_code, old, no))
         };
+        // The reviewer's comments on chosen lines (see `line_notes`).
+        let lnotes = crate::line_notes::ForItem::new(it);
+        // The lines of a row, as `(base side, number)`, by which line
+        // comments are placed: inline, a removed line by its base number
+        // and any other by the PR's; side by side, both sides of a changed
+        // row.
+        let row_lines = |r: usize| -> Vec<(bool, usize)> {
+            let (o, n) = rows[r];
+            match (o, n) {
+                (Some(a), Some(b)) if split && changed_row(&(o, n)) => {
+                    vec![(true, old_start + a), (false, new_start + b)]
+                }
+                (_, Some(b)) => vec![(false, new_start + b)],
+                (Some(a), None) => vec![(true, old_start + a)],
+                (None, None) => Vec::new(),
+            }
+        };
+        // The `data-lc` attribute of a line's number, and whether a
+        // comment covers it.
+        let lc_attr = |old: bool, line: usize| -> String {
+            format!(
+                r#" data-lc="{}"{}"#,
+                crate::line_notes::key(old, line),
+                if lnotes.covers(old, line) {
+                    " data-lc-on"
+                } else {
+                    ""
+                }
+            )
+        };
         // The PR's review threads under the rows of their lines.
         let threads = self.item_threads(&it.info.id);
         let threads_at = |r: usize| -> Vec<&model::ReviewThread> {
@@ -1328,8 +1358,13 @@ impl Data {
                         let tag = if class == "del" { '-' } else { '+' };
                         let mv = !same && moved(tag, i).is_some();
                         let (un, un_note) = uns(side == "o", start + i);
+                        // An unchanged line is the PR's on both sides.
+                        let lc = match n {
+                            Some(b) if same => lc_attr(false, new_start + b),
+                            _ => lc_attr(side == "o", start + i),
+                        };
                         format!(
-                            r#"<span class="no {side}">{}</span><span class="ln {}{}{un}" data-t="{}">{un_note}{}{}</span>"#,
+                            r#"<span class="no {side}"{lc}>{}</span><span class="ln {}{}{un}" data-t="{}">{un_note}{}{}</span>"#,
                             start + i,
                             if rf && class == "add" && rf_adds(i) {
                                 "add rfa"
@@ -1386,13 +1421,14 @@ impl Data {
                     matches!(tag, '+' | '-') && class != "add rfa" && moved(tag, idx).is_some();
                 let (un, un_note) = uns(tag == '-', no);
                 format!(
-                    r#"<span class="ln {class}{}{un}" data-t="{}" data-no="{no}">{}{un_note}{}{}</span>"#,
+                    r#"<span class="ln {class}{}{un}" data-t="{}" data-no="{no}"{}>{}{un_note}{}{}</span>"#,
                     if mv { " mv" } else { "" },
                     if tag == ' ' {
                         String::new()
                     } else {
                         tag.to_string()
                     },
+                    lc_attr(tag == '-', no),
                     crate::code::gutter(o.map(|a| old_start + a), n.map(|b| new_start + b), tag),
                     if mv {
                         moved_note(tag, idx)
@@ -1406,7 +1442,9 @@ impl Data {
         // One row of the diff, with the threads on its line.
         let row_html = |r: usize| -> String {
             let list = threads_at(r);
-            row_line_html(r) + &crate::threads::row_html(self, &list, split)
+            row_line_html(r)
+                + &crate::threads::row_html(self, &list, split)
+                + &lnotes.boxes_at(self, &row_lines(r))
         };
         // Unchanged lines more than `CONTEXT` rows away from a change are
         // folded: a button in their place shows them. Runs of fewer than
@@ -1425,8 +1463,11 @@ impl Data {
             };
             let near = |i: usize| {
                 in_changed_group(rows[i])
-                    || (i.saturating_sub(CONTEXT)..(i + CONTEXT + 1).min(rows.len()))
-                        .any(|r| changed_row(&rows[r]) || !threads_at(r).is_empty())
+                    || (i.saturating_sub(CONTEXT)..(i + CONTEXT + 1).min(rows.len())).any(|r| {
+                        changed_row(&rows[r])
+                            || !threads_at(r).is_empty()
+                            || row_lines(r).iter().any(|&(o, l)| lnotes.ends_at(o, l))
+                    })
             };
             let mut i = 0;
             while i < rows.len() {
@@ -1505,6 +1546,7 @@ impl Data {
             r = g.end;
         }
         body += &part_html(r..rows.len());
+        body += &lnotes.stale_html(self);
         let code = format!(
             r#"<div class="src-code" data-item="{}">{}{}</div>"#,
             esc(&it.info.id),
