@@ -1478,6 +1478,12 @@ pub fn mark_same_change(d: &Data, id: &str) {
     }
 }
 
+/// The storage key of this PR's marks: which pull request (or local
+/// project) the page is about.
+pub fn key() -> String {
+    REVIEW.with(|r| r.borrow().key.clone())
+}
+
 /// Removes every mark of this PR.
 pub fn clear() {
     REVIEW.with(|r| {
@@ -1490,6 +1496,7 @@ pub fn clear() {
     });
     save();
     crate::line_notes::clear();
+    crate::drafts::clear();
 }
 
 /// Where a unit is in reading order (after every unit if it isn't one).

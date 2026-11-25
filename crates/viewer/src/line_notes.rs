@@ -854,6 +854,21 @@ fn open_editor(app: &crate::App, id: &str, verdict: Option<Verdict>) {
     } else {
         format!(r#"<button data-lc-remove="{}">Remove</button>"#, esc(id))
     };
+    // A comment that isn't saved yet has no id of its own: its draft is
+    // kept by the lines it is on.
+    let draft = if id == NEW {
+        format!(
+            r#" data-rv-draft="{}""#,
+            esc(&format!(
+                "lines:{}:{:?}:{:?}",
+                n.item,
+                n.old.map(|s| s.range()),
+                n.new.map(|s| s.range())
+            ))
+        )
+    } else {
+        String::new()
+    };
     let title = match verdict {
         Verdict::Changes => "Request changes on",
         _ => "Comment on",
@@ -865,7 +880,7 @@ fn open_editor(app: &crate::App, id: &str, verdict: Option<Verdict>) {
             esc(&lines)
         ),
         &format!(
-            r#"<div class="rv-editor" data-rv-for="lc:{}" data-rv-verdict="{}">
+            r#"<div class="rv-editor" data-rv-for="lc:{}"{draft} data-rv-verdict="{}">
 <textarea id="rv-text" rows="6" placeholder="{}">{}</textarea>
 <p class="sub">{at} Markdown works. Ctrl+Enter saves.</p>
 <div class="rv-row">{}{}{remove}<span class="grow"></span><button data-modal-close>Cancel</button></div>
@@ -882,6 +897,7 @@ fn open_editor(app: &crate::App, id: &str, verdict: Option<Verdict>) {
             button(Verdict::Changes, "✗ Request changes"),
         ),
     );
+    crate::drafts::restore_editor();
     if let Some(t) = dom::by_id("rv-text").and_then(|t| t.dyn_into::<web_sys::HtmlElement>().ok()) {
         let _ = t.focus();
     }
@@ -934,6 +950,11 @@ fn remove(app: &mut crate::App, id: &str) {
     let Some(item) = STATE.with(|s| s.borrow().notes.get(id).map(|n| n.item.clone())) else {
         return;
     };
+    // With the comment, a draft of another text for it goes too.
+    if let Some(field) = crate::drafts::editor_field() {
+        crate::drafts::remove(&field);
+    }
+    crate::drafts::remove(&format!("note:lc:{id}"));
     if id == NEW {
         STATE.with(|s| s.borrow_mut().notes.remove(NEW));
     } else {

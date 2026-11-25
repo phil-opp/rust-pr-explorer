@@ -13,6 +13,7 @@ mod commit_filter;
 mod css;
 mod data;
 mod dom;
+mod drafts;
 mod files;
 mod graphs;
 mod icons;
@@ -502,7 +503,12 @@ fn install_listeners() {
         });
     });
     dom::listen(&doc, "input", |ev| {
-        if dom::target_element(&ev).is_some_and(|el| el.id() == "rv-body") {
+        let Some(el) = dom::target_element(&ev) else {
+            return;
+        };
+        // A dialog can close before its text is saved (see `drafts`).
+        drafts::on_input(&el);
+        if el.id() == "rv-body" {
             with_app(|app| update_finish(app));
         }
     });
@@ -907,6 +913,10 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
         }
         return true;
     }
+    if dom::closest(el, "[data-rv-draft-discard]").is_some() {
+        drafts::discard_editor();
+        return true;
+    }
     if let Some(b) = dom::closest(el, "[data-rv-save]") {
         let verdict = dom::data(&b, "rv-save").and_then(|v| review::Verdict::from_name(&v));
         if let Some(v) = verdict {
@@ -920,6 +930,8 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
     }
     if dom::closest(el, "#rv-finish").is_some() {
         open_modal("Finish your review", &post::finish_html(&app.d));
+        drafts::restore_summary();
+        update_finish(app);
         return true;
     }
     if dom::closest(el, "#rv-mode, #rv-exit").is_some() {
@@ -1198,6 +1210,7 @@ fn open_editor(app: &App, id: &str, verdict: review::Verdict) {
         ),
         &post::editor_html(&app.d, id, verdict),
     );
+    drafts::restore_editor();
     if let Some(t) = dom::by_id("rv-text").and_then(|t| t.dyn_into::<web_sys::HtmlElement>().ok()) {
         let _ = t.focus();
     }
@@ -1219,6 +1232,9 @@ fn save_from_editor(app: &mut App, verdict: review::Verdict) {
     if verdict != review::Verdict::Approve && text.trim().is_empty() {
         toast("Write a comment first.");
         return;
+    }
+    if let Some(field) = drafts::editor_field() {
+        drafts::remove(&field);
     }
     close_modal();
     if let Some(id) = line_notes::editor_id(&id) {
