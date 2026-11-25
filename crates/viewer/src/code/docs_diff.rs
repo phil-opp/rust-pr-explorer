@@ -463,79 +463,174 @@ pub fn docs_compare_html(d: &Data, it: &model::Item) -> String {
     )
 }
 
-/// Two versions of a changed line of highlighted code, with the text that
-/// differs between them wrapped in `<span class="wc">`. Only the text is
-/// compared, not the highlighting or links around it, and a change of
-/// whitespace alone isn't marked. `None` if less than half of the shorter
-/// line remains, where marking words wouldn't help.
-pub fn mark_changed_tokens(old: &str, new: &str) -> Option<(String, String)> {
+/// A block of changed lines of highlighted code (removed lines and the
+/// added lines that replace them) with the text that differs between the
+/// two sides wrapped in `<span class="wc">`. The lines of a side are
+/// compared as one text, so words that only moved to another line, as in
+/// a rewrapped comment, aren't marked, and lines that are all new are
+/// marked whole. A line's indentation and comment marker (`//`, `///`,
+/// `//!` or `#`) count as a line break and are marked only if no line of
+/// the other side has the same marker. Only the text is compared, not the
+/// highlighting or links around it, and a change of whitespace alone isn't
+/// marked. `None` if less than half of the shorter side remains, where
+/// marking words wouldn't help, and for blocks too long to compare.
+pub fn mark_changed_lines(old: &[String], new: &[String]) -> Option<(Vec<String>, Vec<String>)> {
     use similar::{Algorithm, DiffOp, capture_diff_slices};
-    let (a, b) = (html_tokens(old), html_tokens(new));
-    // Positions of the text tokens, and what they are compared by.
-    let text = |toks: &[&str]| -> (Vec<usize>, Vec<String>) {
-        toks.iter()
-            .enumerate()
-            .filter(|(_, t)| !is_tag(t))
-            .map(|(i, t)| {
-                let key = if t.trim().is_empty() { " " } else { t };
-                (i, key.to_string())
-            })
-            .unzip()
-    };
-    let ((ia, ka), (ib, kb)) = (text(&a), text(&b));
-    let mut changed_a = vec![false; a.len()];
-    let mut changed_b = vec![false; b.len()];
-    let mut same = 0;
-    for op in capture_diff_slices(Algorithm::Myers, &ka, &kb) {
-        if let DiffOp::Equal { new_index, len, .. } = op {
-            same += ib[new_index..new_index + len]
-                .iter()
-                .filter(|&&i| is_text(b[i]))
-                .count();
-            continue;
-        }
-        for &i in &ia[op.old_range()] {
-            changed_a[i] = is_text(a[i]);
-        }
-        for &i in &ib[op.new_range()] {
-            changed_b[i] = is_text(b[i]);
-        }
-    }
-    let words = |toks: &[&str]| toks.iter().filter(|t| is_text(t)).count();
-    if same * 2 < words(&a).min(words(&b)) {
+    let a: Vec<Vec<&str>> = old.iter().map(|l| html_tokens(l)).collect();
+    let b: Vec<Vec<&str>> = new.iter().map(|l| html_tokens(l)).collect();
+    let (ta, tb) = (Text::of(&a), Text::of(&b));
+    if ta.keys.len().max(tb.keys.len()) > MAX_COMPARED_TOKENS {
         return None;
     }
-    // Marks runs of changed text; whitespace between two changed tokens
-    // of a run belongs to it.
-    let render = |toks: &[&str], changed: &[bool]| -> String {
-        let mut out = String::new();
-        let mut open = false;
-        for (k, t) in toks.iter().enumerate() {
-            let inner_ws = !is_tag(t)
-                && !is_text(t)
-                && open
-                && toks[k + 1..]
-                    .iter()
-                    .zip(&changed[k + 1..])
-                    .find(|(t, _)| is_tag(t) || is_text(t))
-                    .is_some_and(|(t, &c)| !is_tag(t) && c);
-            let mark = changed[k] || inner_ws;
-            if open && !mark {
-                out.push_str("</span>");
-                open = false;
-            }
-            if mark && !open {
-                out.push_str(r#"<span class="wc">"#);
-                open = true;
-            }
-            out.push_str(t);
+    let mut changed_a: Vec<Vec<bool>> = a.iter().map(|l| vec![false; l.len()]).collect();
+    let mut changed_b: Vec<Vec<bool>> = b.iter().map(|l| vec![false; l.len()]).collect();
+    // Marks the text tokens of a key; a line break only if its marker
+    // isn't on the other side.
+    let mark = |changed: &mut [Vec<bool>], toks: &[Vec<&str>], t: &Text, other: &Text, k: usize| {
+        if t.breaks[k] && other.has_break(&t.keys[k]) {
+            return;
         }
-        if open {
-            out.push_str("</span>");
+        for &(l, i) in &t.pos[k] {
+            changed[l][i] = is_text(toks[l][i]);
         }
-        out
+    };
+    let mut same = 0;
+    for op in capture_diff_slices(Algorithm::Myers, &ta.keys, &tb.keys) {
+        if let DiffOp::Equal { new_index, len, .. } = op {
+            same += (new_index..new_index + len).filter(|&k| tb.word(k)).count();
+            continue;
+        }
+        for k in op.old_range() {
+            mark(&mut changed_a, &a, &ta, &tb, k);
+        }
+        for k in op.new_range() {
+            mark(&mut changed_b, &b, &tb, &ta, k);
+        }
+    }
+    if same * 2 < ta.words().min(tb.words()) {
+        return None;
+    }
+    let render = |toks: &[Vec<&str>], changed: &[Vec<bool>]| -> Vec<String> {
+        toks.iter()
+            .zip(changed)
+            .map(|(t, c)| render_marked(t, c))
+            .collect()
     };
     Some((render(&a, &changed_a), render(&b, &changed_b)))
+}
+
+/// The most tokens a side of `mark_changed_lines` compares, which keeps the
+/// diff fast (a long paragraph has a few hundred).
+const MAX_COMPARED_TOKENS: usize = 5000;
+
+/// The text of lines of highlighted code, as `mark_changed_lines` compares
+/// it: the keys it is compared by, and for each key, the tokens it stands
+/// for (by line and position) and whether it is a line break.
+struct Text {
+    keys: Vec<String>,
+    pos: Vec<Vec<(usize, usize)>>,
+    breaks: Vec<bool>,
+}
+
+impl Text {
+    fn of(lines: &[Vec<&str>]) -> Text {
+        let mut t = Text {
+            keys: Vec::new(),
+            pos: Vec::new(),
+            breaks: Vec::new(),
+        };
+        for (l, toks) in lines.iter().enumerate() {
+            let text: Vec<usize> = (0..toks.len()).filter(|&i| !is_tag(toks[i])).collect();
+            // Each line starts with a line break: its indentation and
+            // comment marker.
+            let marker = comment_marker(&text.iter().map(|&i| toks[i]).collect::<Vec<_>>());
+            let key: String = text[..marker].iter().map(|&i| toks[i].trim()).collect();
+            t.keys.push(format!("\n{key}"));
+            t.pos.push(text[..marker].iter().map(|&i| (l, i)).collect());
+            t.breaks.push(true);
+            for &i in &text[marker..] {
+                let key = if toks[i].trim().is_empty() {
+                    " "
+                } else {
+                    toks[i]
+                };
+                t.keys.push(key.to_string());
+                t.pos.push(vec![(l, i)]);
+                t.breaks.push(false);
+            }
+        }
+        t
+    }
+
+    /// Whether some line break has the given key.
+    fn has_break(&self, key: &str) -> bool {
+        self.keys
+            .iter()
+            .zip(&self.breaks)
+            .any(|(k, &b)| b && k == key)
+    }
+
+    /// Whether the `k`th key is a word or other visible text (not
+    /// whitespace or a line break).
+    fn word(&self, k: usize) -> bool {
+        !self.breaks[k] && self.keys[k] != " "
+    }
+
+    fn words(&self) -> usize {
+        (0..self.keys.len()).filter(|&k| self.word(k)).count()
+    }
+}
+
+/// How many of a line's text tokens are its indentation and comment
+/// marker (`//`, `///`, `//!` or `#`) with the whitespace after it.
+fn comment_marker(text: &[&str]) -> usize {
+    let ws = |from: usize| {
+        from + text[from..]
+            .iter()
+            .take_while(|t| t.trim().is_empty())
+            .count()
+    };
+    let start = ws(0);
+    let rest = &text[start..];
+    let len = match rest {
+        ["/", "/", "/" | "!", ..] => 3,
+        ["/", "/", ..] => 2,
+        ["#", next, ..] if next.trim().is_empty() => 1,
+        ["#"] => 1,
+        _ => return start,
+    };
+    ws(start + len)
+}
+
+/// Tokens of a line with the changed ones marked as runs; whitespace
+/// between two changed tokens of a run belongs to it.
+fn render_marked(toks: &[&str], changed: &[bool]) -> String {
+    let mut out = String::new();
+    let mut open = false;
+    for (k, t) in toks.iter().enumerate() {
+        let inner_ws = !is_tag(t)
+            && !is_text(t)
+            && open
+            && toks[k + 1..]
+                .iter()
+                .zip(&changed[k + 1..])
+                .find(|(t, _)| is_tag(t) || is_text(t))
+                .is_some_and(|(t, &c)| !is_tag(t) && c);
+        let mark = changed[k] || inner_ws;
+        if open && !mark {
+            out.push_str("</span>");
+            open = false;
+        }
+        if mark && !open {
+            out.push_str(r#"<span class="wc">"#);
+            open = true;
+        }
+        out.push_str(t);
+    }
+    if open {
+        out.push_str("</span>");
+    }
+    out
 }
 
 /// A line's highlighted HTML with the characters `added` (ranges of its

@@ -5,7 +5,7 @@
 //! macro calls and `extern` blocks as parts, and the remaining lines.
 
 use crate::code::{
-    Links, Seg, code_html, esc, mark_changed_tokens, markdown_diff_segs, markdown_file_html,
+    Links, Seg, code_html, esc, mark_changed_lines, markdown_diff_segs, markdown_file_html,
     marked_html, sig_diff_html,
 };
 use crate::css;
@@ -107,18 +107,18 @@ pub fn diff_html(d: &Data, lines: &[SourceLine], lang: &str, opts: &Diff) -> Str
             _ => esc(&l.1),
         });
     }
-    // Removed lines directly followed by added ones pair up (the first
-    // with the first, and so on) and get their changed words marked.
+    // Removed lines directly followed by added ones get their changed
+    // words marked, compared as a block.
     let mut i = 0;
     while i < lines.len() {
         let dels = lines[i..].iter().take_while(|l| l.0 == '-').count();
         let adds = lines[i + dels..].iter().take_while(|l| l.0 == '+').count();
-        for k in 0..dels.min(adds) {
-            let (o, n) = (i + k, i + dels + k);
-            if let Some((a, b)) = mark_changed_tokens(&codes[o], &codes[n]) {
-                codes[o] = a;
-                codes[n] = b;
-            }
+        if dels > 0
+            && adds > 0
+            && let Some((a, b)) =
+                mark_changed_lines(&codes[i..i + dels], &codes[i + dels..i + dels + adds])
+        {
+            codes.splice(i..i + dels + adds, a.into_iter().chain(b));
         }
         i += (dels + adds).max(1);
     }
