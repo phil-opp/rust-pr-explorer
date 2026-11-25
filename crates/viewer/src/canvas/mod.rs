@@ -25,7 +25,7 @@ pub use events::{
 };
 pub use layout::{show_impact, show_items, show_module_graph};
 pub use open::{open, open_for_review};
-pub use undo::{after_change, before_change, undo};
+pub use undo::{Saved, after_change, before_change, restore, save, undo};
 
 use card::card_html;
 

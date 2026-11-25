@@ -9,6 +9,7 @@ use super::{
 };
 use crate::data::within;
 use crate::{App, View, dom, toast};
+use wasm_bindgen::JsCast;
 use web_sys::{Element, PointerEvent, WheelEvent};
 
 /// How long a finger rests on a card's header before the card follows it.
@@ -199,8 +200,10 @@ pub fn on_pointer_down(app: &mut App, el: &Element, ev: &PointerEvent) -> bool {
             Some(gid) if handle && !control => Some(Lift::Card(gid)),
             // On a touch screen, a finger on the rest of a card (its code,
             // a button) pans the view; with a mouse, that selects text or
-            // clicks.
+            // clicks, except next to code (after the end of a line, on the
+            // line numbers), which pans the view like the background.
             _ if ev.pointer_type() == "touch" => None,
+            _ if beside_code(el, x, y) => None,
             _ => return false,
         }
     } else {
@@ -231,9 +234,103 @@ pub fn on_pointer_down(app: &mut App, el: &Element, ev: &PointerEvent) -> bool {
             ev.prevent_default();
             start_lift(c, &d, what, x, y);
         }
-        None => start_pan(c, x, y),
+        None => {
+            // Not a text selection.
+            ev.prevent_default();
+            start_pan(c, x, y);
+            // As with a finger: a mostly sideways drag on code that is
+            // wider than its card scrolls the code.
+            c.sideways = sideways_box(el).map(|b| {
+                let left = b.scroll_left() as f64;
+                (b, left, None)
+            });
+        }
     }
     true
+}
+
+/// The code block (signature, source, side-by-side diff) around `el` in a
+/// card, if `el` is one of its lines or line numbers, or the block itself.
+fn code_block(el: &Element) -> Option<Element> {
+    let block = dom::closest(el, "#cards pre, #cards .sig, #cards .sbs")?;
+    let on_line =
+        el == &block || dom::closest(el, ".ln, .no").is_some_and(|l| block.contains(Some(&l)));
+    // Not on what is clickable in a block: links, unfold rows, review bars.
+    let control = dom::closest(el, "a, button, [data-unfold], .hunk-rv").is_some();
+    (on_line && !control).then_some(block)
+}
+
+/// Whether the pointer at `x`, `y` is on a code block's empty space or line
+/// numbers rather than on its text.
+fn beside_code(el: &Element, x: f64, y: f64) -> bool {
+    let Some(block) = code_block(el) else {
+        return false;
+    };
+    let line = dom::closest(el, ".ln").unwrap_or(block);
+    !text_at(&line, x, y)
+}
+
+/// Whether text of `el` (not its line numbers or sign) is at `x`, `y`,
+/// give or take a few pixels.
+fn text_at(el: &Element, x: f64, y: f64) -> bool {
+    const SLACK: f64 = 3.0;
+    let doc = dom::document();
+    let Ok(range) = doc.create_range() else {
+        return true;
+    };
+    let mut stack: Vec<web_sys::Node> = vec![el.clone().into()];
+    while let Some(n) = stack.pop() {
+        if n.node_type() == web_sys::Node::TEXT_NODE {
+            if range.select_node_contents(&n).is_err() {
+                continue;
+            }
+            let Some(rects) = range.get_client_rects() else {
+                continue;
+            };
+            for i in 0..rects.length() {
+                if let Some(r) = rects.get(i)
+                    && x >= r.left() - SLACK
+                    && x <= r.right() + SLACK
+                    && y >= r.top()
+                    && y <= r.bottom()
+                {
+                    return true;
+                }
+            }
+            continue;
+        }
+        if let Some(e) = n.dyn_ref::<Element>()
+            && e.matches(".lno, .sg").unwrap_or(false)
+        {
+            continue;
+        }
+        let kids = n.child_nodes();
+        for i in 0..kids.length() {
+            stack.extend(kids.get(i));
+        }
+    }
+    false
+}
+
+/// With a mouse over a code block: the cursor shows whether a press there
+/// selects text or moves the view.
+fn hover_code(el: &Element, x: f64, y: f64) {
+    thread_local! {
+        static SPOT: std::cell::RefCell<Option<Element>> = const { std::cell::RefCell::new(None) };
+    }
+    let block = code_block(el).filter(|_| beside_code(el, x, y));
+    SPOT.with(|s| {
+        let mut s = s.borrow_mut();
+        if *s != block {
+            if let Some(old) = s.take() {
+                dom::toggle_class(&old, "pan-spot", false);
+            }
+            if let Some(b) = &block {
+                dom::toggle_class(b, "pan-spot", true);
+            }
+            *s = block;
+        }
+    });
 }
 
 /// The box around `el` inside its card that is wider than it shows (code,
@@ -458,7 +555,14 @@ pub fn on_pointer_move(app: &mut App, ev: &PointerEvent) {
             c.pan.k = k;
             apply_pan(c);
         }
-        None => {}
+        None => {
+            if ev.pointer_type() == "mouse"
+                && ev.buttons() == 0
+                && let Some(el) = dom::target_element(ev)
+            {
+                hover_code(&el, x, y);
+            }
+        }
     }
 }
 
