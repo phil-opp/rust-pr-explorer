@@ -218,14 +218,8 @@ pub fn diff_html(d: &Data, lines: &[SourceLine], lang: &str, opts: &Diff) -> Str
     }
 }
 
-/// How many entries of a section must share the same change before
-/// they are shown as one row, such as a release bumping the version of
-/// every workspace dependency.
-const MANIFEST_GROUP_MIN: usize = 3;
-
-/// A changed entry's change, for grouping entries that changed the same
-/// way: its changed keys if it is a table on both sides, else its whole
-/// value as one line with an empty key.
+/// A changed entry's lines: one per changed key if it is a table on both
+/// sides, else its whole value as one line with an empty key.
 fn manifest_lines(e: &ManifestChange) -> Vec<ManifestKeyChange> {
     if e.keys.is_empty() {
         vec![ManifestKeyChange {
@@ -249,55 +243,22 @@ fn manifest_html(entries: &[ManifestChange]) -> String {
             r#"<tr><th colspan="3" class="mf-sec">[{}]</th></tr>"#,
             esc(section)
         ));
-        // Changed entries grouped by their change, in the order of each
-        // group's first entry; added and removed ones stay on their own.
-        let mut groups: Vec<(Vec<ManifestKeyChange>, Vec<&ManifestChange>)> = Vec::new();
         for e in list {
-            let lines = manifest_lines(e);
-            let changed = e.old.is_some() && e.new.is_some();
-            match groups.iter_mut().find(|g| changed && g.0 == lines) {
-                Some(g) => g.1.push(e),
-                None => groups.push((lines, vec![e])),
-            }
-        }
-        for (lines, members) in groups {
-            if members.len() >= MANIFEST_GROUP_MIN {
-                let noun = if section.ends_with("dependencies") {
-                    "dependencies"
-                } else if section == "features" {
-                    "features"
-                } else {
-                    "entries"
-                };
-                let names: String = members
-                    .iter()
-                    .map(|e| format!("<code>{}</code>", esc(&e.name)))
-                    .collect();
-                let name = format!(
-                    r#"<details class="mf-names"><summary>{} {noun}</summary>{names}</details>"#,
-                    members.len()
-                );
-                html.push_str(&manifest_rows("m-chg mf-group", "changed", &name, &lines));
-                continue;
-            }
-            for e in members {
-                let (class, what) = match (&e.old, &e.new) {
-                    (None, Some(_)) => ("m-add", "added"),
-                    (Some(_), None) => ("m-del", "removed"),
-                    _ => ("m-chg", "changed"),
-                };
-                let name = format!("<code>{}</code>", esc(&e.name));
-                html.push_str(&manifest_rows(class, what, &name, &lines));
-            }
+            let (class, what) = match (&e.old, &e.new) {
+                (None, Some(_)) => ("m-add", "added"),
+                (Some(_), None) => ("m-del", "removed"),
+                _ => ("m-chg", "changed"),
+            };
+            let name = format!("<code>{}</code>", esc(&e.name));
+            html.push_str(&manifest_rows(class, what, &name, &manifest_lines(e)));
         }
     }
     html.push_str("</table>");
     html
 }
 
-/// The rows of one entry, or of a group of entries that changed the same
-/// way: one row per changed key (or one for the whole value), with the
-/// name spanning them.
+/// The rows of one entry: one per changed key (or one for the whole
+/// value), with the name spanning them.
 fn manifest_rows(class: &str, what: &str, name: &str, lines: &[ManifestKeyChange]) -> String {
     lines
         .iter()
@@ -1666,29 +1627,23 @@ mod tests {
     }
 
     #[test]
-    fn manifest_entries_changed_the_same_way_share_a_row() {
-        let bump = |name: &str, path: &str| ManifestChange {
+    fn manifest_table_entries_show_their_changed_keys() {
+        let bump = |name: &str| ManifestChange {
             section: "workspace.dependencies".into(),
             name: name.into(),
-            old: Some(format!("{{ path = \"{path}\", version = \"=1.1.0\" }}")),
-            new: Some(format!("{{ path = \"{path}\", version = \"=1.2.0\" }}")),
+            old: Some(format!("{{ path = \"{name}\", version = \"=1.1.0\" }}")),
+            new: Some(format!("{{ path = \"{name}\", version = \"=1.2.0\" }}")),
             keys: vec![ManifestKeyChange {
                 key: "version".into(),
                 old: Some("\"=1.1.0\"".into()),
                 new: Some("\"=1.2.0\"".into()),
             }],
         };
-        let mut list = vec![bump("a", "a"), bump("b", "b"), bump("c", "c")];
-        let html = manifest_html(&list);
-        assert_eq!(html.matches("<tr class=").count(), 1);
-        assert!(html.contains("<summary>3 dependencies</summary>"));
+        let html = manifest_html(&[bump("a"), bump("b"), bump("c")]);
+        // Each entry keeps its own row and name.
+        assert_eq!(html.matches("<tr class=\"m-chg\"").count(), 3);
+        assert!(html.contains("<code>b</code>"));
         assert!(html.contains("version = </span>&quot;=1.2.0&quot;"));
-        assert!(!html.contains("path ="));
-        // Two are listed one by one, still by their changed key only.
-        list.pop();
-        let html = manifest_html(&list);
-        assert_eq!(html.matches("<tr class=\"m-chg\"").count(), 2);
-        assert!(!html.contains("<details"));
         assert!(!html.contains("path ="));
     }
 
