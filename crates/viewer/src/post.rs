@@ -1010,7 +1010,11 @@ fn shell_safe(json: &str) -> String {
 /// GitHub refuses it, by changing the event on its first line (see
 /// `pretty`). An approval's text starts with "Approved." for that case
 /// (see `body`), since adding it here would need a `\n` in the command,
-/// which fish reads differently from bash inside single quotes.
+/// which fish reads differently from bash inside single quotes. The
+/// first attempt's output is kept back until it succeeds: on an error,
+/// `gh` prints GitHub's answer on stdout and its own message on stderr,
+/// which would look like a failure although the comment review is then
+/// posted. If that fails too, its error shows.
 pub fn command(
     d: &Data,
     comments: &[Comment],
@@ -1030,8 +1034,8 @@ pub fn command(
         format!(
             "printf '%s' '{json}' | sh -c 'review=$(cat)
 post() {{ {post}; }}
-printf %s \"$review\" | post ||
-  printf %s \"$review\" | sed 2s/APPROVE/COMMENT/ | post'"
+if link=$(printf %s \"$review\" | post 2>/dev/null); then echo \"$link\"; else
+  printf %s \"$review\" | sed 2s/APPROVE/COMMENT/ | post; fi'"
         )
     } else {
         format!("printf '%s' '{json}' | {post}")
@@ -1807,7 +1811,7 @@ mod tests {
         assert_eq!(c.matches("it\\u0027s").count(), 1);
         assert!(c.starts_with("printf '%s' '{\n  \"event\": \"APPROVE\",\n"));
         assert!(c.ends_with(&format!(
-            "}}' | sh -c 'review=$(cat)\npost() {{ {post}; }}\nprintf %s \"$review\" | post ||\n  printf %s \"$review\" | sed 2s/APPROVE/COMMENT/ | post'"
+            "}}' | sh -c 'review=$(cat)\npost() {{ {post}; }}\nif link=$(printf %s \"$review\" | post 2>/dev/null); then echo \"$link\"; else\n  printf %s \"$review\" | sed 2s/APPROVE/COMMENT/ | post; fi'"
         )));
     }
 
