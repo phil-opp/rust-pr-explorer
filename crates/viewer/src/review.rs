@@ -2166,6 +2166,45 @@ mod tests {
     }
 
     #[test]
+    fn next_on_the_canvas_skips_reviewed_cards() {
+        use crate::CanvasNext;
+        let mut out = data().out;
+        call(&mut out, "c::root_fn", "c::a::new_fn", "10:30");
+        let d = Data::new(out);
+        set(&d, &[]);
+        fn done<'a>(ids: &[&'a str]) -> Vec<(&'a str, u64)> {
+            ids.iter().map(|id| (*id, print_of(id))).collect()
+        }
+        let cards =
+            |ids: &[&str]| -> HashSet<String> { ids.iter().map(|id| id.to_string()).collect() };
+        let next = |on: &[&str], from: &str| crate::canvas_next(&d, &cards(on), Some(from));
+        // Another card still needs a review: Next goes there.
+        assert_eq!(
+            next(&["c::root_fn", "c::b::late"], "c::root_fn"),
+            CanvasNext::Card("c::b::late".into())
+        );
+        // `root_fn` is approved and the only card. Next must not go back
+        // to it, but on to `new_fn`, which it calls.
+        set(&d, &done(&["c::root_fn"]));
+        assert_eq!(
+            next(&["c::root_fn"], "c::root_fn"),
+            CanvasNext::Add("c::a::new_fn".into())
+        );
+        // Once `new_fn` is approved too, the next item isn't connected to
+        // the cards: a new canvas.
+        set(&d, &done(&["c::root_fn", "c::a::new_fn"]));
+        assert_eq!(
+            next(&["c::root_fn", "c::a::new_fn"], "c::a::new_fn"),
+            CanvasNext::NewCanvas("c::b::early".into())
+        );
+        let all: Vec<String> = REVIEW.with(|r| r.borrow().order.clone());
+        let all: Vec<&str> = all.iter().map(String::as_str).collect();
+        set(&d, &done(&all));
+        assert_eq!(next(&["c::root_fn"], "c::root_fn"), CanvasNext::Done);
+        REVIEW.with(|r| *r.borrow_mut() = Review::default());
+    }
+
+    #[test]
     fn types_come_after_the_functions_that_use_them() {
         // In the file, the types and their impls come before `run`, which
         // calls `S::new`, which uses `S` and constructs `Inner`.
