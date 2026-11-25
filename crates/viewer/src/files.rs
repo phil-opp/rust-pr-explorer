@@ -326,6 +326,8 @@ fn parts_html(d: &Data, path: &str, list: &[PartChange], lang: &str) -> String {
             let (sig_bar, sig_class) = match c.status {
                 Status::Added | Status::Removed => ("", ""),
                 _ if c.old_sig.is_some() => ("m-chg", ""),
+                // Faded beside a change, like a Rust item's signature.
+                Status::Changed => ("", "m-ref faded"),
                 _ => ("", "m-ref"),
             };
             let mut segs = Vec::new();

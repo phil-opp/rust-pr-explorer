@@ -487,6 +487,47 @@ fn an_added_item_has_no_part_markers() {
 }
 
 #[test]
+fn unchanged_parts_of_a_changed_item_are_faded() {
+    use model::{Item, Status};
+    let mut out = empty().out;
+    for (id, status, signature) in [
+        ("c::body", Status::Changed, false),
+        ("c::sig", Status::Changed, true),
+        ("c::same", Status::Unchanged, false),
+        ("c::new", Status::Added, false),
+    ] {
+        let mut it = Item {
+            status,
+            ..Default::default()
+        };
+        it.changes.body = status == Status::Changed;
+        it.changes.signature = signature;
+        it.info.id = id.into();
+        it.info.kind = model::Kind::Fn;
+        it.info.module = "c".into();
+        it.info.sig = format!("pub fn {id}()");
+        it.old_sig = signature.then(|| "pub fn f(x: u8)".into());
+        it.info.docs = "Does things.".into();
+        out.items.insert(it.info.id.clone(), it);
+    }
+    let d = Data::new(out);
+    let html = |id| d.item_body_html(d.item(id).unwrap(), "c", true, None);
+    // Only the body changed: the signature and docs are faded.
+    let body = html("c::body");
+    assert!(body.contains(r#"class="sigbox m-ref faded""#), "{body}");
+    assert!(body.contains(r#"class="docs faded""#), "{body}");
+    // A changed signature is not, unchanged docs beside it are.
+    let sig = html("c::sig");
+    assert!(sig.contains(r#"<div class="sigbox ""#), "{sig}");
+    assert!(sig.contains(r#"class="docs faded""#), "{sig}");
+    // Nothing is faded on unchanged and new items.
+    for id in ["c::same", "c::new"] {
+        let h = html(id);
+        assert!(!h.contains("faded"), "{h}");
+    }
+}
+
+#[test]
 fn small_body_changes_start_open() {
     use model::{Item, SourceLine, Status};
     let d = empty();
