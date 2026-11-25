@@ -1094,6 +1094,20 @@ pub fn fallback_html(comments: &[Comment]) -> String {
     r#"<details class="rv-fallback"><summary>If GitHub refuses a comment's line</summary><p class="sub">This can happen where GitHub's diff differs from this page's. Then nothing is posted, since GitHub takes a review whole or not at all. This command posts the review with every comment in its text instead, linked to its lines.</p><div class="rv-row"><button data-rv-out="cmd-text">Copy command</button></div></details>"#.to_string()
 }
 
+/// For a review without comments, a link to the PR, at the top of the
+/// dialog: an approval or a short comment is often quicker to post there
+/// than with the command.
+fn quick_html(d: &Data, comments: &[Comment]) -> String {
+    match &d.out.meta.pr {
+        Some(pr) if comments.is_empty() => format!(
+            r#"<div class="rv-quick"><a class="rv-btn" href="https://github.com/{}/pull/{}" target="_blank" rel="noopener">Open the PR on GitHub</a><p class="sub">Without comments, approving or a short comment there is often quicker. Nothing is posted from here then, so your review marks aren't saved with a review, and the pages of later Rust Semantic Review comments can't load them.</p></div>"#,
+            esc(&pr.repo),
+            pr.number
+        ),
+        _ => String::new(),
+    }
+}
+
 /// The dialog that sums up the review and offers ways to post it.
 pub fn finish_html(d: &Data) -> String {
     let s = summary(d);
@@ -1217,7 +1231,7 @@ pub fn finish_html(d: &Data) -> String {
     };
     format!(
         r#"<div class="rv-finish">
-<p>{facts}.</p>{notes}
+<p>{facts}.</p>{notes}{quick}
 <h4>Overall verdict</h4>
 {r_comment}{r_approve}{r_changes}
 <h4>Summary</h4>
@@ -1232,6 +1246,7 @@ pub fn finish_html(d: &Data) -> String {
 </div>
 </div>
 </div>"#,
+        quick = quick_html(d, &s.comments),
         outs = if d.out.meta.pr.is_some() {
             r#" class="rv-outs""#
         } else {
@@ -1902,6 +1917,32 @@ mod tests {
         assert!(!s.contains("\\\\"));
         assert!(!s.contains("\\'"));
         assert_eq!(serde_json::from_str::<Value>(&s).unwrap(), v);
+    }
+
+    #[test]
+    fn links_to_the_pr_without_comments() {
+        let d = |pr: Option<PrMeta>| {
+            Data::new(Output {
+                meta: model::Meta {
+                    pr,
+                    ..Default::default()
+                },
+                crates: Vec::new(),
+                items: Default::default(),
+                files: Vec::new(),
+                externals: Default::default(),
+                warnings: Vec::new(),
+                semver_checks: None,
+            })
+        };
+        let pr = d(Some(PrMeta {
+            repo: "o/r".into(),
+            number: 7,
+            ..Default::default()
+        }));
+        assert!(quick_html(&pr, &[]).contains(r#"href="https://github.com/o/r/pull/7""#));
+        assert_eq!(quick_html(&pr, &[comment("x", None)]), "");
+        assert_eq!(quick_html(&d(None), &[]), "");
     }
 
     #[test]
