@@ -193,10 +193,18 @@ fn choose_route(a: Rect, b: Rect, site_y: Option<f64>) -> Route {
         Route::Ortho(Side::Right, Side::Left)
     } else if b.x + b.w <= a.x - MIN_GAP {
         Route::Ortho(Side::Left, Side::Right)
-    } else if site_y.is_some() && (b.y >= a.y + a.h + MIN_GAP || b.y + b.h <= a.y - MIN_GAP) {
-        // Above or below the caller, in its column: out of the caller's
-        // right side level with the call, down (or up) beside the cards,
-        // and into the right side of the callee.
+    } else if site_y.is_some() && b.x >= a.x + a.w {
+        // Closer than `MIN_GAP`, but still beside each other: a call site
+        // has to leave from the side.
+        Route::Ortho(Side::Right, Side::Left)
+    } else if site_y.is_some() && b.x + b.w <= a.x {
+        Route::Ortho(Side::Left, Side::Right)
+    } else if site_y.is_some() && (b.y >= a.y + a.h || b.y + b.h <= a.y) {
+        // Above or below the caller, in its column, however close: out of
+        // the caller's right side level with the call, down (or up) beside
+        // the cards, and into the right side of the callee. A curve into
+        // the callee's top would run behind the caller whenever the callee
+        // isn't clearly below it.
         Route::Ortho(Side::Right, Side::Right)
     } else if let Some(y) = site_y {
         Route::Site(y)
@@ -1007,6 +1015,37 @@ mod tests {
         assert_eq!(ends[0].0, (580.0, site));
         assert_eq!(ends[0].1, (600.0, 690.0));
         assert_eq!(lanes[0], 600.0 + BESIDE);
+    }
+
+    /// A call into a card just below the caller, closer than `MIN_GAP`,
+    /// still runs beside the column rather than in a curve from the side
+    /// of the caller facing the callee into the callee's top, which ran
+    /// behind the caller.
+    #[test]
+    fn call_to_a_card_just_below_does_not_run_behind_the_caller() {
+        let a = rect(0.0, 0.0, 600.0);
+        for b in [
+            rect(-20.0, 605.0, 300.0),
+            rect(20.0, 600.0, 300.0),
+            Rect {
+                w: 900.0,
+                ..rect(-200.0, 610.0, 300.0)
+            },
+        ] {
+            assert!(matches!(
+                choose_route(a, b, Some(350.0)),
+                Route::Ortho(Side::Right, Side::Right)
+            ));
+        }
+        // Beside, however close.
+        assert!(matches!(
+            choose_route(a, rect(585.0, 300.0, 300.0), Some(350.0)),
+            Route::Ortho(Side::Right, Side::Left)
+        ));
+        assert!(matches!(
+            choose_route(a, rect(-585.0, 300.0, 300.0), Some(350.0)),
+            Route::Ortho(Side::Left, Side::Right)
+        ));
     }
 
     /// A connector between cards of one column that skips a card bends
