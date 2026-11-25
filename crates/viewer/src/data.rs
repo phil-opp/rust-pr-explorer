@@ -908,6 +908,9 @@ impl Data {
             Status::Added => ("", "", "added"),
             Status::Removed => ("", "", "removed"),
             _ if it.changes.signature => ("m-chg", "", "signature changed"),
+            // Faded when something else about the item changed, to lead
+            // the eye to that.
+            Status::Changed => ("", "m-ref faded", "signature unchanged"),
             _ => ("", "m-ref", "signature unchanged"),
         };
         let shown = format!(
@@ -975,13 +978,19 @@ impl Data {
         } else {
             first_paragraph(docs)
         };
+        // Unchanged docs of a changed item are faded, like its signature.
+        let faded = if it.status == Status::Changed {
+            " faded"
+        } else {
+            ""
+        };
         let html = if !md.trim().is_empty() {
             format!(
-                r#"<div class="docs"><div class="dblk">{}</div></div>"#,
+                r#"<div class="docs{faded}"><div class="dblk">{}</div></div>"#,
                 docs_html(self, md, &it.info.doc_refs)
             )
         } else if full {
-            r#"<div class="docs empty">No documentation.</div>"#.to_string()
+            format!(r#"<div class="docs empty{faded}">No documentation.</div>"#)
         } else {
             String::new()
         };
