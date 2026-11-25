@@ -3,7 +3,7 @@
 //! YAML, CSS, Markdown).
 
 use crate::parts::{Def, Span, compare_defs, rust_outline};
-use model::{ChangedFile, ManifestChange, PartChange, SourceLine, Status};
+use model::{ChangedFile, ManifestChange, ManifestKeyChange, PartChange, SourceLine, Status};
 use similar::{ChangeTag, TextDiff};
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -423,12 +423,12 @@ fn show(v: &toml::Value) -> String {
 }
 
 /// The entries of the sections worth comparing, by (section, name).
-fn entries(text: &str) -> Option<BTreeMap<(String, String), String>> {
+fn entries(text: &str) -> Option<BTreeMap<(String, String), toml::Value>> {
     let t: toml::Table = text.parse().ok()?;
     let mut out = BTreeMap::new();
     let mut add_table = |section: String, table: &toml::Table| {
         for (k, v) in table {
-            out.insert((section.clone(), k.clone()), show(v));
+            out.insert((section.clone(), k.clone()), v.clone());
         }
     };
     for s in [
@@ -466,13 +466,13 @@ fn entries(text: &str) -> Option<BTreeMap<(String, String), String>> {
             add_table("workspace.dependencies".into(), table);
         }
         if let Some(members) = ws.get("members") {
-            out.insert(("workspace".into(), "members".into()), show(members));
+            out.insert(("workspace".into(), "members".into()), members.clone());
         }
     }
     if let Some(p) = t.get("package").and_then(|v| v.as_table()) {
         for k in ["version", "edition", "rust-version", "name"] {
             if let Some(v) = p.get(k) {
-                out.insert(("package".into(), k.into()), show(v));
+                out.insert(("package".into(), k.into()), v.clone());
             }
         }
     }
@@ -486,14 +486,35 @@ pub fn manifest_changes(old: &str, new: &str) -> Vec<ManifestChange> {
     let (Some(a), Some(b)) = (entries(old), entries(new)) else {
         return Vec::new();
     };
-    let keys: BTreeSet<&(String, String)> = a.keys().chain(b.keys()).collect();
-    keys.into_iter()
-        .filter(|k| a.get(*k) != b.get(*k))
-        .map(|k| ManifestChange {
-            section: k.0.clone(),
-            name: k.1.clone(),
-            old: a.get(k).cloned(),
-            new: b.get(k).cloned(),
+    let names: BTreeSet<&(String, String)> = a.keys().chain(b.keys()).collect();
+    names
+        .into_iter()
+        .filter_map(|k| {
+            let (old, new) = (a.get(k).map(show), b.get(k).map(show));
+            if old == new {
+                return None;
+            }
+            let keys = match (a.get(k), b.get(k)) {
+                (Some(toml::Value::Table(x)), Some(toml::Value::Table(y))) => {
+                    let keys: BTreeSet<&String> = x.keys().chain(y.keys()).collect();
+                    keys.into_iter()
+                        .map(|key| ManifestKeyChange {
+                            key: key.clone(),
+                            old: x.get(key).map(show),
+                            new: y.get(key).map(show),
+                        })
+                        .filter(|c| c.old != c.new)
+                        .collect()
+                }
+                _ => Vec::new(),
+            };
+            Some(ManifestChange {
+                section: k.0.clone(),
+                name: k.1.clone(),
+                old,
+                new,
+                keys,
+            })
         })
         .collect()
 }
@@ -575,6 +596,28 @@ mod tests {
         assert_ne!(notes.new_hash, notes.old_hash);
         assert_eq!(files[0].old_hash, "");
         assert_eq!(files[0].new_hash, model::content_hash(&[0, 1, 2]));
+    }
+
+    #[test]
+    fn manifest_table_entries_list_their_changed_keys() {
+        let old = "[workspace.dependencies]\ncore = { path = \"core\", version = \"=1.1.0\" }\nlog = \"0.4\"\n";
+        let new = "[workspace.dependencies]\ncore = { path = \"core\", version = \"=1.2.0\", optional = true }\nlog = { version = \"0.4\" }\n";
+        let c = manifest_changes(old, new);
+        let key = |key: &str, old: Option<&str>, new: Option<&str>| ManifestKeyChange {
+            key: key.into(),
+            old: old.map(str::to_string),
+            new: new.map(str::to_string),
+        };
+        assert_eq!(
+            c[0].keys,
+            [
+                key("optional", None, Some("true")),
+                key("version", Some("\"=1.1.0\""), Some("\"=1.2.0\"")),
+            ]
+        );
+        // A string that became a table: no keys to compare.
+        assert_eq!(c[1].name, "log");
+        assert!(c[1].keys.is_empty());
     }
 
     #[test]
