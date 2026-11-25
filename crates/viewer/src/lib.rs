@@ -1249,14 +1249,29 @@ fn finish_output(app: &App, what: &str) {
             post::review_markdown(&comments, &own, event),
             "The review as Markdown",
         ),
-        "cmd" => (
-            post::command(&app.d, &comments, &own, event, &carry::for_review()).unwrap_or_default(),
-            "The command",
-        ),
-        _ => (
+        "json" => (
             post::review_json(&comments, &own, event, commit, &carry::for_review()),
             "The review's JSON",
         ),
+        _ => {
+            let in_text = match what {
+                "cmd" => false,
+                "cmd-text" => true,
+                _ => return,
+            };
+            (
+                post::command(
+                    &app.d,
+                    &comments,
+                    &own,
+                    event,
+                    &carry::for_review(),
+                    in_text,
+                )
+                .unwrap_or_default(),
+                "The command",
+            )
+        }
     };
     // Also shown, selected, in case the browser doesn't allow the
     // clipboard.

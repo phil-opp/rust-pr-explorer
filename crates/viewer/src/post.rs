@@ -715,18 +715,23 @@ pub fn summary(d: &Data) -> Summary {
     s
 }
 
-/// The review's text: the reviewer's own, then the comments that fit on
-/// no line (all of them unless `inline`). GitHub requires a text for
-/// anything but an approval.
+/// The review's text: "Approved." for an approval, the reviewer's own
+/// text, then the comments that fit on no line (all of them unless
+/// `inline`). GitHub requires a text for anything but an approval.
 fn body(comments: &[Comment], own: &str, event: Verdict, inline: bool) -> String {
     let mut parts: Vec<String> = Vec::new();
+    if event == Verdict::Approve {
+        // Also says what the review is when it's posted as a comment
+        // review, on the reviewer's own PR (see `command`).
+        parts.push("Approved.".to_string());
+    }
     if !own.trim().is_empty() {
         parts.push(own.trim().to_string());
     }
     for c in comments.iter().filter(|c| !inline || c.loc.is_none()) {
         parts.push(format!("{}\n\n{}", c.lead_in_text(), c.text));
     }
-    if parts.is_empty() && event != Verdict::Approve {
+    if parts.is_empty() {
         parts.push(if comments.is_empty() {
             "Reviewed with Rust Semantic Review.".to_string()
         } else {
@@ -745,8 +750,63 @@ pub fn review_json(
     commit: &str,
     marks: &str,
 ) -> String {
-    serde_json::to_string_pretty(&review_value(comments, own, event, commit, true, marks))
-        .unwrap_or_default()
+    pretty(&review_value(comments, own, event, commit, true, marks))
+}
+
+/// JSON with an indented line per field, in the order a reader wants
+/// them: the kind of review and its commit, then the comments, each
+/// starting with its place, and last the review's text, which ends with
+/// the long marks. (`serde_json` would sort the fields by name.)
+/// `command` relies on the event being on the second line.
+fn pretty(v: &Value) -> String {
+    let mut out = String::new();
+    write_pretty(v, 0, &mut out);
+    out
+}
+
+fn write_pretty(v: &Value, depth: usize, out: &mut String) {
+    const ORDER: [&str; 9] = [
+        "event",
+        "commit_id",
+        "path",
+        "start_line",
+        "start_side",
+        "line",
+        "side",
+        "comments",
+        "body",
+    ];
+    let indent = |out: &mut String, depth: usize| out.push_str(&"  ".repeat(depth));
+    let (open, close, entries): (char, char, Vec<(Option<&str>, &Value)>) = match v {
+        Value::Object(m) if !m.is_empty() => {
+            let mut e: Vec<_> = m.iter().map(|(k, v)| (Some(k.as_str()), v)).collect();
+            e.sort_by_key(|(k, _)| {
+                ORDER
+                    .iter()
+                    .position(|o| Some(*o) == *k)
+                    .unwrap_or(ORDER.len())
+            });
+            ('{', '}', e)
+        }
+        Value::Array(a) if !a.is_empty() => ('[', ']', a.iter().map(|v| (None, v)).collect()),
+        _ => {
+            out.push_str(&v.to_string());
+            return;
+        }
+    };
+    out.push(open);
+    for (i, (key, value)) in entries.iter().enumerate() {
+        out.push_str(if i == 0 { "\n" } else { ",\n" });
+        indent(out, depth + 1);
+        if let Some(k) = key {
+            out.push_str(&json!(k).to_string());
+            out.push_str(": ");
+        }
+        write_pretty(value, depth + 1, out);
+    }
+    out.push('\n');
+    indent(out, depth);
+    out.push(close);
 }
 
 /// The review as GitHub's API takes it; with `inline`, comments that fit
@@ -788,10 +848,6 @@ fn review_value(
             })
             .collect::<Vec<Value>>(),
     });
-    if v["body"] == "" {
-        // An approval without a text.
-        v.as_object_mut().map(|o| o.remove("body"));
-    }
     if !commit.is_empty() {
         v["commit_id"] = json!(commit);
     }
@@ -829,12 +885,11 @@ pub fn review_markdown(comments: &[Comment], own: &str, event: Verdict) -> Strin
     out
 }
 
-/// The review as JSON that is safe inside single quotes in bash, zsh and
-/// fish: no `'`, and no backslash followed by a backslash or `'` (fish
-/// unescapes those two even in single quotes). JSON allows `\u0027` and
-/// `\u005c` in strings instead, and has no other place for these.
-fn shell_safe_json(v: &Value) -> String {
-    let json = serde_json::to_string(v).unwrap_or_default();
+/// JSON text that is safe inside single quotes in bash, zsh and fish: no
+/// `'`, and no backslash followed by a backslash or `'` (fish unescapes
+/// those two even in single quotes). JSON allows `'` and `\` in
+/// strings instead, and has no other place for these.
+fn shell_safe(json: &str) -> String {
     let mut out = String::with_capacity(json.len());
     let mut chars = json.chars();
     while let Some(c) = chars.next() {
@@ -854,76 +909,52 @@ fn shell_safe_json(v: &Value) -> String {
     out
 }
 
-/// One command that posts the review with the GitHub CLI. The JSON is
-/// piped in, so nothing needs to be saved first; `printf` because zsh's
-/// `echo` would turn `\n` into line breaks.
+/// The command that posts the review with the GitHub CLI. With
+/// `in_text`, every comment goes into the review's text, with a link to
+/// its lines, for when GitHub refuses the review because a comment is on a
+/// line its diff doesn't show. That can happen where its diff differs from
+/// the page's (a renamed file, another base, a tie the two diff algorithms
+/// break differently). The page can't tell beforehand, and the review
+/// would be in the command twice if it was tried again with `||`, so that
+/// is a command of its own, to run after GitHub's refusal.
 ///
-/// Each attempt runs only if the one before failed (`||`, which bash, zsh
-/// and fish all have), and GitHub creates a review whole or not at all.
-/// GitHub refuses the whole review if one comment is on a line its diff
-/// doesn't show, which can happen where its diff differs from the page's
-/// (a renamed file, another base, a tie the two diff algorithms break
-/// differently). So the review is tried again with every comment in its
-/// text, with a link to its lines. And GitHub refuses an approval of
-/// one's own PR, so an approval is tried again as a comment review whose
-/// text starts with "Approved.", before giving up the inline comments.
-/// The page can't tell these errors apart, or know who runs the command.
+/// The JSON is piped in, so nothing needs to be saved first, and spans
+/// several lines inside single quotes, which bash, zsh and fish all allow
+/// (fish has no heredocs). `printf` because zsh's `echo` would turn `\n`
+/// into line breaks. On success, `gh` prints the review's link rather than
+/// the whole review GitHub sends back.
+///
+/// GitHub refuses an approval of one's own PR. So an approval goes through
+/// a POSIX `sh` script, which posts the JSON again as a comment review if
+/// GitHub refuses it, by changing the event on its first line (see
+/// `pretty`). An approval's text starts with "Approved." for that case
+/// (see `body`), since adding it here would need a `\n` in the command,
+/// which fish reads differently from bash inside single quotes.
 pub fn command(
     d: &Data,
     comments: &[Comment],
     own: &str,
     event: Verdict,
     marks: &str,
+    in_text: bool,
 ) -> Option<String> {
     let pr = d.out.meta.pr.as_ref()?;
-    let post = |v: &Value| {
+    let v = review_value(comments, own, event, &pr.head_commit, !in_text, marks);
+    let json = shell_safe(&pretty(&v));
+    let post = format!(
+        "gh api --method POST repos/{}/pulls/{}/reviews --input - --jq .html_url",
+        pr.repo, pr.number
+    );
+    Some(if event == Verdict::Approve {
         format!(
-            "printf '%s' '{}' | gh api --method POST repos/{}/pulls/{}/reviews --input -",
-            shell_safe_json(v),
-            pr.repo,
-            pr.number,
+            "printf '%s' '{json}' | sh -c 'review=$(cat)
+post() {{ {post}; }}
+printf %s \"$review\" | post ||
+  printf %s \"$review\" | sed 2s/APPROVE/COMMENT/ | post'"
         )
-    };
-    let tries = attempts(comments, own, event, &pr.head_commit, marks);
-    Some(tries.iter().map(post).collect::<Vec<_>>().join(" || "))
-}
-
-/// The reviews `command` tries to post, in order.
-fn attempts(
-    comments: &[Comment],
-    own: &str,
-    event: Verdict,
-    commit: &str,
-    marks: &str,
-) -> Vec<Value> {
-    let v = |inline| review_value(comments, own, event, commit, inline, marks);
-    let mut tries = vec![v(true)];
-    if event == Verdict::Approve {
-        tries.push(approved_comment(v(true)));
-    }
-    tries.push(v(false));
-    if event == Verdict::Approve {
-        tries.push(approved_comment(v(false)));
-    }
-    // Without inline comments, the second half is the first again.
-    let mut out: Vec<Value> = Vec::new();
-    for t in tries {
-        if !out.contains(&t) {
-            out.push(t);
-        }
-    }
-    out
-}
-
-/// An approval as a comment review, for the author's own PR.
-fn approved_comment(mut v: Value) -> Value {
-    let body = match v["body"].as_str() {
-        Some(b) if !b.is_empty() => format!("Approved.\n\n{b}"),
-        _ => "Approved.".to_string(),
-    };
-    v["event"] = json!("COMMENT");
-    v["body"] = json!(body);
-    v
+    } else {
+        format!("printf '%s' '{json}' | {post}")
+    })
 }
 
 /// What the posted review consists of, shown above the copy buttons.
@@ -955,16 +986,21 @@ pub fn posts_html(comments: &[Comment], own: &str, event: Verdict) -> String {
         format!("{} and {last}", parts.join(", "))
     };
     let own_pr = if event == Verdict::Approve {
-        " On your own PR, which GitHub doesn't let you approve, it posts a comment review starting with “Approved.” instead, after GitHub's refusal."
+        " On your own PR, which GitHub doesn't let you approve, it posts a comment review that starts with “Approved.” instead, after GitHub's refusal."
     } else {
         ""
     };
-    let fallback = if placed > 0 {
-        " If GitHub refuses a comment's line, it posts the review again with every comment in its text, linked to its lines."
-    } else {
-        ""
-    };
-    format!("The command posts {list}.{own_pr}{fallback}")
+    format!("The command posts {list}.{own_pr}")
+}
+
+/// The command to run instead when GitHub refuses a comment's line (see
+/// `command`). GitHub creates a review whole or not at all, so nothing was
+/// posted then.
+pub fn fallback_html(comments: &[Comment]) -> String {
+    if !comments.iter().any(|c| c.loc.is_some()) {
+        return String::new();
+    }
+    r#"<details class="rv-fallback"><summary>If GitHub refuses a comment's line</summary><p class="sub">This can happen where GitHub's diff differs from this page's. Then nothing is posted, since GitHub takes a review whole or not at all. This command posts the review with every comment in its text instead, linked to its lines.</p><div class="rv-row"><button data-rv-out="cmd-text">Copy command</button></div></details>"#.to_string()
 }
 
 /// The dialog that sums up the review and offers ways to post it.
@@ -1052,8 +1088,10 @@ pub fn finish_html(d: &Data) -> String {
 <p id="rv-what">{what}</p>
 <div class="rv-row"><button data-rv-out="cmd" class="primary">Copy command</button><button data-rv-out="json">Copy JSON</button></div>
 <p class="sub">The review ends with your marks, in a collapsed “Review marks” section, so that the page of a later Rust Semantic Review comment can load them. It lists what you reviewed and your verdicts; your comments are in the review already.</p>
-<p class="sub">The comments go on the commit this page shows ({rev}). If the PR got new commits, GitHub shows them where those lines are now, or as outdated.{custom}</p>"#,
+<p class="sub">The comments go on the commit this page shows ({rev}). If the PR got new commits, GitHub shows them where those lines are now, or as outdated.{custom}</p>
+<div id="rv-fallback">{fallback}</div>"#,
             what = posts_html(&s.comments, "", suggested),
+            fallback = fallback_html(&s.comments),
             rev = esc(&pr.head_rev),
             custom = if pr.since.is_some() {
                 " This page compares with an earlier commit of the PR, not with its base branch, so some comments may not fit GitHub's diff; they then go into the review's text."
@@ -1591,10 +1629,11 @@ mod tests {
             serde_json::from_str(&review_json(&[], "", Verdict::Comment, "", "")).unwrap();
         assert!(!v["body"].as_str().unwrap().is_empty());
         assert!(v.get("commit_id").is_none());
-        // An approval doesn't.
+        // An approval says so in its text, for when it's posted as a
+        // comment review.
         let v: Value =
             serde_json::from_str(&review_json(&[], "", Verdict::Approve, "", "")).unwrap();
-        assert!(v.get("body").is_none());
+        assert_eq!(v["body"], "Approved.");
     }
 
     #[test]
@@ -1603,36 +1642,71 @@ mod tests {
             comment("a", at("src/lib.rs", None, 10, "RIGHT")),
             comment("b", None),
         ];
-        let t = attempts(&comments, "", Verdict::Comment, "abc", "");
-        assert_eq!(t.len(), 2);
-        assert_eq!(t[0]["comments"].as_array().unwrap().len(), 1);
-        assert_eq!(t[1]["comments"].as_array().unwrap().len(), 0);
-        let body = t[1]["body"].as_str().unwrap();
+        let inline = review_value(&comments, "", Verdict::Comment, "abc", true, "");
+        let text = review_value(&comments, "", Verdict::Comment, "abc", false, "");
+        assert_eq!(inline["comments"].as_array().unwrap().len(), 1);
+        assert_eq!(text["comments"].as_array().unwrap().len(), 0);
+        let body = text["body"].as_str().unwrap();
         assert!(body.contains("([a](url))") && body.contains("([b](url))"));
-        assert_eq!(t[1]["commit_id"], "abc");
+        assert_eq!(text["commit_id"], "abc");
+        // Only offered with inline comments.
+        assert_eq!(fallback_html(&[comment("b", None)]), "");
+        assert!(fallback_html(&comments).contains(r#"data-rv-out="cmd-text""#));
+    }
 
-        // An approval: as an approval, then as a comment review, each with
-        // inline comments first.
-        let t = attempts(&comments, "", Verdict::Approve, "abc", "");
-        let ev: Vec<_> = t
-            .iter()
-            .map(|v| (v["event"].clone(), v["comments"].as_array().unwrap().len()))
-            .collect();
+    #[test]
+    fn command_tries_an_approval_again_as_a_comment_review() {
+        let d = Data::new(Output {
+            meta: model::Meta {
+                pr: Some(PrMeta {
+                    repo: "o/r".into(),
+                    number: 7,
+                    head_commit: "head1full".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+            crates: Vec::new(),
+            items: Default::default(),
+            files: Vec::new(),
+            externals: Default::default(),
+            warnings: Vec::new(),
+            semver_checks: None,
+        });
+        let comments = vec![comment("it's", at("src/lib.rs", None, 10, "RIGHT"))];
+        let post = "gh api --method POST repos/o/r/pulls/7/reviews --input - --jq .html_url";
+        let c = command(&d, &comments, "", Verdict::Comment, "", false).unwrap();
+        assert!(c.starts_with("printf '%s' '{\n  \"event\": \"COMMENT\",\n"));
+        assert!(c.ends_with(&format!("}}' | {post}")));
+        // The review is in the command once, also for an approval.
+        let c = command(&d, &comments, "", Verdict::Approve, "", false).unwrap();
+        assert_eq!(c.matches("it\\u0027s").count(), 1);
+        assert!(c.starts_with("printf '%s' '{\n  \"event\": \"APPROVE\",\n"));
+        assert!(c.ends_with(&format!(
+            "}}' | sh -c 'review=$(cat)\npost() {{ {post}; }}\nprintf %s \"$review\" | post ||\n  printf %s \"$review\" | sed 2s/APPROVE/COMMENT/ | post'"
+        )));
+    }
+
+    #[test]
+    fn pretty_json_reads_in_order() {
+        let comments = vec![comment("a", at("src/lib.rs", Some(8), 10, "RIGHT"))];
+        let s = review_json(&comments, "Nice", Verdict::Comment, "abc", "");
+        let v: Value = serde_json::from_str(&s).unwrap();
         assert_eq!(
-            ev,
-            [
-                (json!("APPROVE"), 1),
-                (json!("COMMENT"), 1),
-                (json!("APPROVE"), 0),
-                (json!("COMMENT"), 0)
-            ]
+            v,
+            review_value(&comments, "Nice", Verdict::Comment, "abc", true, "")
         );
-        // Without inline comments, nothing to fall back to.
-        assert_eq!(
-            attempts(&[comment("b", None)], "", Verdict::Comment, "", "").len(),
-            1
-        );
-        assert_eq!(attempts(&[], "", Verdict::Approve, "", "").len(), 2);
+        let pos = |k: &str| s.find(&format!("\"{k}\":")).unwrap();
+        assert!(pos("event") < pos("commit_id"));
+        assert!(pos("commit_id") < pos("comments"));
+        assert!(pos("path") < pos("start_line"));
+        assert!(pos("start_line") < pos("line"));
+        assert!(pos("line") < pos("side") && pos("side") < pos("body"));
+        assert!(s.ends_with("\n}"));
+        // The review's text comes last, after the comments.
+        assert!(s.rfind("\"body\":").unwrap() > s.find("\n  ]").unwrap());
+        assert!(s.starts_with("{\n  \"event\": \"COMMENT\",\n"));
+        assert_eq!(pretty(&json!({"comments": []})), "{\n  \"comments\": []\n}");
     }
 
     #[test]
@@ -1683,9 +1757,9 @@ mod tests {
     }
 
     #[test]
-    fn shell_safe() {
+    fn shell_safe_quoting() {
         let v = json!({"body": "it's a \\ and \\' and \"q\"\nnext"});
-        let s = shell_safe_json(&v);
+        let s = shell_safe(&pretty(&v));
         assert!(!s.contains('\''));
         assert!(!s.contains("\\\\"));
         assert!(!s.contains("\\'"));
@@ -1701,36 +1775,21 @@ mod tests {
         );
         assert_eq!(
             posts_html(&[c(true), c(true), c(false)], "Nice", Verdict::Changes),
-            "The command posts a <b>request for changes</b>, your summary, 2 inline comments and 1 comment in the review's text. If GitHub refuses a comment's line, it posts the review again with every comment in its text, linked to its lines."
+            "The command posts a <b>request for changes</b>, your summary, 2 inline comments and 1 comment in the review's text."
         );
-    }
-
-    #[test]
-    fn own_pr_approval() {
-        // Without a text, an approval has no body; the fallback has one.
-        let v = approved_comment(review_value(&[], "", Verdict::Approve, "abc", true, ""));
-        assert_eq!(v["event"], "COMMENT");
-        assert_eq!(v["body"], "Approved.");
-        assert_eq!(v["commit_id"], "abc");
-        let v = approved_comment(review_value(
-            &[],
-            "Looks good",
-            Verdict::Approve,
-            "",
-            true,
-            "",
-        ));
-        assert_eq!(v["body"], "Approved.\n\nLooks good");
     }
 
     #[test]
     fn marks_go_at_the_end_of_the_text() {
         let m = "<!-- rust-semantic-review-marks v1 TWFu -->";
-        let v = review_value(&[], "", Verdict::Approve, "", true, m);
-        assert_eq!(v["body"], m);
+        let v = review_value(&[], "", Verdict::Comment, "", true, m);
+        assert_eq!(
+            v["body"],
+            format!("Reviewed with Rust Semantic Review.\n\n{m}")
+        );
         let v = review_value(&[], "Looks good", Verdict::Comment, "", true, m);
         assert_eq!(v["body"], format!("Looks good\n\n{m}"));
-        let v = approved_comment(review_value(&[], "", Verdict::Approve, "", true, m));
+        let v = review_value(&[], "", Verdict::Approve, "", true, m);
         assert_eq!(v["body"], format!("Approved.\n\n{m}"));
     }
 }
