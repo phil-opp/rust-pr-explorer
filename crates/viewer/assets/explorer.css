@@ -884,6 +884,26 @@ a.gh-link:hover { text-decoration: underline; }
 .sbs .hunk-gh { grid-column: 1 / -1; }
 body.reviewing .hunk-rv + .hunk-gh, .hunk-rv:has(.rvc.done, .rvc.stale) + .hunk-gh { display: none; }
 body:not(.reviewing) .hunk-rv:not(:has(.rvc.done, .rvc.stale)) { display: none; }
+/* Wherever its bar shows, a hunk is a box around its bar and its lines,
+   apart from the next one, so that the buttons clearly belong to the lines
+   below them. The box spans the diff's grid and passes its columns on
+   (`subgrid`), so the lines line up as before. An approved hunk gets a
+   thick left edge (drawn over its lines, so they stay in line with the
+   other hunks') and a tinted bar in the color of reviewed items, so the
+   hunks still to review stand out. */
+.hunk { display: contents; }
+body.reviewing .hunk, .hunk:has(> .hunk-rv .rvc.done, > .hunk-rv .rvc.stale) {
+  display: grid; grid-column: 1 / -1; grid-template-columns: subgrid; position: relative;
+  margin: 10px 0; border: 1px solid var(--border); border-radius: 4px; overflow: clip; }
+.hunk:first-child { margin-top: 2px; }
+.hunk:last-child { margin-bottom: 2px; }
+.hunk > .hunk-rv { margin: 0; border-top: 0; width: calc(100cqw - 2px); }
+.hunk:has(> .hunk-rv .rvc.done) { border-color: var(--reviewed); }
+.hunk:has(> .hunk-rv .rvc.done)::before { content: ""; position: absolute; inset: 0 auto 0 0; width: 4px; background: var(--reviewed); z-index: 2; }
+.hunk > .hunk-rv:has(.rvc.done) { background: color-mix(in srgb, var(--reviewed) 14%, var(--bg-alt)); border-bottom-color: color-mix(in srgb, var(--reviewed) 50%, var(--border)); }
+/* The hunk that the keys act on: the whole box, not only its bar. */
+.reviewing .hunk:has(> .hunk-rv.rv-cur) { border-color: var(--link); box-shadow: 0 0 0 1px var(--link); }
+.reviewing .hunk > .hunk-rv.rv-cur { outline: none; }
 /* Showing what one commit changed. */
 .commit-pick { display: flex; align-items: center; gap: 6px; font-size: 13px; }
 .commit-pick select { font: 13px var(--sans); max-width: 360px; padding: 3px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); }
