@@ -925,6 +925,7 @@ pub fn load(d: &Data) {
             .filter_map(|(id, _)| d.item(id))
             .filter(|it| is_unit_item(it)),
     );
+    crate::line_notes::load(&key);
     REVIEW.with(|r| {
         *r.borrow_mut() = Review {
             on,
@@ -1035,6 +1036,10 @@ struct Payload {
     notes: BTreeMap<String, Note>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     versions: BTreeMap<String, Snapshot>,
+    /// Comments on lines (see `line_notes`); only in copied marks, since a
+    /// posted review has them as comments.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    lines: BTreeMap<String, crate::line_notes::LineNote>,
 }
 
 /// Whether anything of this PR is marked, on this page or not.
@@ -1070,6 +1075,7 @@ pub fn export(to: Export) -> Option<String> {
                 edges: encode_edges(&r.edges),
                 notes: r.notes.clone(),
                 versions: r.versions.clone(),
+                lines: crate::line_notes::all(),
             })
             .ok(),
             Export::Review => Some(review_lines(&r.marks, &r.edges, &r.notes)),
@@ -1121,6 +1127,7 @@ fn parse_review_lines(text: &str) -> Payload {
         edges: String::new(),
         notes: BTreeMap::new(),
         versions: BTreeMap::new(),
+        lines: BTreeMap::new(),
     };
     for l in text.lines().map(str::trim) {
         let Some((kind, rest)) = l.split_once(' ') else {
@@ -1181,7 +1188,7 @@ pub fn import(json: &str) -> Result<usize, String> {
     merge(p)
 }
 
-fn merge(p: Payload) -> Result<usize, String> {
+fn merge(mut p: Payload) -> Result<usize, String> {
     reread();
     let added = REVIEW.with(|r| {
         let mut r = r.borrow_mut();
@@ -1209,6 +1216,7 @@ fn merge(p: Payload) -> Result<usize, String> {
         for (id, v) in p.versions {
             r.versions.entry(id).or_insert(v);
         }
+        crate::line_notes::merge(std::mem::take(&mut p.lines));
         let after: HashSet<&String> = r.marks.keys().chain(r.edges.keys()).collect();
         Ok(after.iter().filter(|id| !before.contains(**id)).count())
     })?;
@@ -1427,6 +1435,18 @@ pub fn clear() {
         r.unfolded.clear();
     });
     save();
+    crate::line_notes::clear();
+}
+
+/// Where a unit is in reading order (after every unit if it isn't one).
+pub fn unit_index(id: &str) -> usize {
+    REVIEW.with(|r| {
+        let r = r.borrow();
+        r.units
+            .iter()
+            .position(|u| u == id)
+            .unwrap_or(r.units.len())
+    })
 }
 
 /// The version a unit had when it was marked, if it was saved.
