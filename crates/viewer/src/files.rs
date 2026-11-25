@@ -36,6 +36,31 @@ fn stats(added: u32, removed: u32) -> String {
 /// syntax colors; nothing
 /// is linked.
 pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
+    diff_html(d, lines, lang, &Diff::default())
+}
+
+/// What a file's diff adds to [`hunks_html`].
+#[derive(Default)]
+pub struct Diff<'a> {
+    /// The file it is a diff of: its lines can be commented on (see
+    /// `line_notes`).
+    pub path: Option<&'a str>,
+    /// The review controls of hunks: the hunk of the file that starts at
+    /// the `N`th `@` line of the diff, by its key (`lines:N`), else the
+    /// hunk of a box.
+    pub hunk: Option<&'a dyn Fn(usize) -> Option<String>>,
+    /// No "⋯ line N" before the first line: a box's diff, whose summary
+    /// says where it starts.
+    pub no_first_skip: bool,
+}
+
+/// [`hunks_html`] with the review controls and line comments of a file's
+/// diff.
+pub fn diff_html(d: &Data, lines: &[SourceLine], lang: &str, opts: &Diff) -> String {
+    let unit = opts.path.map(crate::review::file_unit);
+    let lnotes = unit
+        .as_deref()
+        .map(|u| crate::line_notes::ForUnit::of(d, u));
     let mut new_line = 0usize;
     let mut old_line = 0usize;
     let mut max_line = 0usize;
@@ -97,14 +122,30 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
         }
         i += (dels + adds).max(1);
     }
+    // The `@` hunk the lines are in, and whether it is in a box.
+    let mut at: Option<usize> = None;
+    let mut boxed = false;
     for (l, code) in lines.iter().zip(codes) {
         if l.0 == '@' {
             let mut it = l.1.split(' ').filter_map(|n| n.parse::<usize>().ok());
             old_line = it.next().unwrap_or(1);
             new_line = it.next().unwrap_or(1);
-            body.push_str(&format!(
-                r#"<span class="ln skip">⋯ line {new_line}</span>"#
-            ));
+            if std::mem::take(&mut boxed) {
+                body.push_str("</span>");
+            }
+            let k = at.map_or(0, |k| k + 1);
+            if !(opts.no_first_skip && at.is_none()) {
+                body.push_str(&format!(
+                    r#"<span class="ln skip">⋯ line {new_line}</span>"#
+                ));
+            }
+            at = Some(k);
+            if let Some(bar) = opts.hunk.and_then(|f| f(k)) {
+                body.push_str(&format!(
+                    r#"<span class="hunk"><span class="hunk-rv">{bar}</span>"#
+                ));
+                boxed = true;
+            }
             continue;
         }
         let (class, no) = match l.0 {
@@ -126,8 +167,22 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
                 old_line += 1;
             }
         }
+        // Line comments: a removed line by its base number, any other by
+        // the PR's.
+        let side_old = l.0 == '-';
+        let lc = lnotes.as_ref().map_or(String::new(), |n| {
+            format!(
+                r#" data-lc="{}"{}"#,
+                crate::line_notes::key(side_old, no),
+                if n.covers(side_old, no) {
+                    " data-lc-on"
+                } else {
+                    ""
+                }
+            )
+        });
         body.push_str(&format!(
-            r#"<span class="ln {class}" data-t="{}" data-no="{no}">{gutter}{}</span>"#,
+            r#"<span class="ln {class}" data-t="{}" data-no="{no}"{lc}>{gutter}{}</span>"#,
             if l.0 == ' ' {
                 String::new()
             } else {
@@ -139,11 +194,27 @@ pub fn hunks_html(d: &Data, lines: &[SourceLine], lang: &str) -> String {
                 code
             }
         ));
+        if let Some(n) = &lnotes {
+            body.push_str(&n.boxes_at(d, &[(side_old, no)]));
+        }
     }
-    format!(
+    if boxed {
+        body.push_str("</span>");
+    }
+    if let Some(n) = &lnotes {
+        body.push_str(&n.stale_html(d));
+    }
+    let pre = format!(
         r#"<pre class="hunks" {}>{body}</pre>"#,
         crate::code::gutter_style(max_line)
-    )
+    );
+    match unit {
+        Some(u) => format!(
+            r#"<div class="src-code" data-item="{}">{pre}</div>"#,
+            esc(&u)
+        ),
+        None => pre,
+    }
 }
 
 fn manifest_html(entries: &[ManifestChange]) -> String {
@@ -216,8 +287,9 @@ fn parts_summary(parts: &[PartChange]) -> String {
     }
 }
 
-/// A file's changed parts (see [`PartChange`]), one box each.
-fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
+/// A file's changed parts (see [`PartChange`]), one box each; with its
+/// hunk's review controls at the top if the file is reviewed hunk by hunk.
+fn parts_html(d: &Data, path: &str, list: &[PartChange], lang: &str) -> String {
     let no_refs = BTreeMap::new();
     // Rust and Python headers are highlighted (and diffed) as code; YAML
     // and JavaScript ones with their own highlighters.
@@ -230,7 +302,8 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
         }
     };
     list.iter()
-        .map(|c| {
+        .enumerate()
+        .map(|(i, c)| {
             if c.kind == "module" {
                 return r#"<div class="irow member part"><div class="ihead"><span class="kind">module</span><span class="title-name">top-level code</span></div><div class="mark m-chg"><div class="note">Statements outside functions and classes changed; see the line diff.</div></div></div>"#.to_string();
             }
@@ -295,7 +368,16 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
                     if small { "open" } else { "" },
                     stats(added, removed),
                     c.line,
-                    hunks_html(d, &c.lines, lang)
+                    diff_html(
+                        d,
+                        &c.lines,
+                        lang,
+                        &Diff {
+                            path: Some(path),
+                            no_first_skip: true,
+                            ..Default::default()
+                        }
+                    )
                 ),
             ));
             let status_class = match c.status {
@@ -303,7 +385,7 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
                 Status::Removed => "removed",
                 _ => "",
             };
-            format!(
+            let part = format!(
                 r#"<div class="irow member part {status_class}"><div class="ihead"><span class="kind">{}</span><span class="title-name">{}</span>{}{}</div>{}{}</div>"#,
                 esc(&c.kind),
                 esc(&c.name),
@@ -311,16 +393,56 @@ fn parts_html(d: &Data, list: &[PartChange], lang: &str) -> String {
                 crate::unsafety::part_tag(c),
                 crate::unsafety::lines_html(&c.unsafe_code),
                 marked_html(segs)
-            )
+            );
+            match hunk_box(d, path, &format!("part:{i}")) {
+                Some((open, close)) => format!("{open}{part}{close}"),
+                None => part,
+            }
         })
         .collect()
 }
 
-/// Markdown split at headings (outside code fences): (key, heading line,
-/// text). The key is the heading path, made unique.
-fn sections(md: &str) -> Vec<(String, String, String)> {
-    let mut out: Vec<(String, String, String)> =
-        vec![(String::new(), String::new(), String::new())];
+/// A part of a Markdown file from one heading to the next.
+#[derive(Debug)]
+struct Section {
+    /// The heading path (`Usage › Flags`), made unique.
+    key: String,
+    /// The heading's line (two for a setext heading), empty before the
+    /// first heading.
+    heading: String,
+    text: String,
+    /// Its first and last line in the file (1-based).
+    first: usize,
+    last: usize,
+}
+
+impl Section {
+    fn title(&self) -> &str {
+        let title = self
+            .heading
+            .lines()
+            .next()
+            .unwrap_or("")
+            .trim_start_matches('#')
+            .trim();
+        if title.is_empty() {
+            "(before the first heading)"
+        } else {
+            title
+        }
+    }
+}
+
+/// Markdown split at headings (outside code fences).
+fn sections(md: &str) -> Vec<Section> {
+    let section = |key: String, heading: String, first: usize| Section {
+        key,
+        heading,
+        text: String::new(),
+        first,
+        last: 0,
+    };
+    let mut out: Vec<Section> = vec![section(String::new(), String::new(), 1)];
     let mut path: Vec<(usize, String)> = Vec::new();
     let mut fence: Option<&str> = None;
     let lines: Vec<&str> = md.lines().collect();
@@ -385,75 +507,108 @@ fn sections(md: &str) -> Vec<(String, String, String)> {
             } else {
                 line.to_string()
             };
-            out.push((key, heading, String::new()));
+            out.push(section(key, heading, i + 1));
             i += if setext.is_some() { 2 } else { 1 };
             continue;
         }
         let last = out.last_mut().unwrap();
-        last.2.push_str(line);
-        last.2.push('\n');
+        last.text.push_str(line);
+        last.text.push('\n');
         i += 1;
     }
-    if out[0].2.trim().is_empty() {
+    let ends: Vec<usize> = out.iter().skip(1).map(|s| s.first - 1).collect();
+    for (s, end) in out.iter_mut().zip(ends.into_iter().chain([lines.len()])) {
+        s.last = end;
+    }
+    if out[0].text.trim().is_empty() {
         out.remove(0);
     }
     out
 }
 
-/// A Markdown file compared section by section: changed sections show
-/// their changes (paragraph and word level), unchanged ones are counted.
-pub fn markdown_html(d: &Data, old: &str, new: &str) -> String {
-    let (a, b) = (sections(old), sections(new));
-    let old_by_key: BTreeMap<&str, &(String, String, String)> =
-        a.iter().map(|s| (s.0.as_str(), s)).collect();
-    let new_keys: BTreeSet<&str> = b.iter().map(|s| s.0.as_str()).collect();
-    let heading = |h: &str, key: &str| {
-        let title = h
-            .lines()
-            .next()
-            .unwrap_or("")
-            .trim_start_matches('#')
-            .trim();
-        let title = if title.is_empty() {
-            "(before the first heading)"
-        } else {
-            title
-        };
-        format!(
-            r#"<div class="md-h" title="{}">{}</div>"#,
-            esc(key),
-            esc(title)
-        )
-    };
-    let mut segs: Vec<Seg> = Vec::new();
+/// A changed section: its index in the base's sections and in the PR's.
+type SectionChange = (Option<usize>, Option<usize>);
+
+/// The sections of a Markdown file that changed, in the order the file's
+/// view shows them: the PR's sections that are new or changed, each with
+/// its base version (by key), then the removed ones.
+fn section_changes(a: &[Section], b: &[Section]) -> (Vec<SectionChange>, usize) {
+    let old_by_key: BTreeMap<&str, usize> = a
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (s.key.as_str(), i))
+        .collect();
+    let new_keys: BTreeSet<&str> = b.iter().map(|s| s.key.as_str()).collect();
+    let mut out = Vec::new();
     let mut unchanged = 0;
-    for s in &b {
-        match old_by_key.get(s.0.as_str()) {
-            Some(o) if o.1 == s.1 && o.2 == s.2 => unchanged += 1,
-            Some(o) => {
-                let head_changed = o.1 != s.1;
-                segs.push(Seg::new(
-                    if head_changed { "m-chg" } else { "" },
-                    heading(&s.1, &s.0),
-                ));
-                segs.extend(markdown_diff_segs(d, &o.2, &s.2));
-            }
-            None => {
-                let body = markdown_file_html(d, &s.2);
-                segs.push(Seg::new(
-                    "m-add",
-                    format!(r#"{}<div class="docs">{body}</div>"#, heading(&s.1, &s.0)),
-                ));
-            }
+    for (j, s) in b.iter().enumerate() {
+        match old_by_key.get(s.key.as_str()) {
+            Some(&i) if a[i].heading == s.heading && a[i].text == s.text => unchanged += 1,
+            o => out.push((o.copied(), Some(j))),
         }
     }
-    for o in a.iter().filter(|o| !new_keys.contains(o.0.as_str())) {
-        segs.push(Seg::new(
-            "m-del",
-            format!(r#"<div class="md-removed">{}</div>"#, heading(&o.1, &o.0)),
-        ));
+    for (i, o) in a.iter().enumerate() {
+        if !new_keys.contains(o.key.as_str()) {
+            out.push((Some(i), None));
+        }
     }
-    let mut html = marked_html(segs);
+    (out, unchanged)
+}
+
+/// A Markdown file compared section by section: changed sections show
+/// their changes (paragraph and word level), unchanged ones are counted.
+/// With `path`, each changed section is a box with its hunk's review
+/// controls, if the file is reviewed hunk by hunk.
+pub fn markdown_html(d: &Data, old: &str, new: &str, path: Option<&str>) -> String {
+    let (a, b) = (sections(old), sections(new));
+    let heading = |s: &Section| {
+        format!(
+            r#"<div class="md-h" title="{}">{}</div>"#,
+            esc(&s.key),
+            esc(s.title())
+        )
+    };
+    let (changes, unchanged) = section_changes(&a, &b);
+    let mut html = String::new();
+    let mut all: Vec<Seg> = Vec::new();
+    for (o, n) in changes {
+        let mut segs: Vec<Seg> = Vec::new();
+        match (o.map(|i| &a[i]), n.map(|j| &b[j])) {
+            (Some(o), Some(s)) => {
+                let head_changed = o.heading != s.heading;
+                segs.push(Seg::new(
+                    if head_changed { "m-chg" } else { "" },
+                    heading(s),
+                ));
+                segs.extend(markdown_diff_segs(d, &o.text, &s.text));
+            }
+            (None, Some(s)) => {
+                let body = markdown_file_html(d, &s.text);
+                segs.push(Seg::new(
+                    "m-add",
+                    format!(r#"{}<div class="docs">{body}</div>"#, heading(s)),
+                ));
+            }
+            (Some(o), None) => segs.push(Seg::new(
+                "m-del",
+                format!(r#"<div class="md-removed">{}</div>"#, heading(o)),
+            )),
+            (None, None) => {}
+        }
+        let key = n.map_or_else(|| a[o.unwrap_or(0)].key.clone(), |j| b[j].key.clone());
+        let side = if n.is_some() { "sec" } else { "sec-removed" };
+        match path.and_then(|p| hunk_box(d, p, &format!("{side}:{key}"))) {
+            Some((open, close)) => {
+                html.push_str(&marked_html(std::mem::take(&mut all)));
+                html.push_str(&open);
+                html.push_str(&marked_html(segs));
+                html.push_str(&close);
+            }
+            // Neighboring sections with the same marker share one bar.
+            None => all.extend(segs),
+        }
+    }
+    html.push_str(&marked_html(all));
     if unchanged > 0 {
         html.push_str(&format!(
             r#"<div class="collapsed-note">{unchanged} unchanged section{}</div>"#,
@@ -461,6 +616,236 @@ pub fn markdown_html(d: &Data, old: &str, new: &str) -> String {
         ));
     }
     html
+}
+
+/// The start and end of the box around a hunk of a file, if the file is
+/// reviewed hunk by hunk and has the hunk `key`: its review controls and a
+/// link to its lines on GitHub at the top.
+fn hunk_box(d: &Data, path: &str, key: &str) -> Option<(String, String)> {
+    let h = crate::review::file_hunk(path, key)?;
+    Some((
+        format!(
+            r#"<div class="hunk fhunk"><div class="hunk-rv">{}{}</div>"#,
+            crate::review::file_hunk_controls(path, &h),
+            hunk_link(d, path, &h)
+        ),
+        "</div>".to_string(),
+    ))
+}
+
+/// A link to a file's hunk on GitHub, for its review bar.
+fn hunk_link(d: &Data, path: &str, h: &crate::review::Hunk) -> String {
+    crate::post::github_link(
+        d,
+        crate::post::file_hunk_loc(&d.out.files, path, h),
+        "gh-link",
+        "GitHub ↗",
+        "this change",
+    )
+}
+
+/// A line of a diff with `@` lines: its tag, its numbers in the base and
+/// in the PR (one of them is meaningless for `+` and `-` lines), its
+/// text, and which `@` hunk it is in.
+struct Row<'a> {
+    tag: char,
+    old: usize,
+    new: usize,
+    text: &'a str,
+    hunk: usize,
+}
+
+fn rows(lines: &[SourceLine]) -> Vec<Row<'_>> {
+    let (mut o, mut n) = (1, 1);
+    let mut hunk = 0;
+    let mut out = Vec::new();
+    for l in lines {
+        if l.0 == '@' {
+            let mut it = l.1.split(' ').filter_map(|x| x.parse::<usize>().ok());
+            o = it.next().unwrap_or(1);
+            n = it.next().unwrap_or(1);
+            hunk += usize::from(!out.is_empty());
+            continue;
+        }
+        let tag = if matches!(l.0, '+' | '-') { l.0 } else { ' ' };
+        out.push(Row {
+            tag,
+            old: o,
+            new: n,
+            text: &l.1,
+            hunk,
+        });
+        o += usize::from(tag != '+');
+        n += usize::from(tag != '-');
+    }
+    out
+}
+
+/// The hunks a changed file outside the Rust analysis is reviewed by, if
+/// it has more than one: the boxes of its view (Markdown sections, Python
+/// and JavaScript functions and classes, YAML keys, Rust code outside
+/// items), each with the changed lines in it, and then the changed lines
+/// of its line diff that no box holds, one hunk per hunk of that diff.
+/// Their `key` says where the view shows them: `sec:KEY` and
+/// `sec-removed:KEY` for a section, `part:N` for the file's N-th part and
+/// `lines:N` for the N-th hunk of its line diff.
+///
+/// A box's id hashes what the box shows, not its line numbers, and a line
+/// hunk's its changed lines, so a box that a later push leaves alone
+/// keeps its mark. Added, removed, generated, binary and very large files
+/// have no hunks.
+pub fn review_hunks(f: &ChangedFile) -> Vec<crate::review::Hunk> {
+    if f.status != Status::Changed || f.generated.is_some() || f.too_large || f.lang == "binary" {
+        return Vec::new();
+    }
+    // The changed lines that a box can hold: for an analyzed Rust file all
+    // of them (its line diff only has those outside items and parts).
+    let diff = rows(&f.hunks);
+    let all: Vec<(char, usize)> = if f.analyzed {
+        let mut v: Vec<(char, usize)> = (f.removed_lines.iter().map(|&l| ('-', l as usize)))
+            .chain(f.added_lines.iter().map(|&l| ('+', l as usize)))
+            .collect();
+        v.sort_by_key(|&(t, l)| (l, t == '+'));
+        v
+    } else {
+        diff.iter()
+            .filter(|r| r.tag != ' ')
+            .map(|r| (r.tag, if r.tag == '-' { r.old } else { r.new }))
+            .collect()
+    };
+    // Each box: key, name, what it shows, and the lines it spans on each
+    // side.
+    type Claim = BTreeSet<usize>;
+    let mut boxes: Vec<(String, String, String, Claim, Claim)> = Vec::new();
+    match (f.lang.as_str(), &f.old_text, &f.new_text) {
+        ("markdown", Some(old), Some(new)) => {
+            let (a, b) = (sections(old), sections(new));
+            for (o, n) in section_changes(&a, &b).0 {
+                let (o, n) = (o.map(|i| &a[i]), n.map(|j| &b[j]));
+                let span = |s: Option<&Section>| -> Claim {
+                    s.map(|s| (s.first..=s.last).collect()).unwrap_or_default()
+                };
+                let show = |s: Option<&Section>| {
+                    s.map(|s| format!("{}\n{}", s.heading, s.text))
+                        .unwrap_or_default()
+                };
+                let Some(s) = n.or(o) else { continue };
+                let key = format!(
+                    "{}:{}",
+                    if n.is_some() { "sec" } else { "sec-removed" },
+                    s.key
+                );
+                boxes.push((
+                    key,
+                    format!("section {}", s.title()),
+                    format!("section\n{}\n{}\0{}", s.key, show(o), show(n)),
+                    span(o),
+                    span(n),
+                ));
+            }
+        }
+        ("python" | "javascript" | "yaml" | "rust", _, _) => {
+            for (i, p) in f.parts.iter().enumerate() {
+                if p.kind == "module" {
+                    continue;
+                }
+                let lines = rows(&p.lines);
+                let shown: String = lines
+                    .iter()
+                    .map(|r| format!("{}{}\n", r.tag, r.text))
+                    .collect();
+                boxes.push((
+                    format!("part:{i}"),
+                    format!("{} {}", p.kind, p.name),
+                    format!(
+                        "part\n{}\n{}\n{:?}\n{:?}\n{shown}",
+                        p.kind, p.name, p.status, p.old_sig
+                    ),
+                    lines
+                        .iter()
+                        .filter(|r| r.tag != '+')
+                        .map(|r| r.old)
+                        .collect(),
+                    lines
+                        .iter()
+                        .filter(|r| r.tag != '-')
+                        .map(|r| r.new)
+                        .collect(),
+                ));
+            }
+        }
+        _ => {}
+    }
+    let held = |claims: &(Claim, Claim), (tag, line): (char, usize)| {
+        if tag == '-' {
+            claims.0.contains(&line)
+        } else {
+            claims.1.contains(&line)
+        }
+    };
+    let mut out: Vec<(String, crate::review::Hunk)> = Vec::new();
+    let mut claimed: Vec<(Claim, Claim)> = Vec::new();
+    for (key, name, text, old, new) in boxes {
+        let claims = (old, new);
+        let mine: Vec<(char, usize)> = all.iter().copied().filter(|&c| held(&claims, c)).collect();
+        out.push((
+            text,
+            crate::review::Hunk {
+                new: mine.iter().filter(|c| c.0 == '+').map(|c| c.1).collect(),
+                old: mine.iter().filter(|c| c.0 == '-').map(|c| c.1).collect(),
+                starts_added: mine.first().is_some_and(|c| c.0 == '+'),
+                name,
+                key,
+                ..Default::default()
+            },
+        ));
+        claimed.push(claims);
+    }
+    // The other changed lines of the line diff, by its hunks.
+    let rest: Vec<&Row> = diff
+        .iter()
+        .filter(|r| r.tag != ' ')
+        .filter(|r| {
+            let c = (r.tag, if r.tag == '-' { r.old } else { r.new });
+            !claimed.iter().any(|cl| held(cl, c))
+        })
+        .collect();
+    for group in rest.chunk_by(|a, b| a.hunk == b.hunk) {
+        let first = group[0];
+        out.push((
+            group
+                .iter()
+                .map(|r| format!("{}{}\n", r.tag, r.text))
+                .collect(),
+            crate::review::Hunk {
+                new: group
+                    .iter()
+                    .filter(|r| r.tag == '+')
+                    .map(|r| r.new)
+                    .collect(),
+                old: group
+                    .iter()
+                    .filter(|r| r.tag == '-')
+                    .map(|r| r.old)
+                    .collect(),
+                starts_added: first.tag == '+',
+                name: format!(
+                    "line {}",
+                    if first.tag == '+' {
+                        first.new
+                    } else {
+                        first.old
+                    }
+                ),
+                key: format!("lines:{}", first.hunk),
+                ..Default::default()
+            },
+        ));
+    }
+    if out.len() < 2 {
+        return Vec::new();
+    }
+    crate::review::with_ids(&crate::review::file_unit(&f.path), out)
 }
 
 fn file_card(d: &Data, f: &ChangedFile) -> String {
@@ -503,7 +888,7 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
     };
     let structured = match f.lang.as_str() {
         "python" | "javascript" | "yaml" | "rust" if !f.parts.is_empty() => {
-            parts_html(d, &f.parts, &f.lang)
+            parts_html(d, &f.path, &f.parts, &f.lang)
         }
         "css" if !f.styles.is_empty() => css::styles_html(&f.styles),
         // Compared, and no property changed.
@@ -512,7 +897,7 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
                 .to_string()
         }
         "markdown" => match (&f.old_text, &f.new_text) {
-            (Some(o), Some(n)) => markdown_html(d, o, n),
+            (Some(o), Some(n)) => markdown_html(d, o, n, Some(&f.path)),
             _ => String::new(),
         },
         // Listed under "Dependencies and package settings" already.
@@ -556,7 +941,23 @@ fn file_card(d: &Data, f: &ChangedFile) -> String {
             } else {
                 stats(f.added, f.removed)
             },
-            hunks_html(d, &f.hunks, &f.lang)
+            diff_html(
+                d,
+                &f.hunks,
+                &f.lang,
+                &Diff {
+                    path: Some(&f.path),
+                    hunk: Some(&|k| {
+                        let h = crate::review::file_hunk(&f.path, &format!("lines:{k}"))?;
+                        Some(format!(
+                            "{}{}",
+                            crate::review::file_hunk_controls(&f.path, &h),
+                            hunk_link(d, &f.path, &h)
+                        ))
+                    }),
+                    ..Default::default()
+                }
+            )
         )
     };
     format!(
@@ -1127,12 +1528,120 @@ mod tests {
         );
     }
 
+    /// A changed file with its line diff, as the analysis makes it.
+    fn changed(path: &str, lang: &str, old: &str, new: &str) -> ChangedFile {
+        let side = |t: &str| crate::since::Side {
+            lines: t.lines().map(str::to_string).collect(),
+            start: 1,
+            nos: Vec::new(),
+        };
+        ChangedFile {
+            path: path.into(),
+            status: Status::Changed,
+            lang: lang.into(),
+            hunks: crate::since::interdiff(&side(old), &side(new)),
+            ..Default::default()
+        }
+    }
+
+    fn keys(list: &[crate::review::Hunk]) -> Vec<(&str, &str, &[usize], &[usize])> {
+        list.iter()
+            .map(|h| (h.key.as_str(), h.name.as_str(), &h.old[..], &h.new[..]))
+            .collect()
+    }
+
+    #[test]
+    fn markdown_hunks_are_sections() {
+        let old = "Intro.\n\n# A\n\nalpha\n\n# B\n\nbeta\n";
+        let new = "Intro.\n\n# A\n\nalpha2\n\n# B\n\nbeta2\n";
+        let mut f = changed("README.md", "markdown", old, new);
+        f.old_text = Some(old.into());
+        f.new_text = Some(new.into());
+        let h = review_hunks(&f);
+        assert_eq!(
+            keys(&h),
+            [
+                ("sec:A", "section A", &[5][..], &[5][..]),
+                ("sec:B", "section B", &[9][..], &[9][..]),
+            ]
+        );
+        // A later push changes the intro and moves both sections down:
+        // they keep their ids, so their marks stay.
+        let later = format!("Intro,\nlonger.\n{}", &new["Intro.\n".len()..]);
+        let mut g = changed("README.md", "markdown", old, &later);
+        g.old_text = Some(old.into());
+        g.new_text = Some(later);
+        let h2 = review_hunks(&g);
+        assert_eq!(h2.len(), 3);
+        assert_eq!(h2[1].id, h[0].id);
+        assert_eq!(h2[2].id, h[1].id);
+        assert_eq!(h2[2].new, [10]);
+    }
+
+    #[test]
+    fn other_files_are_reviewed_by_the_hunks_of_their_diff() {
+        let old: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+        let new = old
+            .replace("line 3\n", "line three\n")
+            .replace("line 25\n", "line 25\nline 25b\n");
+        let f = changed("notes.txt", "text", &old, &new);
+        let h = review_hunks(&f);
+        assert_eq!(
+            keys(&h),
+            [
+                ("lines:0", "line 3", &[3][..], &[3][..]),
+                ("lines:1", "line 26", &[][..], &[26][..]),
+            ]
+        );
+        assert!(h[0].id.starts_with("file:notes.txt#"));
+        // One change: the file's own verdict is enough.
+        let one = changed("notes.txt", "text", &old, &old.replace("line 3\n", "x\n"));
+        assert!(review_hunks(&one).is_empty());
+        // Added files have no hunks.
+        let mut added = f.clone();
+        added.status = Status::Added;
+        assert!(review_hunks(&added).is_empty());
+    }
+
+    #[test]
+    fn boxes_hold_their_lines_and_the_rest_are_line_hunks() {
+        // A YAML file whose `on` key is a box; the change at line 20 is in
+        // no box.
+        let old: String = (1..=30).map(|i| format!("k{i}: {i}\n")).collect();
+        let new = old
+            .replace("k2: 2\n", "k2: 3\n")
+            .replace("k20: 20\n", "k20: x\n");
+        let mut f = changed("ci.yml", "yaml", &old, &new);
+        f.parts = vec![PartChange {
+            name: "k2".into(),
+            kind: "key".into(),
+            status: Status::Changed,
+            line: 2,
+            lines: vec![
+                SourceLine('@', "2 2".into()),
+                SourceLine('-', "k2: 2".into()),
+                SourceLine('+', "k2: 3".into()),
+            ],
+            ..Default::default()
+        }];
+        let h = review_hunks(&f);
+        assert_eq!(
+            keys(&h),
+            [
+                ("part:0", "key k2", &[2][..], &[2][..]),
+                ("lines:1", "line 20", &[20][..], &[20][..]),
+            ]
+        );
+    }
+
     #[test]
     fn markdown_sections_follow_headings_outside_fences() {
         let md = "Intro.\n\n# Usage\n\nRun it.\n\n```sh\n# not a heading\n```\n\n## Flags\n\nSome.\n\nTitle\n=====\n\nText.\n";
         let s = sections(md);
-        let keys: Vec<&str> = s.iter().map(|x| x.0.as_str()).collect();
+        let keys: Vec<&str> = s.iter().map(|x| x.key.as_str()).collect();
         assert_eq!(keys, ["", "Usage", "Usage › Flags", "Title"]);
-        assert!(s[1].2.contains("# not a heading"));
+        assert!(s[1].text.contains("# not a heading"));
+        let spans: Vec<(usize, usize)> = s.iter().map(|x| (x.first, x.last)).collect();
+        assert_eq!(spans, [(1, 2), (3, 10), (11, 14), (15, 18)]);
     }
 }

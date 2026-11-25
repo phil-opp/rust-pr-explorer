@@ -19,6 +19,12 @@
 //! the new hunks need a review. When every hunk has a verdict, the item
 //! gets one too.
 //!
+//! A changed file outside the Rust analysis is reviewed hunk by hunk the
+//! same way. There a hunk is one box of the file's view where it has them
+//! (a section of a Markdown file, a function of a Python file, a key of a
+//! YAML file), and the other changed lines are hunks of its line diff (see
+//! `files::review_hunks`).
+//!
 //! Marks are kept in the browser's local storage, per pull request (or per
 //! pair of compared trees), when the browser allows that. The page of the
 //! whole PR and the page of the changes since an earlier commit share
@@ -146,10 +152,11 @@ struct Review {
     same: HashMap<String, Vec<String>>,
 }
 
-/// One separate change in an item's diff.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// One separate change in an item's or a file's diff.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Hunk {
-    /// `item#hash of its changed lines`.
+    /// `item#hash of its changed lines` (for a file's box, of what the box
+    /// shows).
     pub id: String,
     /// Line numbers of its added lines, in the PR's version of the file.
     pub new: Vec<usize>,
@@ -157,16 +164,23 @@ pub struct Hunk {
     pub old: Vec<usize>,
     /// Whether it starts with an added line (else with a removed one).
     pub starts_added: bool,
+    /// For a file: what it is, e.g. "section Usage" or "line 40", and
+    /// which part of the file's view shows it (see
+    /// `files::review_hunks`).
+    pub name: String,
+    pub key: String,
 }
 
 impl Hunk {
-    /// Its first changed line.
+    /// Its first changed line (0 if it has none, as a file's box whose
+    /// lines the file's line diff places elsewhere).
     pub fn first_line(&self) -> usize {
-        if self.starts_added {
-            self.new[0]
+        let (first, other) = if self.starts_added {
+            (&self.new, &self.old)
         } else {
-            self.old[0]
-        }
+            (&self.old, &self.new)
+        };
+        first.first().or(other.first()).copied().unwrap_or(0)
     }
 }
 
@@ -233,10 +247,8 @@ pub fn changes(it: &Item) -> Vec<Hunk> {
             out.push((
                 String::new(),
                 Hunk {
-                    id: String::new(),
-                    new: Vec::new(),
-                    old: Vec::new(),
                     starts_added: added,
+                    ..Default::default()
                 },
             ));
         }
@@ -253,11 +265,16 @@ pub fn changes(it: &Item) -> Vec<Hunk> {
             o += 1;
         }
     }
+    with_ids(&it.info.id, out)
+}
+
+/// Gives each hunk its id: `unit#hash of its text`, with the repeats of
+/// one change in a unit numbered.
+pub fn with_ids(unit: &str, list: Vec<(String, Hunk)>) -> Vec<Hunk> {
     let mut seen = HashSet::new();
-    out.into_iter()
+    list.into_iter()
         .map(|(text, mut h)| {
-            let base = format!("{}#{:016x}", it.info.id, hash(&text));
-            // The same change twice in one item: number the repeats.
+            let base = format!("{unit}#{:016x}", hash(&text));
             let mut id = base.clone();
             let mut k = 1;
             while !seen.insert(id.clone()) {
@@ -270,9 +287,10 @@ pub fn changes(it: &Item) -> Vec<Hunk> {
         .collect()
 }
 
-/// The item a hunk belongs to.
+/// The item (or file unit) a hunk belongs to. The hash comes after the
+/// last `#`, so a `#` in a file's path is no problem.
 pub fn hunk_item(id: &str) -> Option<String> {
-    let (item, _) = id.split_once('#')?;
+    let (item, _) = id.rsplit_once('#')?;
     REVIEW.with(|r| {
         r.borrow()
             .hunks
@@ -334,6 +352,27 @@ pub fn hunk_controls(item: &str, old: &[usize], new: &[usize]) -> String {
             )
         })
         .collect()
+}
+
+/// The hunk of a file that a part of its view shows (by the hunk's
+/// `key`), if the file is reviewed hunk by hunk.
+pub fn file_hunk(path: &str, key: &str) -> Option<Hunk> {
+    hunks_of(&file_unit(path))
+        .into_iter()
+        .find(|h| h.key == key)
+}
+
+/// The review controls at the top of a file's hunk: which change of how
+/// many it is, what it is, and the verdict buttons.
+pub fn file_hunk_controls(path: &str, h: &Hunk) -> String {
+    let all = hunks_of(&file_unit(path));
+    let k = all.iter().position(|o| o.id == h.id).map_or(0, |i| i + 1);
+    format!(
+        r#"<span class="hunk-at">Change {k} of {} <span class="dim">· {}</span></span>{}"#,
+        all.len(),
+        esc(&h.name),
+        control_html(&h.id)
+    )
 }
 
 thread_local! {
@@ -723,7 +762,16 @@ fn hunks_and_prints(
     let mut prints: HashMap<String, u64> = units.iter().cloned().collect();
     let mut all = HashMap::new();
     for (id, _) in units {
-        let list = d.item(id).map(hunks).unwrap_or_default();
+        let list = match id.strip_prefix("file:") {
+            Some(path) => d
+                .out
+                .files
+                .iter()
+                .find(|f| f.path == path)
+                .map(crate::files::review_hunks)
+                .unwrap_or_default(),
+            None => d.item(id).map(hunks).unwrap_or_default(),
+        };
         if !list.is_empty() {
             prints.extend(list.iter().map(|h| (h.id.clone(), hash(&h.id))));
             all.insert(id.clone(), list);
@@ -1615,8 +1663,13 @@ fn actions(id: &str) -> String {
     }
     let n = hunks_of(id).len();
     if n > 1 {
+        let what = if id.starts_with("file:") {
+            "file"
+        } else {
+            "item"
+        };
         return format!(
-            r#"<span class="rv-scope" title="These buttons give the whole item one verdict. Each change also has its own buttons.">Whole item ({n} changes):</span><button class="rv-btn approve" data-rv-act="approve" title="Approve the whole item, and go on to the next one if Next ▸ led here, except on the canvas (a)">✓ Approve item</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this item (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on the whole item (c)">✎ Comment</button>"#
+            r#"<span class="rv-scope" title="These buttons give the whole {what} one verdict. Each change also has its own buttons.">Whole {what} ({n} changes):</span><button class="rv-btn approve" data-rv-act="approve" title="Approve the whole {what}, and go on to the next one if Next ▸ led here, except on the canvas (a)">✓ Approve {what}</button><button class="rv-btn changes" data-rv-act="changes" title="Say what to change in this {what} (r)">✗ Request changes</button><button class="rv-btn comment" data-rv-act="comment" title="Comment on the whole {what} (c)">✎ Comment</button>"#
         );
     }
     ACTIONS.to_string()
