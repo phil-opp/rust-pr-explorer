@@ -42,6 +42,17 @@ inputs:
       so it only needs `pull-requests: read`. With `false`, the link is
       only in the job summary.
     default: "true"
+  update-comment:
+    description: >-
+      Keep one comment per pull request and update it on every push,
+      instead of posting a new comment for every push that changes the PR
+      and hiding the previous one. Nobody is notified of an update, and
+      the comment stays where it was first posted in the conversation. It
+      links the pages of the current push; the pages of up to 10 earlier
+      pushes are listed in a folded "Earlier pushes" section. When a
+      `workflow_run` workflow posts the comments, set the same input on
+      the comment-only action there.
+    default: "false"
   syntax-only:
     description: Skip rust-analyzer (faster, but method calls stay unresolved).
     default: "false"
@@ -143,10 +154,15 @@ runs:
         SEMVER_CHECKS: ${{ inputs.semver-checks }}
         PR: ${{ inputs.pr }}
         COMMENT: ${{ inputs.comment }}
+        UPDATE_COMMENT: ${{ inputs.update-comment }}
       run: |
         case "$COMMENT" in
           true | false | workflow-run) ;;
           *) echo "::error::comment must be true, false or workflow-run, not '$COMMENT'"; exit 1 ;;
+        esac
+        case "$UPDATE_COMMENT" in
+          true | false) ;;
+          *) echo "::error::update-comment must be true or false, not '$UPDATE_COMMENT'"; exit 1 ;;
         esac
         case "$TRUST" in
           true | false | auto) ;;
@@ -423,6 +439,7 @@ runs:
         PR: ${{ inputs.pr }}
         REPO: ${{ inputs.repository }}
         POST: ${{ inputs.comment == 'true' }}
+        UPDATE_COMMENT: ${{ inputs.update-comment }}
         URL: ${{ steps.upload.outputs.artifact-url }}
         SUMMARY: ${{ steps.run.outputs.summary }}
         COUNTS: ${{ steps.run.outputs.counts }}
