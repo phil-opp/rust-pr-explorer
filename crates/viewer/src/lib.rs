@@ -37,6 +37,7 @@ mod yaml;
 use code::esc;
 use data::{Data, changed};
 use std::cell::RefCell;
+use std::collections::HashSet;
 use std::rc::Rc;
 use wasm_bindgen::JsCast;
 use wasm_bindgen::prelude::wasm_bindgen;
@@ -839,12 +840,14 @@ pub fn show_on_canvas(app: &mut App, shows: &nav::OnCanvas) {
 fn on_review_click(app: &mut App, el: &Element) -> bool {
     if let Some(c) = dom::closest(el, ".rvc") {
         let id = dom::data(&c, "rv").unwrap_or_default();
-        // The links of the "Next:" row open their item as any link does.
-        if dom::closest(el, "a.ref[data-id]").is_some() {
-            return false;
-        }
         if dom::closest(el, "[data-rv-go-next]").is_some() {
             go_next(app, Some(id), false);
+        } else if let Some(b) = dom::closest(el, "[data-rv-go-add]") {
+            let next = dom::data(&b, "rv-go-add").unwrap_or_default();
+            show_unit(app, &next, Some(&id));
+        } else if let Some(b) = dom::closest(el, "[data-rv-go-new]") {
+            let next = dom::data(&b, "rv-go-new").unwrap_or_default();
+            new_canvas_for(app, &next);
         } else if let Some(b) = dom::closest(el, "[data-rv-go-graph]") {
             let i = dom::data(&b, "rv-go-graph").unwrap_or_default();
             if app.s.view != View::Overview {
@@ -986,7 +989,8 @@ fn load_marks(app: &mut App, loaded: Result<String, String>) {
 }
 
 /// Gives a unit a verdict and moves on to the next unreviewed one, or
-/// stays on it when the review steps didn't go there (see `stay`).
+/// stays on it when the review steps didn't go there or the canvas is
+/// open (see `stay`).
 /// For a hunk: moves on to the item's next hunk without a verdict, and
 /// when there is none, gives the item the verdict its hunks add up to.
 /// With `same`, an approval also approves the open items with the same
@@ -995,9 +999,12 @@ fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String,
     // Only a unit that the review steps (Next ▸, a key, the verdict
     // before) went to moves on to the next one. One that the reviewer
     // opened themselves, e.g. from a call graph, stays, with links to
-    // where to go next; also for its next hunks.
+    // where to go next; also for its next hunks. On the canvas every unit
+    // stays: moving on there adds a card and moves the view, so it is
+    // left to Next ▸, `j` and the links of the row under the verdict.
     let unit = review::hunk_item(id).unwrap_or_else(|| id.to_string());
-    let guided = app.s.rv_current.as_deref() == Some(unit.as_str())
+    let guided = app.s.view != View::Canvas
+        && app.s.rv_current.as_deref() == Some(unit.as_str())
         && review::stayed().as_deref() != Some(unit.as_str());
     if !guided {
         review::set_stayed(Some((unit.clone(), String::new())));
@@ -1043,89 +1050,99 @@ fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String,
     }
 }
 
-/// After a verdict on a unit that the review steps didn't go to: makes it
-/// the current unit and shows where to go next in its control.
+/// After a verdict on a unit that the review steps didn't go to, or on a
+/// canvas card: makes it the current unit and shows where to go next in its control.
 fn stay(app: &mut App, unit: &str) {
     app.s.rv_current = Some(unit.to_string());
     app.s.rv_hunk = None;
-    let next = next_steps_html(&app.d, unit);
+    let next = next_steps_html(app, unit);
     review::set_stayed(Some((unit.to_string(), next)));
     keys::mark_current(app);
 }
 
-/// Where to go after reviewing `unit` without moving on: its changed
-/// callers and callees that still need a review, the next unreviewed unit
-/// in review order, and the overview's call graph that lists it.
-fn next_steps_html(d: &Data, unit: &str) -> String {
-    const MAX: usize = 3;
-    let open = |id: &&str| {
-        *id != unit
-            && matches!(
-                review::mark(id),
-                Some(review::Mark::Open | review::Mark::Stale)
-            )
-    };
-    let link = |id: &str| {
-        let kind = d.item(id).map_or("fn", |it| it.info.kind.css());
-        format!(
-            r#"<a class="ref" data-id="{}" data-kind="{kind}"{}><code>{}</code></a>"#,
-            esc(id),
-            nav::item_href(id),
-            esc(&d.display_name_of(id))
-        )
-    };
-    let group = |label: &str, ids: Vec<&str>| {
-        let mut seen = std::collections::HashSet::new();
-        let ids: Vec<&str> = ids.into_iter().filter(|id| seen.insert(*id)).collect();
-        if ids.is_empty() {
-            return String::new();
-        }
-        let more = match ids.len() {
-            n if n > MAX => format!(r#" <span class="dim">+{} more</span>"#, n - MAX),
-            _ => String::new(),
-        };
-        let links: Vec<String> = ids.iter().take(MAX).map(|id| link(id)).collect();
-        format!(
-            r#"<span class="rv-go"><span class="dim">{label}</span> {}{more}</span>"#,
-            links.join(", ")
-        )
-    };
-    let callers: Vec<&str> = d
-        .callers
-        .get(unit)
-        .map(|c| c.iter().map(String::as_str).filter(open).collect())
-        .unwrap_or_default();
-    let callees: Vec<&str> = d.item(unit).map_or(Vec::new(), |it| {
-        it.info
-            .calls
-            .iter()
-            .map(|c| c.to.as_str())
-            .filter(open)
-            .collect()
-    });
-    // The way back first, so that its ◂ points away from the ways on.
+/// Where to go after reviewing `unit` without moving on: the overview's
+/// call graph that lists it, and the next unreviewed unit in review order,
+/// named in its button. On the canvas, that is the next unit with a card
+/// there; when there is none, the button says whether the next unit in
+/// review order adds a card or opens its call graph on a new canvas.
+fn next_steps_html(app: &App, unit: &str) -> String {
+    let d = &app.d;
+    let name = |id: &str| esc(&d.display_name_of(id));
+    // The way back first, so that its ◂ points away from the way on.
     let back = graphs::graph_of(d, unit).map_or(String::new(), |i| {
         format!(
             r#"<button class="rv-go-btn" data-rv-go-graph="{i}" title="The overview's call graph that lists this item">◂ Call graph</button>"#
         )
     });
-    let mut on = vec![group("Called by", callers), group("Calls", callees)];
-    if review::next_open(Some(unit)).is_some() {
-        on.push(
-            r#"<button class="rv-go-btn" data-rv-go-next title="The next item that needs a review, in review order (j)">Next unreviewed ▸</button>"#
-                .to_string(),
-        );
-    }
-    let on = on.concat();
+    let on = if app.s.view == View::Canvas {
+        let cards = canvas_items(app);
+        match review::next_open_where(Some(unit), |u| cards.contains(u)) {
+            Some(next) => format!(
+                r#"<button class="rv-go-btn" data-rv-go-next title="The next card on the canvas that needs a review, in review order (j)">Next unreviewed: <code>{}</code> ▸</button>"#,
+                name(&next)
+            ),
+            None => match review::next_open(Some(unit)) {
+                Some(next) if connected(d, &cards, &next) => format!(
+                    r#"<button class="rv-go-btn" data-rv-go-add="{}" title="Every card on the canvas is reviewed. Adds the next item that needs a review, in review order, next to the cards it is connected to">Add <code>{}</code> ▸</button>"#,
+                    esc(&next),
+                    name(&next)
+                ),
+                Some(next) => format!(
+                    r#"<button class="rv-go-btn" data-rv-go-new="{}" title="Every card on the canvas is reviewed, and the next item that needs a review isn't connected to them: opens its call graph on a new canvas, in place of these cards (Ctrl+Z brings them back)">Next call graph on a new canvas: <code>{}</code> ▸</button>"#,
+                    esc(&next),
+                    name(&next)
+                ),
+                None => String::new(),
+            },
+        }
+    } else {
+        review::next_open(Some(unit)).map_or(String::new(), |next| {
+            format!(
+                r#"<button class="rv-go-btn" data-rv-go-next title="The next item that needs a review, in review order (j)">Next unreviewed: <code>{}</code> ▸</button>"#,
+                name(&next)
+            )
+        })
+    };
     if back.is_empty() && on.is_empty() {
         return String::new();
     }
-    let label = if on.is_empty() {
-        ""
-    } else {
-        r#"<span class="rv-next-label">Next:</span>"#
-    };
-    format!(r#"<span class="rv-next">{back}{label}{on}</span>"#)
+    format!(r#"<span class="rv-next">{back}{on}</span>"#)
+}
+
+/// The items that have a card on the canvas (in any of its tabs), if the
+/// canvas' scope shows the card.
+fn canvas_items(app: &App) -> HashSet<String> {
+    let c = &app.s.canvas;
+    c.groups
+        .iter()
+        .filter(|g| app.d.visible_from(&g.active, &c.scope))
+        .flat_map(|g| g.tabs.iter().cloned())
+        .collect()
+}
+
+/// Whether `id` calls or uses one of `cards`, is called or used by one, or
+/// is in the same call graph of the overview as one.
+fn connected(d: &Data, cards: &HashSet<String>, id: &str) -> bool {
+    let callers = d.callers.get(id).into_iter().flatten();
+    let users = d.used_by.get(id).into_iter().flatten().map(|(u, _)| u);
+    let calls = d.item(id).into_iter().flat_map(|it| &it.info.calls);
+    callers.chain(users).any(|c| cards.contains(c))
+        || calls.map(|c| &c.to).any(|c| cards.contains(c))
+        || graphs::shares_graph(d, id, cards)
+}
+
+/// Opens a new canvas with the overview's call graph that lists `unit`
+/// (or only `unit`), and makes it the current unit.
+fn new_canvas_for(app: &mut App, unit: &str) {
+    let mut ids =
+        graphs::graph_of(&app.d, unit).map_or(Vec::new(), |i| graphs::graph_items(&app.d, i));
+    if !ids.iter().any(|i| i == unit) {
+        ids.insert(0, unit.to_string());
+    }
+    canvas::show_items(app, &ids);
+    review::set_stayed(None);
+    app.s.rv_current = Some(unit.to_string());
+    app.s.rv_hunk = None;
 }
 
 /// The dialog for writing a unit's comment.
@@ -1282,6 +1299,37 @@ fn show_since_review(app: &App, id: &str) {
 /// with the next unit the overview lists, on a module page it skips the
 /// files, and it says so when the tab has nothing left.
 fn go_next(app: &mut App, from: Option<String>, stay: bool) {
+    // On a canvas with cards, Next ▸ goes to the next card that needs a
+    // review, and adds none: when every card is reviewed, the current
+    // card suggests where to go (see `next_steps_html`).
+    let cards = canvas_items(app);
+    if app.s.view == View::Canvas && !cards.is_empty() {
+        if let Some(next) = review::next_open_where(from.as_deref(), |u| cards.contains(u)) {
+            review::set_stayed(None);
+            app.s.rv_current = Some(next.clone());
+            app.s.rv_hunk = None;
+            // Pans only if the card is out of view.
+            nav::step(|| canvas::open(app, &next, None, true));
+            return;
+        }
+        if review::next_open(from.as_deref()).is_none() {
+            toast(&all_reviewed());
+            return;
+        }
+        let at = from
+            .filter(|u| cards.contains(u))
+            .or_else(|| app.s.canvas.groups.first().map(|g| g.active.clone()));
+        // No toast: it would cover the buttons of the row under the verdict, which
+        // say what is left. The card flashes instead.
+        match at {
+            Some(at) => {
+                self::stay(app, &at);
+                canvas::open(app, &at, None, true);
+            }
+            None => toast("Every card on the canvas is reviewed."),
+        }
+        return;
+    }
     review::set_stayed(None);
     // The units this page lists, by their controls (items and files;
     // their hunks are reached from the item).

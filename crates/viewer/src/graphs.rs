@@ -754,12 +754,23 @@ pub fn overview_html(d: &Data) -> String {
 /// the types and constants, or the changed tests and test helpers that
 /// reach it.
 pub fn graph_of(d: &Data, id: &str) -> Option<usize> {
-    graphs(d).graphs.iter().position(|g| {
-        g.rows.iter().any(|r| r.id == id)
-            || g.types.iter().any(|t| t == id)
-            || g.tests.iter().any(|t| t == id)
-            || g.helpers.iter().any(|t| t == id)
-    })
+    graphs(d).graphs.iter().position(|g| lists(g, id))
+}
+
+/// Whether one of the graphs lists both item `id` and one of `others`.
+pub fn shares_graph(d: &Data, id: &str, others: &HashSet<String>) -> bool {
+    graphs(d)
+        .graphs
+        .iter()
+        .any(|g| lists(g, id) && others.iter().any(|o| lists(g, o)))
+}
+
+/// Whether graph `g` lists item `id` (see [`graph_of`]).
+fn lists(g: &Graph, id: &str) -> bool {
+    g.rows.iter().any(|r| r.id == id)
+        || g.types.iter().any(|t| t == id)
+        || g.tests.iter().any(|t| t == id)
+        || g.helpers.iter().any(|t| t == id)
 }
 
 /// The functions of the `i`th graph, for the canvas.

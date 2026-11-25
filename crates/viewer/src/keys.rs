@@ -306,7 +306,10 @@ pub fn cheat_sheet_html() -> String {
         (
             "Review",
             &[
-                ("a", "Approve the current item or change, and go on"),
+                (
+                    "a",
+                    "Approve the current item or change, and go on (on the canvas: stay, j goes on)",
+                ),
                 ("r", "Request changes (asks for a comment)"),
                 ("c", "Comment"),
                 ("Ctrl+Enter", "Save the comment"),
