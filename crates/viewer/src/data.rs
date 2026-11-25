@@ -1914,6 +1914,17 @@ pub fn kind_order(a: &Item, b: &Item) -> std::cmp::Ordering {
         .then_with(|| a.info.name.cmp(&b.info.name))
 }
 
+/// The class that fades the kind and name in the header of a changed item,
+/// like its unchanged signature and docs, to lead the eye to what changed.
+/// Not for modules, whose changes are the items in them.
+pub fn faded_title(it: &Item) -> &'static str {
+    if it.status == Status::Changed && it.info.kind != Kind::Mod {
+        " faded"
+    } else {
+        ""
+    }
+}
+
 /// Whether the item changed, and, while one commit is selected, whether
 /// that commit changed it.
 pub fn changed(it: &Item) -> bool {
