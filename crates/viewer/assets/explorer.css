@@ -13,13 +13,15 @@
   --type: light-dark(#ad378a, #e48fd0);
   --trait: light-dark(#6e4fc4, #b79cff);
   --fn: light-dark(#8f6529, #e0b27a);
-  /* Call connectors on the canvas, one color per callee. */
+  /* Call connectors on the canvas, one color per callee, after the
+     Okabe-Ito palette: the first four stay apart with red-green color
+     vision deficiencies (checked with the Machado et al. simulation). */
   --call-0: var(--fn);
-  --call-1: light-dark(#1f63b5, #74b4f5);
-  --call-2: light-dark(#7a46c9, #c0a4ff);
-  --call-3: light-dark(#0b7a85, #52cfdc);
-  /* Last: the closest to --call-0. */
-  --call-4: light-dark(#c25400, #ff9f52);
+  --call-1: light-dark(#0072b2, #56b4e9);
+  --call-2: light-dark(#333333, #e6e6e6);
+  --call-3: light-dark(#c4709f, #e58bc0);
+  /* Last: with red-green deficiencies, close to --call-0. */
+  --call-4: light-dark(#d55e00, #ff7a3d);
   --mod: light-dark(#366ea6, #79b0ec);
   --macro: light-dark(#067d00, #6fd36f);
   --kw: light-dark(#8959a8, #c49be6);
