@@ -12,7 +12,7 @@ const LIMIT: usize = 50;
 pub struct Snapshot {
     groups: Vec<Group>,
     links: Vec<(String, String)>,
-    scope: String,
+    scope: Option<String>,
     /// What the "calls", "callers" and "used by" buttons had opened, so
     /// that they show as pressed again after an undo.
     expansions: Vec<Expansion>,

@@ -54,14 +54,17 @@ fn open_at(
     let d = app.d.clone();
     let it = d.item(id)?;
     let c = &mut app.s.canvas;
-    if !d.visible_from(id, &c.scope) {
-        let before = d.mod_label(&c.scope);
-        c.scope = d.mod_of(it).to_string();
+    // Opening an item never hides cards: if the privacy view would hide
+    // it, the privacy view goes off rather than to another module.
+    if let Some(s) = &c.scope
+        && !d.visible_from(id, s)
+    {
         toast(&format!(
-            "Now viewing from {}: {} is not visible from {before}",
-            d.mod_label(&c.scope),
-            d.display_name(it)
+            "Privacy view off: {} is not visible from {}",
+            d.display_name(it),
+            d.mod_label(s)
         ));
+        c.scope = None;
     }
     let gi = match c.group_of(id) {
         Some(gi) => {
@@ -316,17 +319,16 @@ pub(crate) fn expand(app: &mut App, id: &str, kind: Related) {
     targets.dedup();
     targets.retain(|t| d.item(t).is_some());
     let c = &mut app.s.canvas;
-    let (mut vis, hidden): (Vec<String>, Vec<String>) = targets
-        .into_iter()
-        .partition(|t| d.visible_from(t, &c.scope));
+    let (mut vis, hidden): (Vec<String>, Vec<String>) =
+        targets.into_iter().partition(|t| c.shows(&d, t));
     if vis.is_empty() {
         toast(&if hidden.is_empty() {
             "Nothing to show".to_string()
         } else {
             format!(
-                "All {} are private to submodules of {}",
+                "All {} are hidden by the privacy view from {}",
                 hidden.len(),
-                d.mod_label(&c.scope)
+                d.mod_label(c.scope.as_deref().unwrap_or_default())
             )
         });
         return;
@@ -397,7 +399,7 @@ pub(crate) fn expand(app: &mut App, id: &str, kind: Related) {
     }
     if !hidden.is_empty() {
         notes.push(format!(
-            "{} {} private to submodules and hidden at this scope",
+            "{} {} hidden by the privacy view",
             hidden.len(),
             if hidden.len() > 1 { "are" } else { "is" }
         ));
@@ -428,7 +430,7 @@ pub(super) fn members_as_tabs(app: &mut App, id: &str) {
     let members: Vec<&Item> = d
         .members(it)
         .into_iter()
-        .filter(|m| m.info.kind != Kind::Impl && d.visible_from(&m.info.id, &c.scope))
+        .filter(|m| m.info.kind != Kind::Impl && c.shows(&d, &m.info.id))
         .collect();
     if members.is_empty() {
         return;

@@ -3,7 +3,8 @@
 
 use crate::code::esc;
 use crate::data::Data;
-use crate::{App, dom};
+use crate::{App, dom, toast};
+use model::Item;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use web_sys::Element;
 
@@ -87,8 +88,10 @@ pub enum Drag {
 }
 
 pub struct Canvas {
-    /// The module the canvas looks from.
-    pub scope: String,
+    /// The module the privacy view looks from, if it is on: then only the
+    /// cards of items that code in this module can name are shown. Off by
+    /// default, so that every card is shown.
+    pub scope: Option<String>,
     pub groups: Vec<Group>,
     /// Connectors recording where a card was opened from.
     pub links: Vec<(String, String)>,
@@ -131,7 +134,19 @@ struct Expansion {
 }
 
 impl Canvas {
-    pub fn new(scope: String) -> Canvas {
+    /// Whether the card of item `id` is shown: always, unless the privacy
+    /// view is on and code in its module can't name the item.
+    pub fn shows(&self, d: &Data, id: &str) -> bool {
+        self.scope.as_deref().is_none_or(|s| d.visible_from(id, s))
+    }
+
+    /// The module that the card of `it` looks from: the privacy view's,
+    /// or else the item's own, which sees all of it (private fields, say).
+    pub fn looks_from<'a>(&'a self, d: &Data, it: &'a Item) -> &'a str {
+        self.scope.as_deref().unwrap_or(d.mod_of(it))
+    }
+
+    pub fn new(scope: Option<String>) -> Canvas {
         Canvas {
             scope,
             groups: Vec::new(),
@@ -245,7 +260,7 @@ impl Canvas {
 }
 
 fn visible(d: &Data, c: &Canvas, g: &Group) -> bool {
-    d.visible_from(&g.active, &c.scope)
+    c.shows(d, &g.active)
 }
 
 fn card_el(gid: u32) -> Option<Element> {
@@ -300,7 +315,7 @@ fn place(d: &Data, c: &mut Canvas, gi: usize) {
 /// `scope`, for a view outside the canvas (see [`crate::calls`]). `full`
 /// shows an unchanged item's docs and source, not only its signature.
 pub fn card_html_for(d: &Data, scope: &str, id: &str, full: bool) -> String {
-    let mut c = Canvas::new(scope.to_string());
+    let mut c = Canvas::new(Some(scope.to_string()));
     let gi = c.add_group(id, 0.0, 0.0);
     if full {
         c.groups[gi].expanded.insert(id.to_string());
@@ -308,31 +323,67 @@ pub fn card_html_for(d: &Data, scope: &str, id: &str, full: bool) -> String {
     card_html(d, &c, &c.groups[gi])
 }
 
+/// The privacy view's menu: off, or the module to look from. It offers
+/// the modules of the open cards and the modules around them.
+fn privacy_picker(d: &Data, c: &Canvas) -> String {
+    let mut mods: BTreeSet<String> = c
+        .groups
+        .iter()
+        .flat_map(|g| &g.tabs)
+        .filter_map(|t| d.item(t))
+        .flat_map(|it| d.mod_chain(d.mod_of(it)))
+        .collect();
+    if let Some(s) = &c.scope {
+        mods.extend(d.mod_chain(s));
+    }
+    let options: String = mods
+        .iter()
+        .map(|m| {
+            format!(
+                r#"<option value="{}"{}>from {}</option>"#,
+                esc(m),
+                if c.scope.as_ref() == Some(m) {
+                    " selected"
+                } else {
+                    ""
+                },
+                esc(&d.mod_label(m))
+            )
+        })
+        .collect();
+    format!(
+        r#"<label class="privacy-pick" title="Show only the cards of items that code in the chosen module can name, under Rust's privacy rules"><span>Privacy view</span> <select id="cv-scope"><option value="">off: all cards</option>{options}</select></label>"#
+    )
+}
+
+/// Sets the module the privacy view looks from, or turns it off.
+pub fn set_privacy_view(app: &mut App, scope: Option<String>) {
+    match &scope {
+        Some(m) => toast(&format!(
+            "Privacy view: viewing from {}",
+            app.d.mod_label(m)
+        )),
+        None => toast("Privacy view off: all cards are shown"),
+    }
+    app.s.canvas.scope = scope;
+    render(app);
+}
+
 pub fn render(app: &mut App) {
     let d = app.d.clone();
     let c = &app.s.canvas;
-    let chain = d.mod_chain(&c.scope);
     let hidden = c.groups.iter().filter(|g| !visible(&d, c, g)).count();
     let bar = format!(
-        r#"<button id="cv-undo" title="Undo the last change to the cards (Ctrl+Z)"{undo}>↶ Undo</button><span>Viewing from</span><span class="scope">{}</span>{}
+        r#"<button id="cv-undo" title="Undo the last change to the cards (Ctrl+Z)"{undo}>↶ Undo</button>{}{}
         <span class="sep"></span>
         <button id="cv-arrange" title="Lay cards out inside their modules">Arrange by module</button>
         <button id="cv-frames" class="{}" title="Draw module boundaries">Module frames</button>
         <button id="cv-fit">Fit</button>
         <button id="cv-clear">Clear</button>"#,
-        chain
-            .iter()
-            .map(|m| format!(
-                r#"<a data-scope="{}" title="Look from {}">{}</a>"#,
-                esc(m),
-                esc(&d.mod_label(m)),
-                esc(d.item(m).map_or("", |i| &i.info.name))
-            ))
-            .collect::<Vec<_>>()
-            .join("::"),
+        privacy_picker(&d, c),
         if hidden > 0 {
             format!(
-                r#"<span class="chip" title="Not visible from this scope">{hidden} card{} hidden at this scope</span>"#,
+                r#"<span class="chip" title="Not visible from the module the privacy view looks from">{hidden} card{} hidden</span>"#,
                 if hidden > 1 { "s" } else { "" }
             )
         } else {

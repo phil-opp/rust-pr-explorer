@@ -222,7 +222,11 @@ pub fn show_module_graph(app: &mut App, m: &str) {
         }
     }
     let c = &mut app.s.canvas;
-    c.scope = m.to_string();
+    // All of the graph is in `m`, so the privacy view, if on, shows it
+    // from there.
+    if c.scope.is_some() {
+        c.scope = Some(m.to_string());
+    }
     c.groups.clear();
     c.links.clear();
     for id in &ids {
@@ -237,7 +241,7 @@ pub fn show_module_graph(app: &mut App, m: &str) {
 
 /// Opens every chain from the public API down to a changed internal item:
 /// the public items, the items in between and the item itself, arranged
-/// by module, viewed from a module that sees all of them.
+/// by module.
 pub fn show_impact(app: &mut App, id: &str) {
     let d = app.d.clone();
     let Some(it) = d.item(id) else {
@@ -258,8 +262,9 @@ pub fn show_impact(app: &mut App, id: &str) {
     show_items_from(app, &ids, d.mod_of(it));
 }
 
-/// Opens `ids` on the canvas, arranged by module, viewed from a module
-/// that sees all of them (the first one's if there is one).
+/// Opens `ids` on the canvas, arranged by module. If the privacy view is
+/// on, it looks from a module that sees all of them (the first one's if
+/// there is one).
 pub fn show_items(app: &mut App, ids: &[String]) {
     let d = app.d.clone();
     let Some(first) = ids.first().and_then(|i| d.item(i)) else {
@@ -279,10 +284,16 @@ fn show_items_from(app: &mut App, ids: &[String], first: &str) {
     let scope = scopes
         .iter()
         .find(|s| ids.iter().all(|i| d.visible_from(i, s)))
-        .cloned()
-        .unwrap_or_else(|| first.to_string());
+        .cloned();
     let c = &mut app.s.canvas;
-    c.scope = scope;
+    // If the privacy view is on, it looks from a module that sees all
+    // of them, or goes off if there is none.
+    if c.scope.is_some() {
+        if scope.is_none() {
+            toast("Privacy view off: no module sees all of these items");
+        }
+        c.scope = scope;
+    }
     c.groups.clear();
     c.links.clear();
     for id in ids {

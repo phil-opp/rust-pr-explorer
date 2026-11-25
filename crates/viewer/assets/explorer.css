@@ -307,8 +307,8 @@ a.ref:hover { text-decoration: underline; }
   display: flex; align-items: center; gap: 8px; padding: 0 12px;
   background: var(--panel); border-bottom: 1px solid var(--border); font-size: 13px;
 }
-#canvas-bar .scope { font-family: var(--mono); }
-#canvas-bar .scope a { color: var(--mod); }
+#canvas-bar .privacy-pick { display: flex; align-items: center; gap: 6px; }
+#canvas-bar .privacy-pick select { font: 13px var(--sans); max-width: 260px; padding: 3px 4px; border: 1px solid var(--border); border-radius: 4px; background: var(--bg); color: var(--text); }
 #canvas-bar .sep { flex: 1; }
 .chip { font-size: 12px; color: var(--muted); border: 1px dashed var(--border); border-radius: 10px; padding: 1px 8px; }
 #viewport { position: absolute; top: 40px; left: 0; right: 0; bottom: 0; overflow: hidden; cursor: grab;
