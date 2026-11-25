@@ -1123,7 +1123,7 @@ fn canvas_items(app: &App) -> HashSet<String> {
     let c = &app.s.canvas;
     c.groups
         .iter()
-        .filter(|g| app.d.visible_from(&g.active, &c.scope))
+        .filter(|g| c.shows(&app.d, &g.active))
         .flat_map(|g| g.tabs.iter().cloned())
         .collect()
 }
