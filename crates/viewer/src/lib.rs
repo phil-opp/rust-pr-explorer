@@ -750,10 +750,6 @@ fn show_module_graph(app: &mut App, m: &str) {
 fn on_review_click(app: &mut App, el: &Element) -> bool {
     if let Some(c) = dom::closest(el, ".rvc") {
         let id = dom::data(&c, "rv").unwrap_or_default();
-        // The links of the row under the verdict open their item as any link does.
-        if dom::closest(el, "a.ref[data-id]").is_some() {
-            return false;
-        }
         if dom::closest(el, "[data-rv-go-next]").is_some() {
             go_next(app, Some(id), false);
         } else if let Some(b) = dom::closest(el, "[data-rv-go-add]") {
@@ -975,115 +971,52 @@ fn stay(app: &mut App, unit: &str) {
 }
 
 /// Where to go after reviewing `unit` without moving on: the overview's
-/// call graph that lists it, the next unreviewed unit in review order, and
-/// its changed callers and callees that still need a review. On the
-/// canvas, the next unreviewed unit is the next one with a card there;
-/// when there is none, the button names the next unit in review order and
-/// says whether it adds a card or opens a new canvas.
+/// call graph that lists it, and the next unreviewed unit in review order,
+/// named in its button. On the canvas, that is the next unit with a card
+/// there; when there is none, the button says whether the next unit in
+/// review order adds a card or opens its call graph on a new canvas.
 fn next_steps_html(app: &App, unit: &str) -> String {
     let d = &app.d;
-    const MAX: usize = 3;
-    let open = |id: &&str| {
-        *id != unit
-            && matches!(
-                review::mark(id),
-                Some(review::Mark::Open | review::Mark::Stale)
-            )
-    };
-    let link = |id: &str| {
-        let kind = d.item(id).map_or("fn", |it| it.info.kind.css());
-        format!(
-            r#"<a class="ref" data-id="{}" data-kind="{kind}"><code>{}</code></a>"#,
-            esc(id),
-            esc(&d.display_name_of(id))
-        )
-    };
-    let group = |label: &str, ids: Vec<&str>| {
-        let mut seen = std::collections::HashSet::new();
-        let ids: Vec<&str> = ids.into_iter().filter(|id| seen.insert(*id)).collect();
-        if ids.is_empty() {
-            return String::new();
-        }
-        let more = match ids.len() {
-            n if n > MAX => format!(r#" <span class="dim">+{} more</span>"#, n - MAX),
-            _ => String::new(),
-        };
-        let links: Vec<String> = ids.iter().take(MAX).map(|id| link(id)).collect();
-        format!(
-            r#"<span class="rv-go"><span class="dim">{label}</span> {}{more}</span>"#,
-            links.join(", ")
-        )
-    };
-    // On the canvas, callers and callees that have a card already are
-    // left out: the card and its connector show them.
-    let cards = (app.s.view == View::Canvas).then(|| canvas_items(app));
-    let shown = |id: &&str| cards.as_ref().is_none_or(|c| !c.contains(*id));
-    let callers: Vec<&str> = d
-        .callers
-        .get(unit)
-        .map(|c| {
-            c.iter()
-                .map(String::as_str)
-                .filter(open)
-                .filter(shown)
-                .collect()
-        })
-        .unwrap_or_default();
-    let callees: Vec<&str> = d.item(unit).map_or(Vec::new(), |it| {
-        it.info
-            .calls
-            .iter()
-            .map(|c| c.to.as_str())
-            .filter(open)
-            .filter(shown)
-            .collect()
-    });
-    // The way back first, so that its ◂ points away from the ways on.
+    let name = |id: &str| esc(&d.display_name_of(id));
+    // The way back first, so that its ◂ points away from the way on.
     let back = graphs::graph_of(d, unit).map_or(String::new(), |i| {
         format!(
             r#"<button class="rv-go-btn" data-rv-go-graph="{i}" title="The overview's call graph that lists this item">◂ Call graph</button>"#
         )
     });
-    // The button that goes on first, then the callers and callees, each
-    // with a label of its own, so that they don't read as where the
-    // button goes.
-    let mut on = Vec::new();
-    match &cards {
-        Some(cards) if review::next_open_where(Some(unit), |u| cards.contains(u)).is_some() => on.push(
-            r#"<button class="rv-go-btn" data-rv-go-next title="The next card on the canvas that needs a review, in review order (j)">Next unreviewed ▸</button>"#
-                .to_string(),
-        ),
-        Some(cards) => {
-            if let Some(next) = review::next_open(Some(unit)) {
-                let name = esc(&d.display_name_of(&next));
-                on.push(if connected(d, cards, &next) {
-                    format!(
-                        r#"<button class="rv-go-btn" data-rv-go-add="{}" title="Every card on the canvas is reviewed. Adds the next item that needs a review, in review order, next to the cards it is connected to">Add <code>{name}</code> ▸</button>"#,
-                        esc(&next)
-                    )
-                } else {
-                    format!(
-                        r#"<button class="rv-go-btn" data-rv-go-new="{}" title="Every card on the canvas is reviewed, and the next item that needs a review isn't connected to them: replaces the cards with its call graph (Ctrl+Z brings them back)">New canvas: <code>{name}</code> ▸</button>"#,
-                        esc(&next)
-                    )
-                });
-            }
+    let on = if app.s.view == View::Canvas {
+        let cards = canvas_items(app);
+        match review::next_open_where(Some(unit), |u| cards.contains(u)) {
+            Some(next) => format!(
+                r#"<button class="rv-go-btn" data-rv-go-next title="The next card on the canvas that needs a review, in review order (j)">Next unreviewed: <code>{}</code> ▸</button>"#,
+                name(&next)
+            ),
+            None => match review::next_open(Some(unit)) {
+                Some(next) if connected(d, &cards, &next) => format!(
+                    r#"<button class="rv-go-btn" data-rv-go-add="{}" title="Every card on the canvas is reviewed. Adds the next item that needs a review, in review order, next to the cards it is connected to">Add <code>{}</code> ▸</button>"#,
+                    esc(&next),
+                    name(&next)
+                ),
+                Some(next) => format!(
+                    r#"<button class="rv-go-btn" data-rv-go-new="{}" title="Every card on the canvas is reviewed, and the next item that needs a review isn't connected to them: opens its call graph on a new canvas, in place of these cards (Ctrl+Z brings them back)">Next call graph on a new canvas: <code>{}</code> ▸</button>"#,
+                    esc(&next),
+                    name(&next)
+                ),
+                None => String::new(),
+            },
         }
-        None if review::next_open(Some(unit)).is_some() => on.push(
-            r#"<button class="rv-go-btn" data-rv-go-next title="The next item that needs a review, in review order (j)">Next unreviewed ▸</button>"#
-                .to_string(),
-        ),
-        None => {}
-    }
-    on.push(group("Unreviewed callers:", callers));
-    on.push(group("Unreviewed callees:", callees));
-    let on = on.concat();
+    } else {
+        review::next_open(Some(unit)).map_or(String::new(), |next| {
+            format!(
+                r#"<button class="rv-go-btn" data-rv-go-next title="The next item that needs a review, in review order (j)">Next unreviewed: <code>{}</code> ▸</button>"#,
+                name(&next)
+            )
+        })
+    };
     if back.is_empty() && on.is_empty() {
         return String::new();
     }
-    // The ways on in one box that wraps on its own, so that a line break
-    // doesn't split them between the way back's line and the next.
-    format!(r#"<span class="rv-next">{back}<span class="rv-ways">{on}</span></span>"#)
+    format!(r#"<span class="rv-next">{back}{on}</span>"#)
 }
 
 /// The items that have a card on the canvas (in any of its tabs), if the
