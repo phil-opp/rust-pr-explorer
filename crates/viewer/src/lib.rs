@@ -212,7 +212,7 @@ pub fn set_view_at(app: &mut App, view: View, anchor: Option<nav::Anchor>) {
         );
     }
     // Show or hide the sidebar first, so that the view lays out at its final width.
-    for id in ["sidebar", "side-btn"] {
+    for id in ["sidebar", "side-btn", "side-show"] {
         if let Some(el) = dom::by_id(id) {
             dom::toggle_class(&el, "hidden", !pages::sidebar_shown(app));
         }
@@ -543,8 +543,8 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         }
         dom::toggle_class(&panel, "hidden", true);
     }
-    // On a wide screen the sidebar's button collapses it, per view.
-    if !narrow() && dom::closest(el, "#side-btn").is_some() {
+    // On a wide screen the sidebar can be collapsed, per view.
+    if dom::closest(el, "#side-hide, #side-show").is_some() {
         outline::toggle_closed(app.s.view);
         outline::apply_closed(app);
         if app.s.view == View::Canvas {

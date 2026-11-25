@@ -10,6 +10,7 @@ use crate::code::esc;
 use crate::graphs::{self, Graph, Graphs};
 use crate::review::{self, Mark, Verdict};
 use crate::{App, View, dom};
+use model::Status;
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
@@ -125,15 +126,23 @@ fn row_html(app: &App, id: &str, depth: usize, from: Option<&str>, on: &[String]
         (_, true) => "open it on the canvas",
         (_, false) => "show its card",
     };
+    // Everything in a graph is changed, so only new and removed items are
+    // marked, like in the overview's graphs; other cards can also be
+    // unchanged.
+    let tag = match it.status {
+        Status::Added => r#"<span class="st st-added badge">new</span>"#,
+        Status::Removed => r#"<span class="st st-removed badge">removed</span>"#,
+        Status::Unchanged if !d.touched(it) => r#"<span class="ol-unch">unchanged</span>"#,
+        _ => "",
+    };
     format!(
-        r#"<li><div class="tree-row ol-row{}{}" data-ol="{}"{} style="--depth:{}" title="{} · click to {hint}"><span class="dot {}"></span><span class="ol-nm" data-kind="{}">{}</span><span class="cnt">{}</span></div></li>"#,
+        r#"<li style="--depth:{}"><div class="tree-row ol-row{}{}" data-ol="{}"{} title="{} · click to {hint}"><span class="ol-nm" data-kind="{}">{}</span>{tag}<span class="cnt">{}</span></div></li>"#,
+        depth.min(5),
         if off { " off" } else { "" },
         if sel { " sel" } else { "" },
         esc(id),
         from.map_or(String::new(), |f| format!(r#" data-ol-from="{}""#, esc(f))),
-        depth.min(5),
         esc(id),
-        it.status.css(),
         it.info.kind.css(),
         esc(&d.display_name(it)),
         state_html(id),
@@ -343,27 +352,30 @@ pub fn toggle_closed(view: View) {
     }
 }
 
-/// The sidebar button's label: what it shows or hides.
-fn button_title(app: &App) -> &'static str {
-    match (crate::narrow(), closed(app.s.view), shown(app)) {
-        (true, _, true) => "Call graph",
-        (true, _, false) => "Modules and files",
-        (false, true, true) => "Show the call graph",
-        (false, true, false) => "Show modules and files",
-        (false, false, true) => "Hide the call graph",
-        (false, false, false) => "Hide modules and files",
+/// What the sidebar shows, for its buttons' labels.
+fn what(app: &App) -> &'static str {
+    if shown(app) {
+        "the call graph"
+    } else {
+        "modules and files"
     }
 }
 
 /// Collapses the sidebar if the reader did so in this view (on a wide
-/// screen: on a narrow one it is a drawer anyway), and labels its button.
+/// screen: on a narrow one it is a drawer anyway), and labels its buttons.
 pub fn apply_closed(app: &App) {
     if let Some(body) = dom::document().body() {
         dom::toggle_class(&body, "side-closed", closed(app.s.view));
     }
-    if let Some(b) = dom::by_id("side-btn") {
-        let title = button_title(app);
-        let _ = b.set_attribute("title", title);
-        let _ = b.set_attribute("aria-label", title);
+    let what = what(app);
+    for (id, title) in [
+        ("side-btn", format!("Show {what}")),
+        ("side-hide", format!("Hide {what}")),
+        ("side-show", format!("Show {what}")),
+    ] {
+        if let Some(b) = dom::by_id(id) {
+            let _ = b.set_attribute("title", &title);
+            let _ = b.set_attribute("aria-label", &title);
+        }
     }
 }
