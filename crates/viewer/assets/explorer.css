@@ -773,6 +773,8 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 .manifest tr.m-del .mf-name code { text-decoration: line-through; text-decoration-color: var(--removed); }
 .manifest .mf-old del { color: var(--muted); text-decoration-color: var(--removed); }
 .manifest .mf-old, .manifest .mf-new { padding-left: 24px; }
+.manifest .mf-key { color: var(--muted); }
+.manifest tr.mf-cont td { padding-top: 0; }
 /* Lock files: updates labeled by what changed in the version. */
 .lk-bump { font-size: 12px; color: var(--muted); }
 .lk-bump.lk-major, .lk-bump.lk-down { color: var(--changed); font-weight: 600; }
