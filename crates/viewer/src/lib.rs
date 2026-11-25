@@ -1095,7 +1095,6 @@ fn update_finish(app: &App) {
     let (event, own) = finish_choice();
     let comments = post::summary(&app.d).comments;
     dom::set_html("rv-what", &post::posts_html(&comments, &own, event));
-    dom::set_html("rv-fallback", &post::fallback_html(&comments, event));
 }
 
 /// The buttons of the "Finish review" dialog: copy the review in one form.
@@ -1119,8 +1118,10 @@ fn finish_output(app: &App, what: &str) {
             "The review's JSON",
         ),
         _ => {
-            let Some(attempt) = post::Attempt::from_name(what) else {
-                return;
+            let in_text = match what {
+                "cmd" => false,
+                "cmd-text" => true,
+                _ => return,
             };
             (
                 post::command(
@@ -1129,7 +1130,7 @@ fn finish_output(app: &App, what: &str) {
                     &own,
                     event,
                     &carry::for_review(),
-                    attempt,
+                    in_text,
                 )
                 .unwrap_or_default(),
                 "The command",
