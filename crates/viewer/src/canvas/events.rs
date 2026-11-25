@@ -267,7 +267,7 @@ fn code_block(el: &Element) -> Option<Element> {
     let on_line =
         el == &block || dom::closest(el, ".ln, .no").is_some_and(|l| block.contains(Some(&l)));
     // Not on what is clickable in a block: links, unfold rows, review bars.
-    let control = dom::closest(el, "a, button, [data-unfold], .hunk-rv, .hunk-gh").is_some();
+    let control = dom::closest(el, "a, button, [data-unfold], .hunk-rv").is_some();
     (on_line && !control).then_some(block)
 }
 

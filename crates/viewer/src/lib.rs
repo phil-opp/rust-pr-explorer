@@ -19,6 +19,7 @@ mod icons;
 mod impact;
 mod js;
 mod keys;
+mod line_notes;
 mod map;
 mod nav;
 mod outline;
@@ -530,6 +531,11 @@ fn install_listeners() {
             .dyn_ref::<KeyboardEvent>()
             .is_some_and(|k| k.key() == "Escape")
         {
+            // Unselects chosen lines, unless it closes a dialog.
+            let modal = dom::by_id("modal").is_some_and(|m| !m.class_list().contains("hidden"));
+            if !modal {
+                line_notes::cancel();
+            }
             close_modal();
             if let Some(p) = dom::by_id("settings") {
                 dom::toggle_class(&p, "hidden", true);
@@ -652,6 +658,9 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
                 "The browser didn't allow copying: right-click the link icon and copy the link.",
             );
         }
+        return;
+    }
+    if line_notes::on_click(app, el, ev) {
         return;
     }
     if on_review_click(app, el) {
@@ -1172,6 +1181,10 @@ fn save_from_editor(app: &mut App, verdict: review::Verdict) {
         return;
     }
     close_modal();
+    if let Some(id) = line_notes::editor_id(&id) {
+        line_notes::save(app, id, verdict, text.trim().to_string());
+        return;
+    }
     save_verdict(app, &id, verdict, text.trim().to_string(), false);
 }
 
