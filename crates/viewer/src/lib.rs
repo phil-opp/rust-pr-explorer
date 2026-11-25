@@ -750,7 +750,7 @@ fn show_module_graph(app: &mut App, m: &str) {
 fn on_review_click(app: &mut App, el: &Element) -> bool {
     if let Some(c) = dom::closest(el, ".rvc") {
         let id = dom::data(&c, "rv").unwrap_or_default();
-        // The links of the "Next:" row open their item as any link does.
+        // The links of the row under the verdict open their item as any link does.
         if dom::closest(el, "a.ref[data-id]").is_some() {
             return false;
         }
@@ -915,7 +915,7 @@ fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String,
     // opened themselves, e.g. from a call graph, stays, with links to
     // where to go next; also for its next hunks. On the canvas every unit
     // stays: moving on there adds a card and moves the view, so it is
-    // left to Next ▸, `j` and the links of the "Next:" row.
+    // left to Next ▸, `j` and the links of the row under the verdict.
     let unit = review::hunk_item(id).unwrap_or_else(|| id.to_string());
     let guided = app.s.view != View::Canvas
         && app.s.rv_current.as_deref() == Some(unit.as_str())
@@ -974,9 +974,9 @@ fn stay(app: &mut App, unit: &str) {
     keys::mark_current(app);
 }
 
-/// Where to go after reviewing `unit` without moving on: its changed
-/// callers and callees that still need a review, the next unreviewed unit
-/// in review order, and the overview's call graph that lists it. On the
+/// Where to go after reviewing `unit` without moving on: the overview's
+/// call graph that lists it, the next unreviewed unit in review order, and
+/// its changed callers and callees that still need a review. On the
 /// canvas, the next unreviewed unit is the next one with a card there;
 /// when there is none, the button names the next unit in review order and
 /// says whether it adds a card or opens a new canvas.
@@ -1014,10 +1014,20 @@ fn next_steps_html(app: &App, unit: &str) -> String {
             links.join(", ")
         )
     };
+    // On the canvas, callers and callees that have a card already are
+    // left out: the card and its connector show them.
+    let cards = (app.s.view == View::Canvas).then(|| canvas_items(app));
+    let shown = |id: &&str| cards.as_ref().is_none_or(|c| !c.contains(*id));
     let callers: Vec<&str> = d
         .callers
         .get(unit)
-        .map(|c| c.iter().map(String::as_str).filter(open).collect())
+        .map(|c| {
+            c.iter()
+                .map(String::as_str)
+                .filter(open)
+                .filter(shown)
+                .collect()
+        })
         .unwrap_or_default();
     let callees: Vec<&str> = d.item(unit).map_or(Vec::new(), |it| {
         it.info
@@ -1025,6 +1035,7 @@ fn next_steps_html(app: &App, unit: &str) -> String {
             .iter()
             .map(|c| c.to.as_str())
             .filter(open)
+            .filter(shown)
             .collect()
     });
     // The way back first, so that its ◂ points away from the ways on.
@@ -1033,8 +1044,10 @@ fn next_steps_html(app: &App, unit: &str) -> String {
             r#"<button class="rv-go-btn" data-rv-go-graph="{i}" title="The overview's call graph that lists this item">◂ Call graph</button>"#
         )
     });
-    let mut on = vec![group("Called by", callers), group("Calls", callees)];
-    let cards = (app.s.view == View::Canvas).then(|| canvas_items(app));
+    // The button that goes on first, then the callers and callees, each
+    // with a label of its own, so that they don't read as where the
+    // button goes.
+    let mut on = Vec::new();
     match &cards {
         Some(cards) if review::next_open_where(Some(unit), |u| cards.contains(u)).is_some() => on.push(
             r#"<button class="rv-go-btn" data-rv-go-next title="The next card on the canvas that needs a review, in review order (j)">Next unreviewed ▸</button>"#
@@ -1062,21 +1075,15 @@ fn next_steps_html(app: &App, unit: &str) -> String {
         ),
         None => {}
     }
+    on.push(group("Unreviewed callers:", callers));
+    on.push(group("Unreviewed callees:", callees));
     let on = on.concat();
     if back.is_empty() && on.is_empty() {
         return String::new();
     }
-    let label = if on.is_empty() {
-        ""
-    } else {
-        r#"<span class="rv-next-label">Next:</span>"#
-    };
-    // The label and the ways on in one box, so that a line break never
-    // puts "Next:" with the way back and the ways on on the next line;
-    // the ways on wrap in a column of their own, right of the label.
-    format!(
-        r#"<span class="rv-next">{back}<span class="rv-on">{label}<span class="rv-ways">{on}</span></span></span>"#
-    )
+    // The ways on in one box that wraps on its own, so that a line break
+    // doesn't split them between the way back's line and the next.
+    format!(r#"<span class="rv-next">{back}<span class="rv-ways">{on}</span></span>"#)
 }
 
 /// The items that have a card on the canvas (in any of its tabs), if the
@@ -1285,7 +1292,7 @@ fn go_next(app: &mut App, from: Option<String>, stay: bool) {
         let at = from
             .filter(|u| cards.contains(u))
             .or_else(|| app.s.canvas.groups.first().map(|g| g.active.clone()));
-        // No toast: it would cover the buttons of the "Next:" row, which
+        // No toast: it would cover the buttons of the row under the verdict, which
         // say what is left. The card flashes instead.
         match at {
             Some(at) => {
