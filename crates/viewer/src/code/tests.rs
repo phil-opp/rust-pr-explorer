@@ -917,6 +917,8 @@ fn reformatted_lines_are_shown_as_unchanged() {
         new_len: 4,
         added: Vec::new(),
         removed: Vec::new(),
+        requalified_added: Vec::new(),
+        requalified_removed: Vec::new(),
     }];
     let html = d.source_html(&it, Some(true), false);
     // Only `x + 1` → `x + 2` counts; the call is shown in its new form.
@@ -977,6 +979,8 @@ fn tokens_added_to_rewrapped_lines_are_marked() {
             at: span(2, 10, 10),
             text: " b".into(),
         }],
+        requalified_added: Vec::new(),
+        requalified_removed: Vec::new(),
     }];
     let html = d.source_html(&it, Some(true), false);
     // `c` is an added token of a kept line, with `b` struck out before
@@ -998,6 +1002,74 @@ fn tokens_added_to_rewrapped_lines_are_marked() {
     assert_eq!(changes.len(), 1);
     assert_eq!(changes[0].new, [3, 4]);
     assert!(changes[0].old.is_empty());
+}
+
+#[test]
+fn paths_that_name_the_same_item_are_no_change() {
+    use model::{Item, Reformatted, RemovedTokens, SourceLine, Status, TokenSpan};
+    let d = empty();
+    let mut it = Item {
+        status: Status::Changed,
+        ..Default::default()
+    };
+    it.changes.body = true;
+    it.info.id = "c::f".into();
+    it.info.kind = model::Kind::Fn;
+    it.info.line = 1;
+    it.old_line = Some(1);
+    // As in dora#4304: `std::process::Command::new` → `Command::new`, with
+    // a new `use std::process::Command`, and a real change below.
+    it.source = vec![
+        SourceLine(' ', "fn f() {".into()),
+        SourceLine('-', "    let ok = std::process::Command::new(x);".into()),
+        SourceLine('+', "    let ok = Command::new(x);".into()),
+        SourceLine('-', "    a();".into()),
+        SourceLine('+', "    b();".into()),
+        SourceLine(' ', "}".into()),
+    ];
+    let span = |line, start, end| TokenSpan { line, start, end };
+    it.reformatted = vec![Reformatted {
+        old: 1,
+        old_len: 1,
+        new: 1,
+        new_len: 1,
+        added: Vec::new(),
+        removed: Vec::new(),
+        requalified_added: Vec::new(),
+        requalified_removed: vec![RemovedTokens {
+            old: span(1, 13, 27),
+            at: span(1, 13, 13),
+            text: "std::process::".into(),
+        }],
+    }];
+    let html = d.source_html(&it, Some(true), false);
+    // The line is shown in its new form, the removed segments struck out
+    // as no change, and only `a()` → `b()` counts.
+    assert!(
+        html.contains(r#"<span class="wc tq td" title="The path names the same item as before">std::process::</span>"#),
+        "{html}"
+    );
+    assert_eq!(html.matches(r#"class="ln rf""#).count(), 1, "{html}");
+    assert!(
+        html.contains(">+1</span> <span class=\"d-del\">−1<"),
+        "{html}"
+    );
+    let changes = crate::review::changes(&it);
+    assert_eq!(changes.len(), 1, "{changes:?}");
+    assert_eq!(
+        (changes[0].old.as_slice(), changes[0].new.as_slice()),
+        (&[3][..], &[3][..])
+    );
+
+    // Side by side, the old line has them struck out where they were.
+    crate::settings::set(crate::settings::Settings {
+        split: true,
+        ..Default::default()
+    });
+    let html = d.source_html(&it, Some(true), false);
+    crate::settings::set(Default::default());
+    assert_eq!(html.matches(r#"class="wc tq td""#).count(), 1, "{html}");
+    assert!(html.contains("std::process::</span>Command"), "{html}");
 }
 
 #[test]

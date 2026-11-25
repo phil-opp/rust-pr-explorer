@@ -274,11 +274,12 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
                     m.status.css()
                 };
                 html.push_str(&format!(
-                    r#"<div class="mitem {}"><span class="dot {dot}"></span><a class="ref" data-id="{}" data-kind="{}" data-path="{}">{}</a>{}{}</div>"#,
+                    r#"<div class="mitem {}"><span class="dot {dot}"></span><a class="ref" data-id="{}" data-kind="{}" data-path="{}"{}>{}</a>{}{}</div>"#,
                     if m.info.vis_scope.is_some() { "private" } else { "" },
                     esc(&m.info.id),
                     m.info.kind.css(),
                     esc(&m.info.id),
+                    crate::nav::item_href(&m.info.id),
                     esc(&m.info.name),
                     crate::data::test_tag_of(m).to_string() + &crate::unsafety::tag(m),
                     if m.info.vis_scope.is_some() { format!(r#"<span class="vis">{}</span>"#, esc(&m.info.vis_label)) } else { String::new() }
@@ -319,7 +320,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         {tabs}
         <div class="card-h"><span class="kind">{}</span>{} {}{}<span class="grow"></span>{}{}<span class="x" data-close="{}" title="Close">×</span></div>
         <div class="card-loc">{}</div>
-        <div class="card-b">{impl_header}{impact}{body}{}</div>{members}{}{}</div>"#,
+        <div class="card-b">{impl_header}{impact}{body}{}</div>{members}{}{}<div class="card-rs" title="Drag to resize. Double-click to fit the code again."></div></div>"#,
         it.status.css(),
         g.gid,
         g.x,
