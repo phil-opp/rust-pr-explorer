@@ -49,6 +49,7 @@ crates/viewer            the page's front end (wasm, web-sys, pulldown-cmark)
   src/indirect.rs        calls through items in between (canvas, call view)
   src/unsafety.rs        unsafe tags, the overview's unsafe box, source stripes
   src/graphs.rs          the overview's changed call graphs
+  src/listing.rs         the overview's changed items by call graph, rendered lazily
   src/files.rs           changed files (Markdown sections, Python, YAML,
                          manifests, Rust code outside items)
   src/css.rs             CSS highlighting and selector boxes

@@ -215,7 +215,8 @@ fn verdict(app: &mut App, v: Verdict) {
     }
 }
 
-/// `k`: the unit before the current one in review order, reviewed or not,
+/// `k`: the unit before the current one in review order (on the overview:
+/// the one above it), reviewed or not,
 /// shown whole if it was folded after its review.
 fn prev_item(app: &mut App) {
     let Some(cur) = current(app) else {
@@ -223,7 +224,16 @@ fn prev_item(app: &mut App) {
         return;
     };
     let item = review::hunk_item(&cur).unwrap_or(cur);
-    let Some(prev) = review::prev_unit(&item) else {
+    // On the overview, the unit above; elsewhere, in review order.
+    let prev = match crate::overview_order(app) {
+        Some(order) => order
+            .iter()
+            .position(|u| *u == item)
+            .and_then(|i| i.checked_sub(1))
+            .map(|i| order[i].clone()),
+        None => review::prev_unit(&item),
+    };
+    let Some(prev) = prev else {
         crate::toast("This is the first item.");
         return;
     };

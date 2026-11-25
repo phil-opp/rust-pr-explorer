@@ -559,8 +559,10 @@ fn entries_html(d: &Data, g: &Graph) -> String {
     fact("Public API", &public.join(", ")) + &fact("Reached from", &reached)
 }
 
-/// One graph as an overview entry.
-fn graph_html(d: &Data, i: usize, g: &Graph) -> String {
+/// One graph as an overview entry. Repeated at the start of the graph's
+/// section of changed items (`in_section`), without its heading and
+/// buttons, which the section's heading has.
+pub fn graph_html(d: &Data, i: usize, g: &Graph, in_section: bool) -> String {
     let new = g
         .rows
         .iter()
@@ -624,24 +626,32 @@ fn graph_html(d: &Data, i: usize, g: &Graph) -> String {
                 .filter(|t| d.item(t).is_some_and(changed))
                 .map(String::as_str),
         );
+    let top = if in_section {
+        String::new()
+    } else {
+        format!(
+            r#" id="cgraph-{i}"><div class="ihead"><span class="cg-roots">{head}{more_roots}</span></div>
+        <div class="iacts"><a class="btn" data-cgitems="{i}" title="The graph's items with their diffs, further down">Diffs ▾</a><a class="btn" data-cgraph="{i}"{} title="{}">{}</a></div"#,
+            crate::nav::href(&crate::nav::Route::Canvas(Some(
+                crate::nav::OnCanvas::Items(g.rows.iter().map(|r| r.id.clone()).collect())
+            ))),
+            if crate::narrow() {
+                "Show the root in the call view"
+            } else {
+                "Open the graph's functions on the canvas"
+            },
+            if crate::narrow() {
+                "Calls ▸"
+            } else {
+                "Canvas ▸"
+            },
+        )
+    };
     format!(
-        r#"<div class="irow cgraph" id="cgraph-{i}"><div class="ihead"><span class="cg-roots">{head}{more_roots}</span></div>
-        <div class="iacts"><a class="btn" data-cgraph="{i}"{} title="{}">{}</a></div>
+        r#"<div class="irow cgraph{}"{top}>
         <div class="cg-sub"><span class="dim">{count}</span><span class="rv-group">{}</span></div>
         <div class="cg-facts">{}{}{}{}</div></div>"#,
-        crate::nav::href(&crate::nav::Route::Canvas(Some(
-            crate::nav::OnCanvas::Items(g.rows.iter().map(|r| r.id.clone()).collect())
-        ))),
-        if crate::narrow() {
-            "Show the root in the call view"
-        } else {
-            "Open the graph's functions on the canvas"
-        },
-        if crate::narrow() {
-            "Calls ▸"
-        } else {
-            "Canvas ▸"
-        },
+        if in_section { " cg-again" } else { "" },
         crate::review::group_html(ids),
         entries_html(d, g),
         fact(
@@ -694,8 +704,7 @@ fn tests_html(d: &Data, tests: &[String], helpers: &[String]) -> String {
 }
 
 /// The overview's section. Empty without changed Rust items.
-pub fn overview_html(d: &Data) -> String {
-    let gs = graphs(d);
+pub fn overview_html(d: &Data, gs: &Graphs) -> String {
     let fns: usize = gs.graphs.iter().map(|g| g.rows.len()).sum();
     if gs.graphs.is_empty() && gs.tests.is_empty() && gs.other.is_empty() && gs.removed.is_empty() {
         return String::new();
@@ -723,7 +732,7 @@ pub fn overview_html(d: &Data) -> String {
         .graphs
         .iter()
         .enumerate()
-        .map(|(i, g)| graph_html(d, i, g))
+        .map(|(i, g)| graph_html(d, i, g, false))
         .collect();
     let extra = |label: &str, ids: &[String], what: &str| {
         if ids.is_empty() {
