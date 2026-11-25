@@ -563,7 +563,12 @@ fn install_listeners() {
     }
     // Back and Forward.
     dom::listen(&dom::window().into(), "hashchange", |_| {
-        with_app(nav::on_hash_change);
+        // Showing an entry's cards again can be undone, like a click.
+        with_app(|app| {
+            canvas::before_change(app);
+            nav::on_hash_change(app);
+            canvas::after_change(app);
+        });
     });
     // Marks saved in another tab: shown here too. Saving writes several
     // keys; they are read once.
