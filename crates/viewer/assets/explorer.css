@@ -317,6 +317,9 @@ a.ref:hover { text-decoration: underline; }
   background-size: 22px 22px; }
 #viewport.panning { cursor: grabbing; }
 #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
+/* A double click on a card's header glides to it. */
+#world.zooming { transition: transform .25s ease-out; }
+@media (prefers-reduced-motion: reduce) { #world.zooming { transition: none; } }
 #edges, #frames { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
 #canvas-empty { position: absolute; inset: 40px; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; pointer-events: none; }
 .frame rect { fill: none; stroke: var(--mod); stroke-width: 1.5; }

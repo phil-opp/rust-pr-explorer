@@ -135,6 +135,7 @@ The page holds a copy of the threads, so it can be read by everyone who can open
 - Cards of unchanged items (an unchanged callee, say) show only their signature. **docs & source ▾** expands one, **signature only ▴** folds it again.
 - **Arrange by module** lays the cards out inside nested module frames, with each module's private items in a dashed zone.
 - **↶ Undo** (or Ctrl+Z, ⌘Z) takes back the last change to the cards: a move, cards opened or closed, tabs combined, **Arrange by module** or **Clear**.
+- Double-click a card's header (double-tap on a touch screen) to center the card and zoom to a comfortable reading size, with code at 16 pixels on screen. Each further double-click on the same card zooms one step closer (20, then 25 pixels); the one after the closest step goes back to the reading size. A card that doesn't fit the view at that zoom shows its top left corner. **Fit**, Ctrl+scroll or a pinch zoom out again.
 - On a touch screen, one finger pans the view wherever it starts, also on a card, and two fingers zoom. A card follows the finger only after the finger rested on its header for about half a second, so that moving the view doesn't move cards by accident. A sideways swipe on code that is wider than its card scrolls the code.
 
 ## Calls
