@@ -121,19 +121,9 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     if it.info.kind == Kind::Mod {
         acts.push_str(r#"<button data-act="drill">Drill in</button><button data-act="page">Module page</button>"#);
     } else {
-        // Callers first: they open to the left of the card, callees to the
-        // right.
-        if !callers.is_empty() {
-            acts.push_str(&toggle_button(
-                c,
-                id,
-                Related::Callers,
-                "callers",
-                "Show what calls this",
-                &format!(r#"◂ callers <span class="n">{}</span>"#, callers.len()),
-            ));
-        }
-        // Callers of callers, up to the public API.
+        // What opens to the left of the card first, the furthest first:
+        // the chains from the public API, then the callers. Callees open to
+        // the right.
         if let CardImpact::Chains { count, title } = &impact {
             acts.push_str(&toggle_button(
                 c,
@@ -142,6 +132,16 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
                 "public-api",
                 title,
                 &format!(r#"◂ public API <span class="n">{count}</span>"#),
+            ));
+        }
+        if !callers.is_empty() {
+            acts.push_str(&toggle_button(
+                c,
+                id,
+                Related::Callers,
+                "callers",
+                "Show what calls this",
+                &format!(r#"◂ callers <span class="n">{}</span>"#, callers.len()),
             ));
         }
         if !callees.is_empty() {
