@@ -547,6 +547,13 @@ a.card-badge[data-drill]:hover { border-style: solid; }
   color: light-dark(color-mix(in srgb, currentColor 50%, var(--text)), color-mix(in srgb, currentColor 55%, var(--text)));
 }
 
+/* Path segments added to or removed from a path that still names the same
+   item, as `std::process::` when a `use std::process::Command` came in: no
+   change, so no color, only a dotted underline or a thin strike in the
+   muted text color. */
+.ln .wc.tq { background: none; color: var(--muted); text-decoration: underline 1px dotted var(--muted); text-underline-offset: 3px; cursor: help; }
+.ln .wc.tq.td { text-decoration: line-through 1px var(--muted); }
+
 /* Word changes in docs: inserted words underlined, removed ones struck out. */
 ins.wd { text-decoration: underline 2px var(--added); text-underline-offset: 3px; background: var(--added-bg); }
 del.wd { text-decoration: line-through 1.5px var(--removed); background: var(--removed-bg); margin-right: 3px; }

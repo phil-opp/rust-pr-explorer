@@ -10,6 +10,12 @@
 //! keeps most of its tokens is kept too, with its added and removed tokens:
 //! a call that got an argument and was then split by rustfmt reads better
 //! as that argument than as one removed line and six added ones.
+//!
+//! Tokens that only shorten or spell out a path that names the same item
+//! in both versions (`std::process::Command::new` that became
+//! `Command::new` after a new `use std::process::Command`) are no change:
+//! they are kept apart, and lines with only those are kept also when the
+//! line diff replaces them with as many lines.
 
 use model::{Reformatted, RemovedTokens, TokenSpan};
 use similar::{Algorithm, DiffOp, capture_diff_slices, capture_diff_slices_deadline};
@@ -23,7 +29,14 @@ const MAX_TOKENS: usize = 50_000;
 /// source, line by line) that hold the same tokens apart from whitespace,
 /// line breaks and trailing commas, or were rewrapped and had a few tokens
 /// added or removed.
-pub fn find(old: &[&str], new: &[&str]) -> Vec<Reformatted> {
+///
+/// `same_item(o, n)` says whether the paths that start at `o` (line and
+/// column, in chars) of `old` and at `n` of `new` name the same item.
+pub fn find(
+    old: &[&str],
+    new: &[&str],
+    same_item: impl Fn((usize, usize), (usize, usize)) -> bool,
+) -> Vec<Reformatted> {
     let (ot, nt) = (tokens(old), tokens(new));
     if ot.len() > MAX_TOKENS || nt.len() > MAX_TOKENS {
         return Vec::new();
@@ -104,30 +117,53 @@ pub fn find(old: &[&str], new: &[&str]) -> Vec<Reformatted> {
         if !clean {
             continue;
         }
-        let mut added = Vec::new();
-        let mut removed = Vec::new();
+        let (mut added, mut removed) = (Vec::new(), Vec::new());
+        let (mut re_added, mut re_removed) = (Vec::new(), Vec::new());
         if !mine.is_empty() {
+            let requalified: Vec<bool> = mine
+                .iter()
+                .map(|(ro, rn)| {
+                    let (o, n) = (path_start(&ot, ro), path_start(&nt, rn));
+                    let (Some(o), Some(n)) = (o, n) else {
+                        return false;
+                    };
+                    same_item(old_text.pos(ot[o].start), new_text.pos(nt[n].start))
+                })
+                .collect();
             // Lines that were edited, not rewrapped, are a line diff, and
             // so is a group that changed too much to be read as tokens.
             let changed: usize = mine
                 .iter()
-                .flat_map(|(ro, rn)| ot[ro.clone()].iter().chain(&nt[rn.clone()]))
+                .zip(&requalified)
+                .filter(|(_, re)| !**re)
+                .flat_map(|((ro, rn), _)| ot[ro.clone()].iter().chain(&nt[rn.clone()]))
                 .filter(|t| t.text != ",")
                 .map(|t| t.text.chars().count())
                 .sum();
             if changed > g.same {
                 continue;
             }
-            for (ro, rn) in &mine {
+            for ((ro, rn), re) in mine.iter().zip(requalified) {
+                let (added, removed) = if re {
+                    (&mut re_added, &mut re_removed)
+                } else {
+                    (&mut added, &mut removed)
+                };
                 added.extend(spans(&new_text, &nt[rn.clone()]));
                 // Where the removed tokens go in the new version: after the
-                // token before them, else before the token after them.
-                let at = if rn.start > 0 && in_new(&nt[rn.start - 1]) {
-                    new_text.pos(nt[rn.start - 1].end)
-                } else if let Some(next) = nt.get(rn.start).filter(|t| in_new(t)) {
-                    new_text.pos(next.start)
-                } else {
-                    continue;
+                // token before them, else before the token after them. The
+                // segments of a requalified path go before the rest of it.
+                let after = rn
+                    .start
+                    .checked_sub(1)
+                    .map(|i| &nt[i])
+                    .filter(|t| in_new(t));
+                let next = nt.get(rn.start).filter(|t| in_new(t));
+                let at = match (after, next) {
+                    (_, Some(next)) if re => new_text.pos(next.start),
+                    (Some(p), _) => new_text.pos(p.end),
+                    (None, Some(next)) => new_text.pos(next.start),
+                    (None, None) => continue,
                 };
                 let at = TokenSpan {
                     line: at.0 as u32,
@@ -137,8 +173,8 @@ pub fn find(old: &[&str], new: &[&str]) -> Vec<Reformatted> {
                 // What separated them from the token before them, if on
                 // the same line.
                 let before = match ro.start.checked_sub(1).map(|i| &ot[i]) {
-                    Some(p) => old_text.between(p.end, ot[ro.start].start),
-                    None => String::new(),
+                    Some(p) if !re => old_text.between(p.end, ot[ro.start].start),
+                    _ => String::new(),
                 };
                 for (k, span) in spans(&old_text, &ot[ro.clone()]).into_iter().enumerate() {
                     let text = old_text.slice(span);
@@ -150,17 +186,29 @@ pub fn find(old: &[&str], new: &[&str]) -> Vec<Reformatted> {
                     });
                 }
             }
-            if added.is_empty() && removed.is_empty() {
+            if added.is_empty()
+                && removed.is_empty()
+                && re_added.is_empty()
+                && re_removed.is_empty()
+            {
                 // Only commas changed.
                 continue;
             }
         }
         // Lines that are the same at either end are plain unchanged lines.
         let new_touched = |l: usize| {
-            added.iter().any(|t| t.line as usize == l)
-                || removed.iter().any(|t| t.at.line as usize == l)
+            added.iter().chain(&re_added).any(|t| t.line as usize == l)
+                || removed
+                    .iter()
+                    .chain(&re_removed)
+                    .any(|t| t.at.line as usize == l)
         };
-        let old_touched = |l: usize| removed.iter().any(|t| t.old.line as usize == l);
+        let old_touched = |l: usize| {
+            removed
+                .iter()
+                .chain(&re_removed)
+                .any(|t| t.old.line as usize == l)
+        };
         while os <= oe && ns <= ne && old[os] == new[ns] && !old_touched(os) && !new_touched(ns) {
             os += 1;
             ns += 1;
@@ -179,10 +227,14 @@ pub fn find(old: &[&str], new: &[&str]) -> Vec<Reformatted> {
         // replaces with others, and a different number of them: lines
         // edited in place get their changed words marked anyway, and a
         // statement that moved to another line can look like a rewrap
-        // (its `let` kept, the rest removed) but is no such thing.
-        if !(added.is_empty() && removed.is_empty())
-            && (oe - os == ne - ns
-                || old_block[os..=oe]
+        // (its `let` kept, the rest removed) but is no such thing. Lines
+        // with only requalified paths are no change, so they can be as
+        // many in both versions.
+        let changed = !(added.is_empty() && removed.is_empty());
+        let requalified = !(re_added.is_empty() && re_removed.is_empty());
+        if (changed && oe - os == ne - ns)
+            || ((changed || requalified)
+                && old_block[os..=oe]
                     .iter()
                     .chain(&new_block[ns..=ne])
                     .any(|b| b.is_none() || *b != old_block[os]))
@@ -196,9 +248,36 @@ pub fn find(old: &[&str], new: &[&str]) -> Vec<Reformatted> {
             new_len: (ne - ns + 1) as u32,
             added,
             removed,
+            requalified_added: re_added,
+            requalified_removed: re_removed,
         });
     }
     out
+}
+
+/// Where the path is that a run of changed tokens (`run`, of `toks`) is
+/// the start or the middle of, if it is only path segments and `::`
+/// (`std::process::` of `std::process::Command::new`): the index of the
+/// path's first segment. An empty run must be right before a segment.
+fn path_start(toks: &[Token], run: &Range<usize>) -> Option<usize> {
+    let segment = |i: usize| is_segment(&toks[i].text);
+    let colon = |i: usize| toks[i].text == ":";
+    if !toks.get(run.start).is_some_and(|t| is_segment(&t.text))
+        || !run.clone().all(|i| segment(i) || colon(i))
+    {
+        return None;
+    }
+    let mut i = run.start;
+    while i >= 3 && colon(i - 1) && colon(i - 2) && segment(i - 3) {
+        i -= 3;
+    }
+    Some(i)
+}
+
+/// Whether a token is an identifier, as a path segment is.
+fn is_segment(t: &str) -> bool {
+    t.starts_with(|c: char| c.is_alphabetic() || c == '_')
+        && t.chars().all(|c| c.is_alphanumeric() || c == '_')
 }
 
 /// Lines of both versions joined by unchanged tokens (inclusive), and the
@@ -476,7 +555,14 @@ mod tests {
             new_len,
             added: Vec::new(),
             removed: Vec::new(),
+            requalified_added: Vec::new(),
+            requalified_removed: Vec::new(),
         }
+    }
+
+    /// `find` with no paths that name the same item.
+    fn find(old: &[&str], new: &[&str]) -> Vec<Reformatted> {
+        super::find(old, new, |_, _| false)
     }
 
     fn span(line: u32, start: u32, end: u32) -> TokenSpan {
@@ -535,6 +621,53 @@ mod tests {
         let old = lines("f(a);");
         let new = lines("f(\n    compute_something_else(x, y, z),\n    more_of_it,\n);");
         assert_eq!(find(&old, &new), []);
+    }
+
+    #[test]
+    fn a_path_that_names_the_same_item_is_requalified() {
+        // As in dora#4304, with a new `use std::process::Command`.
+        let old = lines("let ok = std::process::Command::new(\"cargo\")\n    .status();");
+        let new = lines("let ok = Command::new(\"cargo\")\n    .status();");
+        let same = |o: (usize, usize), n: (usize, usize)| o == (0, 9) && n == (0, 9);
+        let mut g = group(0, 1, 0, 1);
+        g.requalified_removed = vec![RemovedTokens {
+            old: span(0, 9, 23),
+            at: span(0, 9, 9),
+            text: "std::process::".into(),
+        }];
+        assert_eq!(super::find(&old, &new, same), [g.clone()]);
+        assert!(g.only_reformatted());
+        // Spelled out, or with other segments, alike.
+        let mut g = group(0, 1, 0, 1);
+        g.requalified_added = vec![span(0, 9, 23)];
+        assert_eq!(super::find(&new, &old, same), [g]);
+        let old = lines("let s = crate::a::S::new();");
+        let new = lines("let s = super::S::new();");
+        let found = super::find(&old, &new, |o, n| o == (0, 8) && n == (0, 8));
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].requalified_added, [span(0, 8, 13)]);
+        assert_eq!(found[0].requalified_removed[0].old, span(0, 8, 16));
+        // A path to another item is a change, as is anything else that
+        // changed: the line diff shows it.
+        assert_eq!(find(&old, &new), []);
+        let old = lines("let ok = std::process::Command::new(\"cargo\");");
+        let new = lines("let ok = Command::new(\"rustc\");");
+        assert_eq!(super::find(&old, &new, same), []);
+    }
+
+    #[test]
+    fn a_requalified_path_in_a_rewrapped_call_with_a_new_argument() {
+        let old = lines("let x = g(std::mem::take(a), b);");
+        let new = lines("let x = g(\n    take(a),\n    b,\n    c,\n);");
+        let found = super::find(&old, &new, |o, n| o == (0, 10) && n == (1, 4));
+        let mut g = group(0, 1, 0, 5);
+        g.added = vec![span(3, 4, 5)];
+        g.requalified_removed = vec![RemovedTokens {
+            old: span(0, 10, 20),
+            at: span(1, 4, 4),
+            text: "std::mem::".into(),
+        }];
+        assert_eq!(found, [g]);
     }
 
     #[test]
