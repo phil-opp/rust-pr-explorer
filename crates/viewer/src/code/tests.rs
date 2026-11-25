@@ -18,6 +18,7 @@ fn empty() -> Data {
             project: None,
             commits: Vec::new(),
             versions: Default::default(),
+            run_url: None,
         },
         crates: vec!["c".into()],
         items: BTreeMap::new(),

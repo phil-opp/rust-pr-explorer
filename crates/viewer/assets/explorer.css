@@ -893,9 +893,13 @@ body:not(.reviewing) .rv-same { display: none; }
 /* "GitHub ↗": opens an item or a change in the pull request's diff on
    GitHub. Outside review mode, a change's link floats at the right of its
    first line; in review mode it is part of the change's bar. */
-a.gh-link { font: 12px var(--sans); color: var(--link); white-space: nowrap; text-decoration: none; }
-a.gh-link:hover { text-decoration: underline; }
-.iacts a.gh-link { align-self: center; margin-right: 4px; }
+a.gh-link, a.perma-link { font: 12px var(--sans); color: var(--muted); white-space: nowrap; text-decoration: none; display: inline-flex; align-items: center; }
+a.gh-link:hover, a.perma-link:hover { color: var(--link); }
+/* Octicons (icons.rs), as tall as the text around them. */
+svg.icon { width: 14px; height: 14px; fill: currentColor; flex: none; }
+/* An item's GitHub link and permalink. */
+.item-links { display: inline-flex; align-items: center; gap: 8px; }
+.iacts .item-links { align-self: center; margin: 0 4px 0 6px; }
 .hunk-gh { display: block; height: 0; text-align: right; position: relative; z-index: 1; }
 .hunk-gh a.gh-link { position: relative; top: 1px; margin-right: 6px; padding: 0 5px; border-radius: 3px; background: var(--bg-code); }
 .sbs .hunk-gh { grid-column: 1 / -1; }

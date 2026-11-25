@@ -320,17 +320,40 @@ pub fn github_url(d: &Data, l: &Loc) -> Option<String> {
     ))
 }
 
-/// A link that opens `l` on GitHub, or nothing if the page isn't for a
-/// pull request or there is no line to go to.
+/// A link that opens `l` on GitHub, as GitHub's icon (`label` is for
+/// screen readers), or nothing if the page isn't for a pull request or
+/// there is no line to go to.
 pub fn github_link(d: &Data, l: Option<Loc>, class: &str, label: &str, what: &str) -> String {
     let Some((url, l)) = l.and_then(|l| Some((github_url(d, &l)?, l))) else {
         return String::new();
     };
     format!(
-        r#"<a class="{class}" href="{}" target="_blank" rel="noopener" title="Open {what} on GitHub ({} {})">{label}</a>"#,
+        r#"<a class="{class}" href="{}" target="_blank" rel="noopener" title="Open {what} on GitHub ({} {})" aria-label="{}">{}</a>"#,
         esc(&url),
         esc(&l.path),
-        l.lines()
+        l.lines(),
+        esc(label.trim_end_matches(" ↗")),
+        crate::icons::GITHUB
+    )
+}
+
+/// [`github_link`] for an item, followed by its permalink on this page
+/// (see `nav::permalink`), or nothing without a GitHub link.
+pub fn item_links(d: &Data, it: &Item) -> String {
+    let gh = github_link(
+        d,
+        item_loc(&d.out.files, it),
+        "gh-link",
+        "GitHub",
+        "this item",
+    );
+    if gh.is_empty() {
+        return gh;
+    }
+    let route = crate::nav::Route::Overview(Some(crate::nav::Anchor::Item(it.info.id.clone())));
+    format!(
+        r#"<span class="item-links">{gh}{}</span>"#,
+        crate::nav::permalink_html(&route, "this item")
     )
 }
 
