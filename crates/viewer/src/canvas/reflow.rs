@@ -1,7 +1,8 @@
-//! Keeps cards from overlapping when one of them changes height, for
-//! example when its source view is expanded or another tab is shown.
+//! Keeps cards from overlapping when one of them changes size, for
+//! example when its source view is expanded, another tab is shown or the
+//! reader resizes it.
 
-use super::{CARD_W, Canvas, visible};
+use super::{Canvas, visible};
 use crate::data::Data;
 use crate::{App, dom};
 use std::cell::RefCell;
@@ -25,13 +26,14 @@ pub(super) fn observe_cards() {
         let mut o = o.borrow_mut();
         if o.is_none() {
             let cb = Closure::<dyn FnMut(js_sys::Array)>::new(|entries: js_sys::Array| {
-                let changes: Vec<(u32, f64)> = entries
+                let changes: Vec<(u32, f64, f64)> = entries
                     .iter()
                     .filter_map(|e| e.dyn_into::<ResizeObserverEntry>().ok())
                     .filter_map(|e| {
                         let el = e.target();
                         let gid = dom::data(&el, "gid")?.parse::<u32>().ok()?;
-                        Some((gid, dom::offset_size(&el).1))
+                        let (w, h) = dom::offset_size(&el);
+                        Some((gid, w, h))
                     })
                     .collect();
                 crate::with_app(|app| resized(app, &changes));
@@ -47,19 +49,23 @@ pub(super) fn observe_cards() {
     });
 }
 
-fn resized(app: &mut App, changes: &[(u32, f64)]) {
+fn resized(app: &mut App, changes: &[(u32, f64, f64)]) {
     let d = app.d.clone();
     let c = &mut app.s.canvas;
     let mut moved = BTreeSet::new();
-    for &(gid, h) in changes {
-        // A hidden view or a removed card has no height.
-        if h <= 0.0 {
+    for &(gid, w, h) in changes {
+        // A hidden view or a removed card has no size.
+        if w <= 0.0 || h <= 0.0 {
             continue;
         }
-        if let Some(old) = c.heights.insert(gid, h)
-            && (h - old).abs() >= 1.0
-        {
-            moved.extend(reflow(&d, c, gid, old, h));
+        let Some((old_w, old_h)) = c.sizes.insert(gid, (w, h)) else {
+            continue;
+        };
+        if (h - old_h).abs() >= 1.0 {
+            moved.extend(reflow(&d, c, gid, Axis::Y, old_h, h));
+        }
+        if (w - old_w).abs() >= 1.0 {
+            moved.extend(reflow(&d, c, gid, Axis::X, old_w, w));
         }
     }
     if moved.is_empty() {
@@ -67,79 +73,109 @@ fn resized(app: &mut App, changes: &[(u32, f64)]) {
     }
     for g in c.groups.iter().filter(|g| moved.contains(&g.gid)) {
         if let Some(el) = super::card_el(g.gid) {
+            dom::set_style(&el, "left", &format!("{}px", g.x));
             dom::set_style(&el, "top", &format!("{}px", g.y));
         }
     }
     super::draw_edges(app);
 }
 
-/// Moves the cards below a card that changed from height `old` to `new` by
-/// the same amount, so that they keep their distance to it. Cards are below
-/// it if they are in its column, or below such a card in theirs. Returns
-/// the cards that moved.
-fn reflow(d: &Data, c: &mut Canvas, gid: u32, old: f64, new: f64) -> Vec<u32> {
+/// The direction in which a card changed size: `Y` for its height, `X`
+/// for its width.
+#[derive(Clone, Copy, PartialEq)]
+enum Axis {
+    X,
+    Y,
+}
+
+/// Moves the cards after a card that changed size along `axis` from `old`
+/// to `new` by the same amount, so that they keep their distance to it:
+/// for a new height the cards below it, for a new width the cards right of
+/// it. Cards are after it if they are in its column (or row), or after
+/// such a card in theirs. Returns the cards that moved.
+fn reflow(d: &Data, c: &mut Canvas, gid: u32, axis: Axis, old: f64, new: f64) -> Vec<u32> {
     let Some(ai) = c.by_gid(gid) else {
         return Vec::new();
     };
     let vis: Vec<usize> = (0..c.groups.len())
         .filter(|&i| visible(d, c, &c.groups[i]))
         .collect();
-    let height = |i: usize| -> f64 {
-        let g = &c.groups[i];
-        if i == ai {
-            old
-        } else {
-            c.heights
+    // Each card's place and size before the change, as (start, length)
+    // along `axis` and across it.
+    let rects: Vec<((f64, f64), (f64, f64))> = (0..c.groups.len())
+        .map(|i| {
+            let g = &c.groups[i];
+            let (w, h) = c
+                .sizes
                 .get(&g.gid)
                 .copied()
-                .unwrap_or_else(|| super::height_of(d, g))
-        }
+                .unwrap_or_else(|| (super::width_of(g), super::height_of(d, g)));
+            let (w, h) = match (i == ai, axis) {
+                (true, Axis::X) => (old, h),
+                (true, Axis::Y) => (w, old),
+                (false, _) => (w, h),
+            };
+            match axis {
+                Axis::X => ((g.x, w), (g.y, h)),
+                Axis::Y => ((g.y, h), (g.x, w)),
+            }
+        })
+        .collect();
+    let start = |i: usize| rects[i].0.0;
+    let len = |i: usize| rects[i].0.1;
+    // In the same column (for heights) or row (for widths).
+    let in_line = |i: usize, j: usize| {
+        let ((a, al), (b, bl)) = (rects[i].1, rects[j].1);
+        a < b + bl && b < a + al
     };
-    let side_by_side = |i: usize, j: usize| (c.groups[i].x - c.groups[j].x).abs() < CARD_W;
-    // Before the change: the cards below the changed one.
-    let mut below: Vec<usize> = Vec::new();
+    // Before the change: the cards after the changed one.
+    let mut after: Vec<usize> = Vec::new();
     let mut frontier = vec![ai];
     while let Some(s) = frontier.pop() {
-        let bottom = c.groups[s].y + height(s);
+        let end = start(s) + len(s);
         for &o in &vis {
-            if o != ai && !below.contains(&o) && side_by_side(o, s) && c.groups[o].y >= bottom - 1.0
-            {
-                below.push(o);
+            if o != ai && !after.contains(&o) && in_line(o, s) && start(o) >= end - 1.0 {
+                after.push(o);
                 frontier.push(o);
             }
         }
     }
-    if below.is_empty() {
+    if after.is_empty() {
         return Vec::new();
     }
-    let mut dy = new - old;
-    if dy < 0.0 {
-        // Move up only as far as the cards above allow: up to the original
-        // distance to the changed card, at most `GAP` close to the others.
-        for &s in &below {
-            let top = c.groups[s].y;
+    let mut delta = new - old;
+    if delta < 0.0 {
+        // Move back only as far as the cards before allow: up to the
+        // original distance to the changed card, at most `GAP` close to
+        // the others.
+        for &s in &after {
+            let top = start(s);
             for &x in &vis {
-                if x == s || below.contains(&x) || !side_by_side(x, s) || c.groups[x].y >= top {
+                if x == s || after.contains(&x) || !in_line(x, s) || start(x) >= top {
                     continue;
                 }
-                let gap = top - (c.groups[x].y + height(x));
+                let gap = top - (start(x) + len(x));
                 if gap < 0.0 {
                     continue;
                 }
-                let bottom_now = c.groups[x].y + if x == ai { new } else { height(x) };
-                let room = (top - bottom_now - gap.min(GAP)).max(0.0);
-                dy = dy.max(-room);
+                let end_now = start(x) + if x == ai { new } else { len(x) };
+                let room = (top - end_now - gap.min(GAP)).max(0.0);
+                delta = delta.max(-room);
             }
         }
-        if dy > -1.0 {
+        if delta > -1.0 {
             return Vec::new();
         }
     }
-    below
+    after
         .into_iter()
         .map(|i| {
-            c.groups[i].y += dy;
-            c.groups[i].gid
+            let g = &mut c.groups[i];
+            match axis {
+                Axis::X => g.x += delta,
+                Axis::Y => g.y += delta,
+            }
+            g.gid
         })
         .collect()
 }

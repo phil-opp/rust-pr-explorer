@@ -1,7 +1,7 @@
 //! Clicks, drags, wheel and toggle events on the canvas.
 
 use super::{
-    CARD_W, Drag, apply_pan, card_el,
+    Drag, RESIZE_MAX, RESIZE_MIN, apply_pan, card_el,
     edges::draw_edges,
     layout::{arrange_by_module, fit_view},
     open::{Related, close_tab, expand, members_as_tabs},
@@ -85,7 +85,7 @@ pub fn on_click(app: &mut App, el: &Element) -> bool {
                 let g = &mut c.groups[gi];
                 g.tabs.retain(|t| *t != id);
                 g.active = g.tabs[0].clone();
-                let (x, y) = (g.x + CARD_W + 60.0, g.y);
+                let (x, y) = (g.x + super::width_of(g) + 60.0, g.y);
                 let ni = c.add_group(&id, x, y);
                 place(&d, c, ni);
                 render(app);
@@ -173,6 +173,24 @@ pub fn on_pointer_down(app: &mut App, el: &Element, ev: &PointerEvent) -> bool {
             }
             return true;
         }
+    }
+    if let Some(card) = dom::closest(el, ".card-rs").and_then(|h| dom::closest(&h, ".card"))
+        && let Some(gid) = dom::data(&card, "gid").and_then(|g| g.parse::<u32>().ok())
+    {
+        // The right edge: resizes the card right away, also on a touch
+        // screen, where the handle is wider.
+        ev.prevent_default();
+        c.hold = None;
+        c.sideways = None;
+        c.drag = Some(Drag::Resize {
+            gid,
+            sx: x,
+            w0: dom::offset_size(&card).0,
+        });
+        if let Some(vp) = dom::by_id("viewport") {
+            dom::toggle_class(&vp, "resizing", true);
+        }
+        return true;
     }
     let lift = if let Some(frame) = dom::closest(el, "[data-frame]") {
         Some(Lift::Frame(dom::data(&frame, "frame").unwrap_or_default()))
@@ -390,6 +408,16 @@ pub fn on_pointer_move(app: &mut App, ev: &PointerEvent) {
                 dom::toggle_class(&target, "hover-target", true);
             }
         }
+        Some(Drag::Resize { gid, sx, w0 }) => {
+            let Some(gi) = c.by_gid(gid) else { return };
+            c.panned = true;
+            let w = (w0 + (x - sx) / c.pan.k).clamp(RESIZE_MIN, RESIZE_MAX);
+            c.groups[gi].w = Some(w);
+            if let Some(el) = card_el(gid) {
+                dom::set_style(&el, "width", &format!("{w}px"));
+            }
+            draw_edges(app);
+        }
         Some(Drag::Frame { sx, sy, ref cards }) => {
             let (dx, dy) = ((x - sx) / c.pan.k, (y - sy) / c.pan.k);
             for &(gid, gx, gy) in cards {
@@ -453,6 +481,7 @@ pub fn on_pointer_up(app: &mut App, ev: &PointerEvent) {
     if let Some(vp) = dom::by_id("viewport") {
         dom::toggle_class(&vp, "panning", false);
         dom::toggle_class(&vp, "lifting", false);
+        dom::toggle_class(&vp, "resizing", false);
     }
     for el in dom::query_all(".card.lifted") {
         dom::toggle_class(&el, "lifted", false);
@@ -546,6 +575,24 @@ fn scrolls_sideways(el: &Element, dx: f64) -> bool {
     false
 }
 
+/// A double click on a card's right edge undoes a resize: the card is as
+/// wide as its code again. Returns whether it was consumed.
+pub fn on_dblclick(app: &mut App, el: &Element) -> bool {
+    let Some(card) = dom::closest(el, ".card-rs").and_then(|h| dom::closest(&h, ".card")) else {
+        return false;
+    };
+    let Some(gi) = dom::data(&card, "gid")
+        .and_then(|g| g.parse::<u32>().ok())
+        .and_then(|g| app.s.canvas.by_gid(g))
+    else {
+        return false;
+    };
+    app.s.canvas.groups[gi].w = None;
+    super::fit_width(&app.s.canvas, &card);
+    draw_edges(app);
+    true
+}
+
 /// Remembers which source views are expanded across re-renders.
 pub fn on_details_toggle(app: &mut App, el: &Element) {
     let Some(details) = dom::closest(el, "details.src") else {
@@ -560,6 +607,9 @@ pub fn on_details_toggle(app: &mut App, el: &Element) {
         .and_then(|g| g.parse::<u32>().ok());
     if let Some(gi) = gid.and_then(|g| app.s.canvas.by_gid(g)) {
         app.s.canvas.groups[gi].open_src.insert(id, open);
+    }
+    if let Some(card) = dom::closest(&details, "#cards .card") {
+        super::fit_width(&app.s.canvas, &card);
     }
     draw_edges(app);
 }
@@ -601,6 +651,9 @@ pub fn on_unfold(app: &mut App, button: &Element) {
             .entry(id)
             .or_default()
             .extend(starts);
+        if let Some(card) = dom::closest(&code, "#cards .card") {
+            super::fit_width(&app.s.canvas, &card);
+        }
         draw_edges(app);
     }
 }

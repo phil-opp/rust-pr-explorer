@@ -1,9 +1,9 @@
 //! Arranging cards: by module, fitting the view, and module graphs.
 
 use super::{
-    CARD_W, Canvas, Pan, apply_pan,
+    Canvas, Pan, apply_pan,
     edges::{Rect, card_rect, draw_edges},
-    height_of, render, visible,
+    height_of, render, visible, width_of,
 };
 use crate::data::{Data, changed, within};
 use crate::{App, View, dom, toast};
@@ -17,7 +17,11 @@ pub fn arrange_by_module(app: &mut App) {
     render(app);
     let d = app.d.clone();
     let c = &mut app.s.canvas;
-    let heights: HashMap<u32, f64> = c.groups.iter().map(|g| (g.gid, height_of(&d, g))).collect();
+    let sizes: HashMap<u32, (f64, f64)> = c
+        .groups
+        .iter()
+        .map(|g| (g.gid, (width_of(g), height_of(&d, g))))
+        .collect();
     let mut by_mod: HashMap<String, Vec<usize>> = HashMap::new();
     for (i, g) in c.groups.iter().enumerate() {
         if visible(&d, c, g)
@@ -35,7 +39,7 @@ pub fn arrange_by_module(app: &mut App) {
         d: &'a Data,
         c: &'a mut Canvas,
         by_mod: &'a HashMap<String, Vec<usize>>,
-        heights: &'a HashMap<u32, f64>,
+        sizes: &'a HashMap<u32, (f64, f64)>,
     }
     impl Layout<'_> {
         fn has_cards(&self, m: &str) -> bool {
@@ -58,15 +62,32 @@ pub fn arrange_by_module(app: &mut App) {
                     na.cmp(&nb)
                 })
             });
-            for row in list.chunks(COLS) {
-                let mut rh: f64 = 0.0;
-                for (j, &gi) in row.iter().enumerate() {
-                    let g = &mut self.c.groups[gi];
-                    g.x = x + 24.0 + j as f64 * (CARD_W + COL_GAP);
-                    g.y = *cy;
-                    rh = rh.max(self.heights.get(&g.gid).copied().unwrap_or(200.0));
+            let sizes: Vec<(usize, (f64, f64))> = list
+                .iter()
+                .map(|&gi| {
+                    let gid = self.c.groups[gi].gid;
+                    let size = self.sizes.get(&gid).copied();
+                    (gi, size.unwrap_or((super::MIN_W, 200.0)))
+                })
+                .collect();
+            // Columns as wide as their widest card.
+            let mut cols = [0.0f64; COLS];
+            for row in sizes.chunks(COLS) {
+                for (j, &(_, (cw, _))) in row.iter().enumerate() {
+                    cols[j] = cols[j].max(cw);
                 }
-                *w = w.max(row.len() as f64 * (CARD_W + COL_GAP) - COL_GAP + GAP);
+            }
+            for row in sizes.chunks(COLS) {
+                let mut rh: f64 = 0.0;
+                let mut cx = x + 24.0;
+                for (j, &(gi, (_, ch))) in row.iter().enumerate() {
+                    let g = &mut self.c.groups[gi];
+                    g.x = cx;
+                    g.y = *cy;
+                    cx += cols[j] + COL_GAP;
+                    rh = rh.max(ch);
+                }
+                *w = w.max(cx - x - 24.0 - COL_GAP + GAP);
                 *cy += rh + GAP;
             }
         }
@@ -109,7 +130,7 @@ pub fn arrange_by_module(app: &mut App) {
         d: &d,
         c,
         by_mod: &by_mod,
-        heights: &heights,
+        sizes: &sizes,
     };
     let mut x = 0.0;
     for r in roots {

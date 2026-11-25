@@ -1,0 +1,12 @@
+/home/user/rust-semantic-review/target-main/release/build/boxcar/69b740b518b895ef/out/boxcar-69b740b518b895ef.d: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/loom.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/buckets.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/vec/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/vec/raw.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/../README.md
+
+/home/user/rust-semantic-review/target-main/release/build/boxcar/69b740b518b895ef/out/libboxcar-69b740b518b895ef.rlib: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/loom.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/buckets.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/vec/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/vec/raw.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/../README.md
+
+/home/user/rust-semantic-review/target-main/release/build/boxcar/69b740b518b895ef/out/libboxcar-69b740b518b895ef.rmeta: /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/lib.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/loom.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/buckets.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/vec/mod.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/vec/raw.rs /root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/../README.md
+
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/lib.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/loom.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/buckets.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/vec/mod.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/vec/raw.rs:
+/root/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/boxcar-0.2.14/src/../README.md:

@@ -319,7 +319,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         {tabs}
         <div class="card-h"><span class="kind">{}</span>{} {}{}<span class="grow"></span>{}{}<span class="x" data-close="{}" title="Close">×</span></div>
         <div class="card-loc">{}</div>
-        <div class="card-b">{impl_header}{impact}{body}{}</div>{members}{}{}</div>"#,
+        <div class="card-b">{impl_header}{impact}{body}{}</div>{members}{}{}<div class="card-rs" title="Drag to resize. Double-click to fit the code again."></div></div>"#,
         it.status.css(),
         g.gid,
         g.x,

@@ -326,6 +326,25 @@ fn install_listeners() {
             mark_current_later();
         }
     });
+    // Cards are as wide as their code, measured in the code's font, which
+    // may load after they were rendered.
+    if let Some(fonts) = js_sys::Reflect::get(&dom::document(), &"fonts".into())
+        .ok()
+        .and_then(|f| f.dyn_into::<web_sys::EventTarget>().ok())
+    {
+        dom::listen(&fonts, "loadingdone", |_| {
+            with_app(|app| canvas::refit(&app.s.canvas));
+        });
+    }
+    dom::listen(&doc, "dblclick", |ev| {
+        if let Some(el) = dom::target_element(&ev) {
+            with_app(|app| {
+                canvas::before_change(app);
+                canvas::on_dblclick(app, &el);
+                canvas::after_change(app);
+            });
+        }
+    });
     // Not passive: starting a card drag prevents text selection.
     dom::listen_with(&doc, "pointerdown", false, false, |ev| {
         let (Some(el), Ok(pev)) = (dom::target_element(&ev), ev.dyn_into::<PointerEvent>()) else {
