@@ -172,8 +172,10 @@ pub fn find(
                 };
                 // What separated them from the token before them, if on
                 // the same line.
-                let before = match ro.start.checked_sub(1).map(|i| &ot[i]) {
-                    Some(p) if !re => old_text.between(p.end, ot[ro.start].start),
+                let before = match (ro.start.checked_sub(1), ot.get(ro.start)) {
+                    (Some(p), Some(first)) if !re && !ro.is_empty() => {
+                        old_text.between(ot[p].end, first.start)
+                    }
                     _ => String::new(),
                 };
                 for (k, span) in spans(&old_text, &ot[ro.clone()]).into_iter().enumerate() {
@@ -232,6 +234,42 @@ pub fn find(
         // many in both versions.
         let changed = !(added.is_empty() && removed.is_empty());
         let requalified = !(re_added.is_empty() && re_removed.is_empty());
+        if changed && requalified && oe - os == ne - ns {
+            // Lines edited in place: those of them with only requalified
+            // paths are still no change, as in `let status = Command::new(…)`
+            // above a changed `.args(…)`.
+            for k in 0..=oe - os {
+                let (o, n) = (os + k, ns + k);
+                let on_old = |t: &RemovedTokens| t.old.line as usize == o;
+                let on_new = |t: &RemovedTokens| t.at.line as usize == n;
+                let re_removed: Vec<RemovedTokens> =
+                    re_removed.iter().filter(|t| on_old(t)).cloned().collect();
+                let re_added: Vec<TokenSpan> = re_added
+                    .iter()
+                    .filter(|t| t.line as usize == n)
+                    .copied()
+                    .collect();
+                if old[o] == new[n]
+                    || old_block[o].is_none()
+                    || old_block[o] != new_block[n]
+                    || re_removed.iter().any(|t| !on_new(t))
+                    || !same_without(old[o], &re_removed, new[n], &re_added)
+                {
+                    continue;
+                }
+                out.push(Reformatted {
+                    old: o as u32,
+                    old_len: 1,
+                    new: n as u32,
+                    new_len: 1,
+                    added: Vec::new(),
+                    removed: Vec::new(),
+                    requalified_added: re_added,
+                    requalified_removed: re_removed,
+                });
+            }
+            continue;
+        }
         if (changed && oe - os == ne - ns)
             || ((changed || requalified)
                 && old_block[os..=oe]
@@ -253,6 +291,29 @@ pub fn find(
         });
     }
     out
+}
+
+/// Whether line `old` without the `removed` tokens has the same tokens as
+/// line `new` without the `added` ones.
+fn same_without(old: &str, removed: &[RemovedTokens], new: &str, added: &[TokenSpan]) -> bool {
+    let without = |line: &str, spans: &mut dyn Iterator<Item = &TokenSpan>| -> Vec<String> {
+        let spans: Vec<&TokenSpan> = spans.collect();
+        let kept: String = line
+            .chars()
+            .enumerate()
+            .map(|(i, c)| {
+                let cut = spans
+                    .iter()
+                    .any(|s| s.start as usize <= i && i < s.end as usize);
+                if cut { ' ' } else { c }
+            })
+            .collect();
+        tokens(&[kept.as_str()])
+            .into_iter()
+            .map(|t| t.text)
+            .collect()
+    };
+    without(old, &mut removed.iter().map(|t| &t.old)) == without(new, &mut added.iter())
 }
 
 /// Where the path is that a run of changed tokens (`run`, of `toks`) is
@@ -668,6 +729,27 @@ mod tests {
             text: "std::mem::".into(),
         }];
         assert_eq!(found, [g]);
+    }
+
+    #[test]
+    fn a_requalified_line_above_an_edited_one_is_split_off() {
+        // As in dora#4304: the statement's arguments changed too.
+        let old = lines("let status = std::process::Command::new(\"cargo\")\n    .args([a, b])");
+        let new = lines("let status = Command::new(\"cargo\")\n    .args(make(a, b))");
+        let found = super::find(&old, &new, |o, n| o == (0, 13) && n == (0, 13));
+        let mut g = group(0, 1, 0, 1);
+        g.requalified_removed = vec![RemovedTokens {
+            old: span(0, 13, 27),
+            at: span(0, 13, 13),
+            text: "std::process::".into(),
+        }];
+        assert_eq!(found, [g]);
+        // Not a line that also changed otherwise.
+        let new = lines("let status = Command::new(\"rustc\")\n    .args(make(a, b))");
+        assert_eq!(
+            super::find(&old, &new, |o, n| o == (0, 13) && n == (0, 13)),
+            []
+        );
     }
 
     #[test]
