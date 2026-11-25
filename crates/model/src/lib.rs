@@ -316,6 +316,12 @@ pub struct SourceLine(pub char, pub String);
 /// a call gets an argument and rustfmt then splits it over several lines.
 /// Those tokens are in `added` and `removed`; without them the lines were
 /// only reformatted.
+///
+/// Paths that were shortened or spelled out but still name the same item,
+/// as `std::process::Command::new` that became `Command::new` with a new
+/// `use std::process::Command`, are no change either: their tokens are in
+/// `requalified_added` and `requalified_removed`. Lines with only those
+/// can have the same number of lines in both versions.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Reformatted {
     pub old: u32,
@@ -328,10 +334,20 @@ pub struct Reformatted {
     /// Tokens of the base version that the head version doesn't have.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub removed: Vec<RemovedTokens>,
+    /// Like `added`, for path segments added to a path that still names
+    /// the same item (e.g. `Command` that became `process::Command`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requalified_added: Vec<TokenSpan>,
+    /// Like `removed`, for path segments removed from a path that still
+    /// names the same item (e.g. the `std::process::` of
+    /// `std::process::Command::new` that became `Command::new`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub requalified_removed: Vec<RemovedTokens>,
 }
 
 impl Reformatted {
-    /// Lines that were only reformatted: no tokens were added or removed.
+    /// Lines that were only reformatted: no tokens were added or removed,
+    /// apart from path segments of paths that name the same item.
     pub fn only_reformatted(&self) -> bool {
         self.added.is_empty() && self.removed.is_empty()
     }

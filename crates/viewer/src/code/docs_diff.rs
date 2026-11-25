@@ -541,40 +541,79 @@ pub fn mark_changed_tokens(old: &str, new: &str) -> Option<(String, String)> {
 /// A line's highlighted HTML with the characters `added` (ranges of its
 /// text, in chars) marked as added, and `removed` text shown struck out at
 /// the given columns. For reformatted lines that also gained or lost a few
-/// tokens (see `model::Reformatted`).
-pub fn mark_spans(html: &str, added: &[(usize, usize)], removed: &[(usize, &str)]) -> String {
-    mark_columns(html, added, "wc ti", removed)
+/// tokens (see `model::Reformatted`). `re_added` and `re_removed` are the
+/// same for path segments of paths that still name the same item, which
+/// are marked as no change.
+pub fn mark_spans(
+    html: &str,
+    added: &[(usize, usize)],
+    removed: &[(usize, &str)],
+    re_added: &[(usize, usize)],
+    re_removed: &[(usize, &str)],
+) -> String {
+    let spans = with_class(added, ADDED).chain(with_class(re_added, REQUALIFIED));
+    let inserts = removed
+        .iter()
+        .map(|&(at, text)| (at, text, REMOVED))
+        .chain(re_removed.iter().map(|&(at, text)| (at, text, UNQUALIFIED)));
+    mark_columns(html, &spans.collect::<Vec<_>>(), inserts.collect())
 }
 
 /// A line's highlighted HTML with the characters `removed` (ranges of its
-/// text, in chars) marked as removed.
-pub fn mark_removed_spans(html: &str, removed: &[(usize, usize)]) -> String {
-    mark_columns(html, removed, "wc td", &[])
+/// text, in chars) marked as removed, and `unqualified` as path segments
+/// removed from a path that still names the same item.
+pub fn mark_removed_spans(
+    html: &str,
+    removed: &[(usize, usize)],
+    unqualified: &[(usize, usize)],
+) -> String {
+    let spans = with_class(removed, REMOVED).chain(with_class(unqualified, UNQUALIFIED));
+    mark_columns(html, &spans.collect::<Vec<_>>(), Vec::new())
 }
 
+/// The attributes of marked tokens: added, removed, and path segments
+/// added to or removed from a path that names the same item.
+const ADDED: &str = r#"class="wc ti""#;
+const REMOVED: &str = r#"class="wc td""#;
+const REQUALIFIED: &str = r#"class="wc tq" title="The path names the same item as before""#;
+const UNQUALIFIED: &str = r#"class="wc tq td" title="The path names the same item as before""#;
+
+fn with_class<'a>(
+    spans: &'a [(usize, usize)],
+    attrs: &'static str,
+) -> impl Iterator<Item = (usize, usize, &'static str)> + 'a {
+    spans.iter().map(move |&(s, e)| (s, e, attrs))
+}
+
+/// Marks the characters of `spans` (ranges of the line's text, in chars,
+/// with the attributes of their mark) and puts the struck-out text of
+/// `inserts` (with the attributes of its mark) before the given columns.
 fn mark_columns(
     html: &str,
-    spans: &[(usize, usize)],
-    class: &str,
-    inserts: &[(usize, &str)],
+    spans: &[(usize, usize, &str)],
+    mut inserts: Vec<(usize, &str, &str)>,
 ) -> String {
-    let marked = |col: usize| spans.iter().any(|&(s, e)| s <= col && col < e);
-    let mut inserts = inserts.to_vec();
-    inserts.sort_by_key(|&(at, _)| at);
+    let marked = |col: usize| {
+        spans
+            .iter()
+            .find(|&&(s, e, _)| s <= col && col < e)
+            .map(|&(.., attrs)| attrs)
+    };
+    inserts.sort_by_key(|&(at, ..)| at);
     let mut inserts = inserts.into_iter().peekable();
     let mut out = String::new();
-    let mut open = false;
+    // The attributes of the open mark, if any.
+    let mut open: Option<&str> = None;
     // Closes the mark, then adds the removed text that goes before `col`:
     // what separates it from the token before, and the text struck out.
-    let mut insert = |out: &mut String, open: &mut bool, col: usize| {
-        while let Some((_, text)) = inserts.next_if(|&(at, _)| at <= col) {
-            if *open {
+    let mut insert = |out: &mut String, open: &mut Option<&str>, col: usize| {
+        while let Some((_, text, attrs)) = inserts.next_if(|&(at, ..)| at <= col) {
+            if open.take().is_some() {
                 out.push_str("</span>");
-                *open = false;
             }
             let body = text.trim_start();
             out.push_str(&super::esc(&text[..text.len() - body.len()]));
-            out.push_str(r#"<span class="wc td">"#);
+            out.push_str(&format!("<span {attrs}>"));
             out.push_str(&super::esc(body));
             out.push_str("</span>");
         }
@@ -582,9 +621,8 @@ fn mark_columns(
     let mut col = 0;
     for t in html_tokens(html) {
         if is_tag(t) {
-            if open {
+            if open.take().is_some() {
                 out.push_str("</span>");
-                open = false;
             }
             out.push_str(t);
             continue;
@@ -600,20 +638,22 @@ fn mark_columns(
         for p in pieces {
             insert(&mut out, &mut open, col);
             let m = marked(col);
-            if open && !m {
+            if open.is_some() && open != m {
                 out.push_str("</span>");
-                open = false;
+                open = None;
             }
-            if m && !open {
-                out.push_str(&format!(r#"<span class="{class}">"#));
-                open = true;
+            if let Some(attrs) = m
+                && open.is_none()
+            {
+                out.push_str(&format!("<span {attrs}>"));
+                open = Some(attrs);
             }
             out.push_str(p);
             col += 1;
         }
     }
     insert(&mut out, &mut open, usize::MAX);
-    if open {
+    if open.is_some() {
         out.push_str("</span>");
     }
     out

@@ -153,9 +153,12 @@ fn page_line(d: &Data, it: &Item, narrow: bool) -> String {
         .collect();
     let (title, label) = impact_button(narrow);
     format!(
-        r#"<details class="impact"><summary><span class="impact-h">Reached from the public API:</span> {}</summary><ul class="impact-chains">{chains}</ul><button data-impact="{}" title="{title}">{label}</button></details>"#,
+        r#"<details class="impact"><summary><span class="impact-h">Reached from the public API:</span> {}</summary><ul class="impact-chains">{chains}</ul><a class="btn" data-impact="{}"{} title="{title}">{label}</a></details>"#,
         names.join(", "),
         esc(&it.info.id),
+        crate::nav::href(&crate::nav::Route::Canvas(Some(
+            crate::nav::OnCanvas::Impact(it.info.id.clone())
+        ))),
     )
 }
 

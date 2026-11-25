@@ -20,11 +20,11 @@
   </div>
   <div class="top-row sub">
     <nav id="views">
-      <button data-view="overview">Overview</button>
-      <button data-view="module">Modules</button>
-      <button data-view="canvas">Canvas</button>
-      <button data-view="calls" title="The call graph one item at a time">Calls</button>
-      <button data-view="space">Structure</button>
+      <a class="btn" data-view="overview" href="#/">Overview</a>
+      <a class="btn" data-view="module" href="#/module">Modules</a>
+      <a class="btn" data-view="canvas" href="#/canvas">Canvas</a>
+      <a class="btn" data-view="calls" href="#/calls" title="The call graph one item at a time">Calls</a>
+      <a class="btn" data-view="space" href="#/structure">Structure</a>
     </nav>
     <div id="commit-menu"></div>
     <button id="rv-mode" title="Mark items as reviewed">Start review</button>
@@ -33,6 +33,8 @@
 </header>
 <div id="layout">
   <aside id="sidebar"></aside>
+  <button id="side-hide" title="Hide the sidebar" aria-label="Hide the sidebar">«</button>
+  <button id="side-show" title="Show the sidebar" aria-label="Show the sidebar">»</button>
   <main id="main">
     <section id="view-overview" class="view page"></section>
     <section id="view-module" class="view page"></section>
