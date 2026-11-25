@@ -1,10 +1,11 @@
 //! Opening and closing cards and tabs, and expanding an item's relatives.
 
 use super::{
-    CARD_W, EXPAND_LIMIT, Expansion, apply_pan, card_el, edges::draw_edges, height_of, place,
-    render, visible,
+    Canvas, EXPAND_LIMIT, Expansion, Group, MIN_W, apply_pan, card_el,
+    edges::{Rect, call_site_y, card_rect, draw_edges},
+    height_of, place, render, spot, visible, width_of,
 };
-use crate::data::changed;
+use crate::data::{Data, changed};
 use crate::{App, View, dom, toast};
 use model::{Item, Kind};
 
@@ -28,15 +29,17 @@ pub fn open_for_review(app: &mut App, id: &str, reviewed: Option<&str>) {
             .and_then(on)
             .or_else(|| callers.iter().find_map(|f| on(f)))
     });
-    let at = (c.group_of(id).is_none() && !vis.is_empty()).then(|| match caller {
-        Some(g) => (g.x + CARD_W + 120.0, g.y),
-        None => {
-            let x = vis.iter().map(|g| g.x).fold(f64::MIN, f64::max) + CARD_W + 120.0;
-            let y = reviewed
-                .and_then(|r| vis.iter().find(|g| g.active == r))
-                .map_or_else(|| vis.iter().map(|g| g.y).fold(f64::MAX, f64::min), |g| g.y);
-            (x, y)
-        }
+    // Next to a caller: placed like a card opened from it.
+    let at = (c.group_of(id).is_none() && !vis.is_empty() && caller.is_none()).then(|| {
+        let x = vis
+            .iter()
+            .map(|g| g.x + width_of(g))
+            .fold(f64::MIN, f64::max)
+            + 120.0;
+        let y = reviewed
+            .and_then(|r| vis.iter().find(|g| g.active == r))
+            .map_or_else(|| vis.iter().map(|g| g.y).fold(f64::MAX, f64::min), |g| g.y);
+        (x, y)
     });
     let from = caller.map(|g| g.active.clone());
     if let Some(gid) = open_at(app, id, from.as_deref(), true, at) {
@@ -70,19 +73,21 @@ fn open_at(
             gi
         }
         None => {
+            let gi = c.add_group(id, 0.0, 0.0);
             let (x, y) = match (at, from.and_then(|f| c.group_of(f))) {
                 (Some(at), _) => at,
-                (None, Some(fi)) => (c.groups[fi].x + CARD_W + 80.0, c.groups[fi].y),
+                (None, Some(fi)) => spot_next_to(&d, c, gi, fi),
                 (None, None) => {
                     let width = dom::by_id("viewport")
                         .map_or(1000.0, |v| v.get_bounding_client_rect().width());
                     (
-                        (width / 2.0 - c.pan.x) / c.pan.k - CARD_W / 2.0,
+                        (width / 2.0 - c.pan.x) / c.pan.k - MIN_W / 2.0,
                         (80.0 - c.pan.y) / c.pan.k,
                     )
                 }
             };
-            let gi = c.add_group(id, x, y);
+            c.groups[gi].x = x;
+            c.groups[gi].y = y;
             place(&d, c, gi);
             if let Some(f) = from {
                 c.add_link(f, id);
@@ -93,7 +98,7 @@ fn open_at(
     let gid = c.groups[gi].gid;
     if switch_view {
         // Opened from outside the canvas, or jumped to: a history entry.
-        app.s.canvas_focus = Some(id.to_string());
+        app.s.canvas_focus = Some(crate::nav::OnCanvas::Item(id.to_string()));
     }
     if switch_view && app.s.view != View::Canvas {
         crate::set_view(app, View::Canvas);
@@ -113,6 +118,71 @@ fn open_at(
     Some(gid)
 }
 
+/// Where to put the new card `gi`, opened from card `fi`: see [`spot`].
+fn spot_next_to(d: &Data, c: &Canvas, gi: usize, fi: usize) -> (f64, f64) {
+    let id = c.groups[gi].active.as_str();
+    let rect = |g: &Group| {
+        card_rect(g).unwrap_or(Rect {
+            x: g.x,
+            y: g.y,
+            w: width_of(g),
+            h: height_of(d, g),
+        })
+    };
+    let others: Vec<&Group> = c
+        .groups
+        .iter()
+        .enumerate()
+        .filter(|&(i, g)| i != gi && visible(d, c, g))
+        .map(|(_, g)| g)
+        .collect();
+    let it = d.item(id);
+    let calls_new = |g: &Group| {
+        g.active == c.groups[fi].active
+            || d.callers.get(id).is_some_and(|v| v.contains(&g.active))
+            || d.used_by
+                .get(id)
+                .is_some_and(|v| v.iter().any(|(f, _)| *f == g.active))
+    };
+    let called = |g: &Group| {
+        it.is_some_and(|it| {
+            it.info.calls.iter().any(|x| x.to == g.active)
+                || it.info.uses.iter().any(|x| x.to == g.active)
+        })
+    };
+    let related: Vec<spot::Related> = others
+        .iter()
+        .filter_map(|&g| {
+            let r = rect(g);
+            if calls_new(g) {
+                let at = call_site_y(g, id, c.pan.k).unwrap_or(r.y + 40.0);
+                Some(spot::Related {
+                    r,
+                    dir: spot::Dir::In,
+                    at,
+                })
+            } else if called(g) {
+                Some(spot::Related {
+                    r,
+                    dir: spot::Dir::Out,
+                    at: r.y + 40.0,
+                })
+            } else {
+                None
+            }
+        })
+        .collect();
+    let cards: Vec<Rect> = others.iter().map(|&g| rect(g)).collect();
+    spot::best_spot(
+        // Not rendered yet: the least width, or the width it was resized to.
+        width_of(&c.groups[gi]),
+        height_of(d, &c.groups[gi]),
+        rect(&c.groups[fi]),
+        &related,
+        &cards,
+    )
+}
+
 /// After following a link from one card to another: pans only as far as
 /// needed to show the new card's width, so that the card the link was
 /// clicked in stays where it is as far as possible.
@@ -128,7 +198,7 @@ fn nudge_into_view(gid: u32) {
             let r = vp.get_bounding_client_rect();
             let g = &c.groups[gi];
             let left = g.x * c.pan.k + c.pan.x;
-            let right = left + CARD_W * c.pan.k;
+            let right = left + width_of(g) * c.pan.k;
             let top = g.y * c.pan.k + c.pan.y;
             // Right edge first, but never past the left edge.
             let dx = if right > r.width() - MARGIN {
@@ -201,7 +271,7 @@ fn reveal(gid: u32, force: bool) {
             let sx = g.x * c.pan.k + c.pan.x;
             let sy = g.y * c.pan.k + c.pan.y;
             if force || sx < 0.0 || sy < 0.0 || sx > r.width() - 100.0 || sy > r.height() - 100.0 {
-                c.pan.x = r.width() / 2.0 - (g.x + CARD_W / 2.0) * c.pan.k;
+                c.pan.x = r.width() / 2.0 - (g.x + width_of(g) / 2.0) * c.pan.k;
                 c.pan.y = 60.0 - g.y * c.pan.k;
                 apply_pan(c);
                 draw_edges(app);
@@ -274,6 +344,7 @@ pub(crate) fn expand(app: &mut App, id: &str, kind: Related) {
     let side = if kind == Related::Callees { 1.0 } else { -1.0 };
     let Some(fi) = c.group_of(id) else { return };
     let (fx, fy) = (c.groups[fi].x, c.groups[fi].y);
+    let fw = width_of(&c.groups[fi]);
     let mut offset = 0.0;
     let mut opened = 0;
     let mut skipped = 0;
@@ -300,14 +371,34 @@ pub(crate) fn expand(app: &mut App, id: &str, kind: Related) {
             skipped += 1;
             continue;
         }
-        let gi = c.add_group(t, fx + side * (CARD_W + 90.0), fy + offset);
+        // Right of the card, or left of it with its right edge 90 pixels
+        // away, once its width is known.
+        let x = if side > 0.0 {
+            fx + fw + 90.0
+        } else {
+            fx - MIN_W - 90.0
+        };
+        let gi = c.add_group(t, x, fy + offset);
         place(&d, c, gi);
         c.add_link(from, to);
         let gid = c.groups[gi].gid;
         record.cards.push((gid, t.clone()));
         opened += 1;
-        // Render now, so the next card is placed using this card's real height.
+        // Render now, so the next card is placed using this card's real
+        // size.
         render(app);
+        let c = &mut app.s.canvas;
+        if side < 0.0
+            && let Some(gi) = c.by_gid(gid)
+        {
+            let w = width_of(&c.groups[gi]);
+            if w != MIN_W {
+                c.groups[gi].x = fx - w - 90.0;
+                c.groups[gi].y = fy + offset;
+                place(&d, c, gi);
+                render(app);
+            }
+        }
         let c = &app.s.canvas;
         if let Some(gi) = c.by_gid(gid) {
             offset = c.groups[gi].y - fy + height_of(&d, &c.groups[gi]) + 30.0;

@@ -13,20 +13,32 @@ mod events;
 mod layout;
 mod open;
 mod reflow;
+mod spot;
 mod undo;
+mod zoom;
 
 pub use edges::draw_edges;
 pub use events::{
-    active_item_of_card, highlight_card_of, on_click, on_details_toggle, on_pointer_down,
-    on_pointer_move, on_pointer_up, on_unfold, on_wheel, swallow_click,
+    active_item_of_card, highlight_card_of, on_click, on_dblclick, on_details_toggle,
+    on_pointer_down, on_pointer_move, on_pointer_up, on_unfold, on_wheel, swallow_click,
 };
 pub use layout::{show_impact, show_items, show_module_graph};
 pub use open::{open, open_for_review};
-pub use undo::{after_change, before_change, undo};
+pub use undo::{Saved, after_change, before_change, restore, save, undo};
 
 use card::card_html;
 
-const CARD_W: f64 = 580.0;
+/// The width of a card whose code fits in it, and the least width a card
+/// gets by default.
+const MIN_W: f64 = 580.0;
+/// How wide a card grows to show its code without scrolling it sideways:
+/// 100 columns of code (rustfmt's default) with line numbers fit easily
+/// in the default font; more for a side-by-side diff.
+const MAX_W: f64 = 1000.0;
+const MAX_SPLIT_W: f64 = 1600.0;
+/// The range of widths a card can be resized to by hand.
+const RESIZE_MIN: f64 = 320.0;
+const RESIZE_MAX: f64 = 2400.0;
 /// At most this many cards are opened by one "calls"/"callers" click.
 const EXPAND_LIMIT: usize = 10;
 
@@ -44,6 +56,10 @@ pub struct Group {
     pub unfolded: BTreeMap<String, BTreeSet<usize>>,
     /// Unchanged items whose card the reader expanded beyond the signature.
     pub expanded: BTreeSet<String>,
+    /// The width the reader gave the card by dragging its right edge; by
+    /// default (`None`) the card is as wide as its code, see
+    /// [`fit_width`].
+    pub w: Option<f64>,
 }
 
 #[derive(Clone, Copy)]
@@ -73,6 +89,12 @@ pub enum Drag {
         px: f64,
         py: f64,
     },
+    /// A card's right edge, dragged from `sx` when the card was `w0` wide.
+    Resize {
+        gid: u32,
+        sx: f64,
+        w0: f64,
+    },
     /// Two fingers on a touch screen: their distance zooms, their midpoint
     /// pans. `d0` and `mx`, `my` are the distance and the midpoint (in
     /// viewport coordinates) when the pinch started, with the view at `pan`.
@@ -96,8 +118,9 @@ pub struct Canvas {
     pub drag: Option<Drag>,
     /// The touch points on the canvas: pointer id and client position.
     touches: Vec<(i32, f64, f64)>,
-    /// The last rendered height of each card, to tell how much it changed.
-    heights: HashMap<u32, f64>,
+    /// The last rendered size (width, height) of each card, to tell how
+    /// much it changed.
+    sizes: HashMap<u32, (f64, f64)>,
     /// What each "calls", "callers" and "used by" click opened, oldest
     /// first, so that a second click can close it again.
     expansions: Vec<Expansion>,
@@ -143,7 +166,7 @@ impl Canvas {
             frames: false,
             drag: None,
             touches: Vec::new(),
-            heights: HashMap::new(),
+            sizes: HashMap::new(),
             expansions: Vec::new(),
             history: Vec::new(),
             before: None,
@@ -173,6 +196,7 @@ impl Canvas {
             open_src: BTreeMap::new(),
             unfolded: BTreeMap::new(),
             expanded: BTreeSet::new(),
+            w: None,
         });
         self.next_gid += 1;
         self.groups.len() - 1
@@ -267,15 +291,91 @@ fn height_of(d: &Data, g: &Group) -> f64 {
         }
 }
 
+/// The width of a card: as rendered, else as set by the reader, else the
+/// least default width.
+fn width_of(g: &Group) -> f64 {
+    if let Some(el) = card_el(g.gid) {
+        let (w, _) = dom::offset_size(&el);
+        if w > 0.0 {
+            return w;
+        }
+    }
+    g.w.unwrap_or(MIN_W)
+}
+
+/// Makes a rendered card as wide as the widest code it shows (signature,
+/// source, code in docs), between [`MIN_W`] and [`MAX_W`], unless the
+/// reader resized it. Called after each render and when a card shows more
+/// code: an opened source view, unfolded lines.
+///
+/// Measured rather than computed from the text, since the code's font,
+/// line numbers and the badges after names all take room.
+fn fit_widths(cards: &[(Element, Option<f64>)]) {
+    // All cards at their least width first, then all measured, so that the
+    // page is laid out once.
+    for (el, w) in cards {
+        let w = w.map_or(MIN_W, |w| w.clamp(RESIZE_MIN, RESIZE_MAX));
+        dom::set_style(el, "width", &format!("{w}px"));
+    }
+    let fits: Vec<Option<f64>> = cards
+        .iter()
+        .map(|(el, w)| {
+            if w.is_some() {
+                return None;
+            }
+            let more = dom::query_all_in(el, "pre, .sig, .sbs")
+                .iter()
+                .map(|b| b.scroll_width() - b.client_width())
+                .max()
+                .unwrap_or(0);
+            let max = if dom::query_all_in(el, ".sbs")
+                .iter()
+                .any(|b| b.client_width() > 0)
+            {
+                MAX_SPLIT_W
+            } else {
+                MAX_W
+            };
+            (more > 0).then(|| (MIN_W + more as f64).min(max))
+        })
+        .collect();
+    for ((el, _), w) in cards.iter().zip(fits) {
+        if let Some(w) = w {
+            dom::set_style(el, "width", &format!("{w}px"));
+        }
+    }
+}
+
+/// [`fit_widths`] for all rendered cards. Also called when a font has
+/// loaded, since the code's font may arrive after the cards were rendered.
+pub fn refit(c: &Canvas) {
+    let rendered: Vec<(Element, Option<f64>)> = c
+        .groups
+        .iter()
+        .filter_map(|g| Some((card_el(g.gid)?, g.w)))
+        .collect();
+    fit_widths(&rendered);
+}
+
+/// [`fit_widths`] for one card, after it shows more code.
+fn fit_width(c: &Canvas, card: &Element) {
+    let w = dom::data(card, "gid")
+        .and_then(|g| g.parse::<u32>().ok())
+        .and_then(|g| c.by_gid(g))
+        .and_then(|gi| c.groups[gi].w);
+    fit_widths(&[(card.clone(), w)]);
+}
+
 /// Moves a card down until it no longer overlaps another visible card.
 fn free_spot(d: &Data, c: &Canvas, gi: usize, x: f64, mut y: f64) -> (f64, f64) {
     let h = height_of(d, &c.groups[gi]);
+    let w = width_of(&c.groups[gi]);
     for _ in 0..80 {
         let hit = c.groups.iter().enumerate().find(|(i, o)| {
             *i != gi && visible(d, c, o) && {
                 let oh = height_of(d, o);
-                x < o.x + CARD_W + 20.0
-                    && x + CARD_W + 20.0 > o.x
+                x < o.x + width_of(o) + 20.0
+                    && x + w + 20.0 > o.x
                     && y < o.y + oh + 20.0
                     && y + h + 20.0 > o.y
             }
@@ -292,6 +392,17 @@ fn place(d: &Data, c: &mut Canvas, gi: usize) {
     let (x, y) = free_spot(d, c, gi, c.groups[gi].x, c.groups[gi].y);
     c.groups[gi].x = x;
     c.groups[gi].y = y;
+}
+
+/// The items of the cards that the canvas shows, with the view it looks
+/// from: what a new tab lays out again (see `nav::update_view_links`).
+pub fn shown_items(app: &App) -> Vec<String> {
+    let c = &app.s.canvas;
+    c.groups
+        .iter()
+        .filter(|g| visible(&app.d, c, g))
+        .map(|g| g.active.clone())
+        .collect()
 }
 
 /// The card of item `id` as the canvas would show it, looking from
@@ -351,6 +462,7 @@ pub fn render(app: &mut App) {
         .map(|g| card_html(&d, c, g))
         .collect();
     dom::set_html("cards", &cards);
+    refit(c);
     reflow::observe_cards();
     let any = c.groups.iter().any(|g| visible(&d, c, g));
     dom::set_html(
@@ -363,6 +475,10 @@ pub fn render(app: &mut App) {
     );
     apply_pan(c);
     mark_on_canvas(app);
+    // The sidebar's outline marks which items have a card.
+    if app.s.view == crate::View::Canvas {
+        crate::pages::render_sidebar(app);
+    }
     dom::raf(|| {
         crate::with_app(|app| {
             draw_edges(app);
@@ -408,4 +524,15 @@ fn mark_on_canvas(app: &App) {
             on.contains(id.as_str()) && own != Some(id.as_str()),
         );
     }
+}
+
+/// The items that have a card (as any of its tabs), also those hidden at
+/// the canvas's scope.
+pub fn items_on_canvas(app: &App) -> Vec<String> {
+    app.s
+        .canvas
+        .groups
+        .iter()
+        .flat_map(|g| g.tabs.iter().cloned())
+        .collect()
 }

@@ -72,6 +72,7 @@ fn focus_at(app: &mut App, id: &str, start: &'static str) {
     }
     if app.s.view == View::Calls {
         render(app);
+        crate::pages::render_sidebar(app);
         crate::nav::record(app);
     } else {
         crate::set_view(app, View::Calls);
@@ -280,8 +281,9 @@ fn start_html(d: &Data, s: &Calls, module: Option<&str>) -> String {
                     esc(&d.mod_label(&m.info.id))
                 ),
                 format!(
-                    r#"The changed items of this module. Tap one to see what calls it and what it calls. <a data-mod="{}">Module page</a>"#,
-                    esc(&m.info.id)
+                    r#"The changed items of this module. Tap one to see what calls it and what it calls. <a data-mod="{}"{}>Module page</a>"#,
+                    esc(&m.info.id),
+                    crate::nav::module_href(&m.info.id)
                 ),
                 "Changed functions nothing else here calls",
                 ids(&others),

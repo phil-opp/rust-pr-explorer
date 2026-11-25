@@ -13,6 +13,12 @@
 //! restore it itself, since the pages scroll inside their view, not the
 //! window.
 //!
+//! The same fragments are the `href` of the links and of the buttons that
+//! switch views (see [`href`]), so that a middle click or Ctrl+click opens
+//! the view in a new tab, while a plain click is handled by the app (see
+//! `lib.rs`). A canvas that shows a call graph has a route of its own
+//! ([`OnCanvas`]), which a new tab lays out again.
+//!
 //! Stepping through the review (Next ▸, `j`, `k`) adds one entry for the
 //! first step that changes the view and replaces it for the steps after,
 //! so that Back returns to where the review steps started instead of going
@@ -41,12 +47,27 @@ pub struct PageAnchor {
     pub to: Anchor,
 }
 
+/// What the canvas was asked to show from outside it.
+#[derive(Clone, PartialEq, Eq, Debug)]
+pub enum OnCanvas {
+    /// An item, added to the cards there are.
+    Item(String),
+    /// Items in place of the cards there are, arranged by module: a call
+    /// graph.
+    Items(Vec<String>),
+    /// A module's internal call graph (see `canvas::show_module_graph`).
+    ModuleGraph(String),
+    /// The chains from the public API down to an item (see
+    /// `canvas::show_impact`).
+    Impact(String),
+}
+
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub enum Route {
     Overview(Option<Anchor>),
     Module(String, Option<Anchor>),
-    /// The canvas, focused on an item if it was opened from elsewhere.
-    Canvas(Option<String>),
+    /// The canvas, with what it was last asked to show from elsewhere.
+    Canvas(Option<OnCanvas>),
     /// The call view, focused on an item.
     Calls(Option<String>),
     Space,
@@ -54,7 +75,6 @@ pub enum Route {
 
 impl Route {
     pub fn hash(&self) -> String {
-        let enc = |id: &str| String::from(js_sys::encode_uri_component(id));
         let at = |a: &Option<Anchor>| match a {
             None => String::new(),
             Some(Anchor::Item(id)) => format!("/item/{}", enc(id)),
@@ -65,7 +85,13 @@ impl Route {
             Route::Overview(a) => format!("#/overview{}", at(a)),
             Route::Module(m, a) => format!("#/module/{}{}", enc(m), at(a)),
             Route::Canvas(None) => "#/canvas".to_string(),
-            Route::Canvas(Some(id)) => format!("#/canvas/{}", enc(id)),
+            Route::Canvas(Some(OnCanvas::Item(id))) => format!("#/canvas/{}", enc(id)),
+            Route::Canvas(Some(OnCanvas::Items(ids))) => {
+                let ids: Vec<String> = ids.iter().map(|id| enc(id)).collect();
+                format!("#/graph/{}", ids.join(","))
+            }
+            Route::Canvas(Some(OnCanvas::ModuleGraph(m))) => format!("#/module-graph/{}", enc(m)),
+            Route::Canvas(Some(OnCanvas::Impact(id))) => format!("#/impact/{}", enc(id)),
             Route::Calls(None) => "#/calls".to_string(),
             Route::Calls(Some(id)) => format!("#/calls/{}", enc(id)),
             Route::Space => "#/structure".to_string(),
@@ -95,7 +121,20 @@ impl Route {
                 Some(m) => Route::Module(m, anchor(2)),
                 None => Route::Overview(None),
             },
-            "canvas" => Route::Canvas(arg(1)),
+            "canvas" => Route::Canvas(arg(1).map(OnCanvas::Item)),
+            // Ids are encoded, so `,` only separates them.
+            "graph" => {
+                let ids: Vec<String> = parts
+                    .get(1)
+                    .into_iter()
+                    .flat_map(|list| list.split(','))
+                    .filter(|id| !id.is_empty())
+                    .filter_map(&decode)
+                    .collect();
+                Route::Canvas((!ids.is_empty()).then_some(OnCanvas::Items(ids)))
+            }
+            "module-graph" => Route::Canvas(arg(1).map(OnCanvas::ModuleGraph)),
+            "impact" => Route::Canvas(arg(1).map(OnCanvas::Impact)),
             "calls" => Route::Calls(arg(1)),
             "structure" => Route::Space,
             _ => Route::Overview(None),
@@ -114,6 +153,50 @@ impl Route {
     }
 }
 
+/// Encodes a part of a fragment like `encodeURIComponent`, which also
+/// works where tests run (natively, without JavaScript).
+fn enc(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.!~*'()".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// An `href` attribute that leads to `route`, for a link that the app
+/// handles on a plain click: a middle click or Ctrl+click opens the route
+/// in a new tab.
+pub fn href(route: &Route) -> String {
+    // The fragment is encoded: no quotes or `&` to escape but `'`, which
+    // can't end a double-quoted attribute.
+    format!(r#" href="{}""#, route.hash())
+}
+
+/// The `href` of a link to an item, which opens it on the canvas.
+pub fn item_href(id: &str) -> String {
+    href(&Route::Canvas(Some(OnCanvas::Item(id.to_string()))))
+}
+
+/// The `href` of a link to a module's page.
+pub fn module_href(m: &str) -> String {
+    href(&Route::Module(m.to_string(), None))
+}
+
+/// The `href` of a link to an item's row on its module page.
+pub fn row_href(id: &str) -> String {
+    // The overview's anchors of items lead to their module page (see `show`).
+    href(&Route::Overview(Some(Anchor::Item(id.to_string()))))
+}
+
+/// The `href` of a link to a changed file's entry on the overview.
+pub fn file_href(path: &str) -> String {
+    href(&Route::Overview(Some(Anchor::File(path.to_string()))))
+}
+
 fn decode(s: &str) -> Option<String> {
     js_sys::decode_uri_component(s).ok().map(String::from)
 }
@@ -127,6 +210,26 @@ thread_local! {
     static STEPPING: Cell<bool> = const { Cell::new(false) };
     /// Whether the current entry was added by a review step.
     static STEP_ENTRY: Cell<bool> = const { Cell::new(false) };
+    /// Whether the view of an entry is being shown (see [`show`]).
+    static SHOWING: Cell<bool> = const { Cell::new(false) };
+    /// The cards of each canvas entry as last seen, by fragment.
+    static CANVASES: RefCell<HashMap<String, crate::canvas::Saved>> = RefCell::new(HashMap::new());
+}
+
+/// After each event on the canvas: keeps its cards for the current entry,
+/// so that coming back to the entry with Back or Forward shows them as
+/// they were, also after another graph replaced them (see [`show`]).
+pub fn remember_canvas(app: &App) {
+    if app.s.view != View::Canvas {
+        return;
+    }
+    CURRENT.with(|c| {
+        let c = c.borrow();
+        if matches!(*c, Route::Canvas(_)) {
+            let saved = crate::canvas::save(&app.s.canvas);
+            CANVASES.with(|m| m.borrow_mut().insert(c.hash(), saved));
+        }
+    });
 }
 
 fn location_route() -> Route {
@@ -169,12 +272,38 @@ pub fn record(app: &App) {
     // A stale position (from an earlier visit) must not be restored.
     SCROLL.with(|s| s.borrow_mut().remove(&route.hash()));
     // Fires `hashchange` later, which then finds the route current.
-    if stepping && STEP_ENTRY.get() {
+    // Showing an entry ended up elsewhere (a call graph on a phone opens
+    // in the call view): that replaces the entry.
+    if (stepping && STEP_ENTRY.get()) || SHOWING.get() {
         let _ = dom::window().location().replace(&route.hash());
     } else {
         let _ = dom::window().location().set_hash(&route.hash());
     }
     STEP_ENTRY.set(stepping);
+}
+
+/// Points the view buttons at what each view shows now, so that one opened
+/// in a new tab shows the same: the module page of the module shown, the
+/// call view's item, and the canvas's cards (laid out again).
+pub fn update_view_links(app: &App) {
+    for b in dom::query_all("#views [data-view]") {
+        let route = match dom::data(&b, "view").and_then(|v| View::from_name(&v)) {
+            Some(View::Overview) => Route::Overview(None),
+            Some(View::Module) => Route::Module(app.s.module.clone(), None),
+            Some(View::Canvas) => {
+                let mut ids = crate::canvas::shown_items(app);
+                Route::Canvas(match ids.len() {
+                    0 => None,
+                    1 => ids.pop().map(OnCanvas::Item),
+                    _ => Some(OnCanvas::Items(ids)),
+                })
+            }
+            Some(View::Calls) => Route::Calls(app.s.calls.focus.clone()),
+            Some(View::Space) => Route::Space,
+            None => continue,
+        };
+        let _ = b.set_attribute("href", &route.hash());
+    }
 }
 
 /// Runs `f`, which shows a review step: the history entry that it adds
@@ -226,7 +355,20 @@ fn show(app: &mut App, wanted: Route, first: bool) {
             Some(it) => Route::Module(app.d.mod_of(it).to_string(), Some(Anchor::Item(id))),
             None => Route::Overview(None),
         },
-        Route::Canvas(Some(id)) if app.d.item(&id).is_none() => Route::Canvas(None),
+        Route::Canvas(Some(OnCanvas::Item(id) | OnCanvas::Impact(id)))
+            if app.d.item(&id).is_none() =>
+        {
+            Route::Canvas(None)
+        }
+        Route::Canvas(Some(OnCanvas::ModuleGraph(m)))
+            if app.d.item(&m).is_none_or(|it| it.info.kind != Kind::Mod) =>
+        {
+            Route::Canvas(None)
+        }
+        Route::Canvas(Some(OnCanvas::Items(mut ids))) => {
+            ids.retain(|id| app.d.item(id).is_some());
+            Route::Canvas((!ids.is_empty()).then_some(OnCanvas::Items(ids)))
+        }
         Route::Calls(Some(id)) if app.d.item(&id).is_none() => Route::Calls(None),
         r => r,
     };
@@ -236,10 +378,29 @@ fn show(app: &mut App, wanted: Route, first: bool) {
         let _ = dom::window().location().replace(&route.hash());
     }
     crate::close_modal();
+    SHOWING.set(true);
     match route.clone() {
         Route::Overview(a) => show_page(app, View::Overview, None, a, first),
         Route::Module(m, a) => show_page(app, View::Module, Some(m), a, first),
-        Route::Canvas(Some(id)) => crate::canvas::open(app, &id, None, true),
+        // Back or Forward to a canvas entry seen before: its cards as the
+        // reader left them, not laid out again.
+        Route::Canvas(shows)
+            if !first
+                && let Some(saved) = CANVASES.with(|m| m.borrow().get(&route.hash()).cloned()) =>
+        {
+            crate::canvas::restore(app, &saved);
+            app.s.canvas_focus = shows;
+            crate::set_view(app, View::Canvas);
+        }
+        Route::Canvas(Some(OnCanvas::Item(id))) if crate::narrow() => crate::calls::focus(app, &id),
+        Route::Canvas(Some(OnCanvas::Item(id))) => crate::canvas::open(app, &id, None, true),
+        // Back to the call graph that the canvas shows: the cards stay as
+        // the reader left them.
+        Route::Canvas(Some(shows)) if !first && app.s.canvas_graph.as_ref() == Some(&shows) => {
+            app.s.canvas_focus = Some(shows);
+            crate::set_view(app, View::Canvas);
+        }
+        Route::Canvas(Some(shows)) => crate::show_on_canvas(app, &shows),
         Route::Canvas(None) => crate::set_view(app, View::Canvas),
         Route::Calls(Some(id)) => crate::calls::focus(app, &id),
         Route::Calls(None) => {
@@ -248,6 +409,7 @@ fn show(app: &mut App, wanted: Route, first: bool) {
         }
         Route::Space => crate::set_view(app, View::Space),
     }
+    SHOWING.set(false);
     restore_scroll(&route);
 }
 
@@ -347,7 +509,23 @@ mod tests {
         assert_eq!(parse("#/canvas/"), Route::Canvas(None));
         assert_eq!(
             parse("#/canvas/demo%3A%3Aeval"),
-            Route::Canvas(Some("demo::eval".into()))
+            Route::Canvas(Some(OnCanvas::Item("demo::eval".into())))
+        );
+        assert_eq!(
+            parse("#/graph/demo%3A%3Aeval,demo%3A%3Aast%3A%3AExpr"),
+            Route::Canvas(Some(OnCanvas::Items(vec![
+                "demo::eval".into(),
+                "demo::ast::Expr".into()
+            ])))
+        );
+        assert_eq!(parse("#/graph/"), Route::Canvas(None));
+        assert_eq!(
+            parse("#/module-graph/demo%3A%3Aast"),
+            Route::Canvas(Some(OnCanvas::ModuleGraph("demo::ast".into())))
+        );
+        assert_eq!(
+            parse("#/impact/demo%3A%3Aeval"),
+            Route::Canvas(Some(OnCanvas::Impact("demo::eval".into())))
         );
         assert_eq!(parse("#/calls"), Route::Calls(None));
         assert_eq!(
@@ -355,5 +533,49 @@ mod tests {
             Route::Calls(Some("demo::eval".into()))
         );
         assert_eq!(parse("#/structure"), Route::Space);
+    }
+
+    #[test]
+    fn fragments_round_trip() {
+        let decode = |s: &str| {
+            // `decodeURIComponent` of what `enc` writes.
+            let mut out = Vec::new();
+            let b = s.as_bytes();
+            let mut i = 0;
+            while i < b.len() {
+                if b[i] == b'%' {
+                    out.push(u8::from_str_radix(&s[i + 1..i + 3], 16).ok()?);
+                    i += 3;
+                } else {
+                    out.push(b[i]);
+                    i += 1;
+                }
+            }
+            String::from_utf8(out).ok()
+        };
+        let routes = [
+            Route::Overview(None),
+            Route::Overview(Some(Anchor::File("src/a b.rs".into()))),
+            Route::Module(
+                "demo::ast".into(),
+                Some(Anchor::Item("demo::ast::Expr".into())),
+            ),
+            Route::Canvas(None),
+            Route::Canvas(Some(OnCanvas::Item("demo::<impl Foo, Bar>::f".into()))),
+            Route::Canvas(Some(OnCanvas::Items(vec![
+                "demo::a,b".into(),
+                "demo::c/d".into(),
+            ]))),
+            Route::Canvas(Some(OnCanvas::ModuleGraph("demo::ast".into()))),
+            Route::Canvas(Some(OnCanvas::Impact("demo::eval".into()))),
+            Route::Calls(Some("demo::eval".into())),
+            Route::Space,
+        ];
+        for r in routes {
+            assert_eq!(Route::parse(&r.hash(), decode), r, "{}", r.hash());
+        }
+        // Safe in a double-quoted attribute.
+        let h = href(&Route::Canvas(Some(OnCanvas::Item(r#"a"<&>'"#.into()))));
+        assert_eq!(h, r##" href="#/canvas/a%22%3C%26%3E'""##);
     }
 }

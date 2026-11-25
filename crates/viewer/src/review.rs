@@ -866,6 +866,38 @@ fn reread() {
     });
 }
 
+/// Whether a key of the browser's storage that changed holds marks of this
+/// page's PR. `None` (the whole storage was cleared) may have.
+pub fn is_marks_key(key: Option<&str>) -> bool {
+    let Some(key) = key else {
+        return true;
+    };
+    let own = REVIEW.with(|r| r.borrow().key.clone());
+    key.split_once(':').is_some_and(|(prefix, k)| {
+        k == own && [MARKS_KEY, EDGES_KEY, NOTES_KEY, VERSIONS_KEY].contains(&prefix)
+    })
+}
+
+/// Another tab (of this page or of the PR's other page) saved marks: reads
+/// them and updates the controls of the units whose mark or verdict
+/// changed. Returns whether any did.
+pub fn sync_from_storage() -> bool {
+    let ids: Vec<String> = REVIEW.with(|r| r.borrow().prints.keys().cloned().collect());
+    let state = |id: &String| (mark(id), note(id));
+    let before: Vec<_> = ids.iter().map(state).collect();
+    reread();
+    let changed: Vec<&String> = ids
+        .iter()
+        .zip(before)
+        .filter(|(id, b)| state(id) != *b)
+        .map(|(id, _)| id)
+        .collect();
+    for id in &changed {
+        refresh(id);
+    }
+    !changed.is_empty()
+}
+
 /// Reads the saved marks for this page's PR.
 pub fn load(d: &Data) {
     let units = units_in_order(d);

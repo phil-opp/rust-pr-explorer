@@ -2,7 +2,7 @@
 //! cards are open, their tabs, their places, the connectors or the scope
 //! can be taken back, with the Undo button or Ctrl+Z.
 
-use super::{Canvas, Expansion, Group, render};
+use super::{Canvas, Expansion, Group, Pan, apply_pan, render};
 use crate::{App, dom, toast};
 
 /// At most this many changes can be undone.
@@ -29,7 +29,7 @@ impl Snapshot {
     }
 
     /// Whether `c` shows the same layout: the same cards with the same
-    /// tabs in the same places, connectors and scope. What a card shows
+    /// tabs in the same places and widths, connectors and scope. What a card shows
     /// inside (an open source view, unfolded lines) doesn't count.
     fn same_layout(&self, c: &Canvas) -> bool {
         self.links == c.links
@@ -41,6 +41,7 @@ impl Snapshot {
                     && a.active == b.active
                     && a.x == b.x
                     && a.y == b.y
+                    && a.w == b.w
             })
     }
 }
@@ -54,6 +55,7 @@ pub fn before_change(app: &mut App) {
 /// After the event: if it changed the layout, the layout before it can
 /// be restored with [`undo`].
 pub fn after_change(app: &mut App) {
+    crate::nav::remember_canvas(app);
     let c = &mut app.s.canvas;
     let Some(before) = c.before.take() else {
         return;
@@ -80,6 +82,9 @@ pub fn undo(app: &mut App) {
     c.links = s.links;
     c.scope = s.scope;
     c.expansions = s.expansions;
+    // The restored places already fit the restored sizes: no card should
+    // move because another one changed size.
+    c.sizes.clear();
     render(app);
     toast("Undone");
 }
@@ -92,4 +97,34 @@ fn update_button(c: &Canvas) {
             let _ = b.remove_attribute("disabled");
         }
     }
+}
+
+/// The cards of a history entry of the canvas, with the view's position,
+/// so that Back and Forward show them as the reader left them.
+#[derive(Clone)]
+pub struct Saved {
+    layout: Snapshot,
+    frames: bool,
+    pan: Pan,
+}
+
+pub fn save(c: &Canvas) -> Saved {
+    Saved {
+        layout: Snapshot::of(c),
+        frames: c.frames,
+        pan: c.pan,
+    }
+}
+
+/// Shows saved cards again. Not an undo step of its own: the event that
+/// restores them is one, like any other (see `before_change`).
+pub fn restore(app: &mut App, s: &Saved) {
+    let c = &mut app.s.canvas;
+    c.groups = s.layout.groups.clone();
+    c.links = s.layout.links.clone();
+    c.scope = s.layout.scope.clone();
+    c.frames = s.frames;
+    c.expansions = s.layout.expansions.clone();
+    c.pan = s.pan;
+    apply_pan(c);
 }
