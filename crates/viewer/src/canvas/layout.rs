@@ -6,6 +6,7 @@ use super::{
     height_of, render, visible,
 };
 use crate::data::{Data, changed, within};
+use crate::nav::OnCanvas;
 use crate::{App, View, dom, toast};
 use model::{Item, Kind, Status};
 use std::collections::{BTreeSet, HashMap};
@@ -228,7 +229,9 @@ pub fn show_module_graph(app: &mut App, m: &str) {
     for id in &ids {
         c.add_group(id, 0.0, 0.0);
     }
-    app.s.canvas_focus = None;
+    let shows = OnCanvas::ModuleGraph(m.to_string());
+    app.s.canvas_focus = Some(shows.clone());
+    app.s.canvas_graph = Some(shows);
     crate::set_view(app, View::Canvas);
     arrange_by_module(app);
     render(app);
@@ -255,7 +258,7 @@ pub fn show_impact(app: &mut App, id: &str) {
         toast(&format!("No public item reaches {}", d.display_name(it)));
         return;
     }
-    show_items_from(app, &ids, d.mod_of(it));
+    show_items_from(app, &ids, d.mod_of(it), OnCanvas::Impact(id.to_string()));
 }
 
 /// Opens `ids` on the canvas, arranged by module, viewed from a module
@@ -265,10 +268,11 @@ pub fn show_items(app: &mut App, ids: &[String]) {
     let Some(first) = ids.first().and_then(|i| d.item(i)) else {
         return;
     };
-    show_items_from(app, ids, d.mod_of(first));
+    show_items_from(app, ids, d.mod_of(first), OnCanvas::Items(ids.to_vec()));
 }
 
-fn show_items_from(app: &mut App, ids: &[String], first: &str) {
+/// `shows` is what the history entry names.
+fn show_items_from(app: &mut App, ids: &[String], first: &str, shows: OnCanvas) {
     let d = app.d.clone();
     let mut scopes: Vec<String> = ids
         .iter()
@@ -288,7 +292,8 @@ fn show_items_from(app: &mut App, ids: &[String], first: &str) {
     for id in ids {
         c.add_group(id, 0.0, 0.0);
     }
-    app.s.canvas_focus = None;
+    app.s.canvas_focus = Some(shows.clone());
+    app.s.canvas_graph = Some(shows);
     crate::set_view(app, View::Canvas);
     arrange_by_module(app);
     render(app);

@@ -296,6 +296,17 @@ fn place(d: &Data, c: &mut Canvas, gi: usize) {
     c.groups[gi].y = y;
 }
 
+/// The items of the cards that the canvas shows, with the view it looks
+/// from: what a new tab lays out again (see `nav::update_view_links`).
+pub fn shown_items(app: &App) -> Vec<String> {
+    let c = &app.s.canvas;
+    c.groups
+        .iter()
+        .filter(|g| visible(&app.d, c, g))
+        .map(|g| g.active.clone())
+        .collect()
+}
+
 /// The card of item `id` as the canvas would show it, looking from
 /// `scope`, for a view outside the canvas (see [`crate::calls`]). `full`
 /// shows an unchanged item's docs and source, not only its signature.
