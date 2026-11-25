@@ -20,6 +20,7 @@ mod js;
 mod keys;
 mod map;
 mod nav;
+mod outline;
 mod pages;
 mod post;
 mod review;
@@ -216,11 +217,12 @@ pub fn set_view_at(app: &mut App, view: View, anchor: Option<nav::Anchor>) {
         );
     }
     // Show or hide the sidebar first, so that the view lays out at its final width.
-    for id in ["sidebar", "side-btn"] {
+    for id in ["sidebar", "side-btn", "side-show"] {
         if let Some(el) = dom::by_id(id) {
             dom::toggle_class(&el, "hidden", !pages::sidebar_shown(app));
         }
     }
+    outline::apply_closed(app);
     match view {
         View::Overview => pages::render_overview(app),
         View::Module => pages::render_module_page(app),
@@ -348,6 +350,25 @@ fn install_listeners() {
                 nav::update_view_links(app);
             });
             mark_current_later();
+        }
+    });
+    // Cards are as wide as their code, measured in the code's font, which
+    // may load after they were rendered.
+    if let Some(fonts) = js_sys::Reflect::get(&dom::document(), &"fonts".into())
+        .ok()
+        .and_then(|f| f.dyn_into::<web_sys::EventTarget>().ok())
+    {
+        dom::listen(&fonts, "loadingdone", |_| {
+            with_app(|app| canvas::refit(&app.s.canvas));
+        });
+    }
+    dom::listen(&doc, "dblclick", |ev| {
+        if let Some(el) = dom::target_element(&ev) {
+            with_app(|app| {
+                canvas::before_change(app);
+                canvas::on_dblclick(app, &el);
+                canvas::after_change(app);
+            });
         }
     });
     // Not passive: starting a card drag prevents text selection.
@@ -590,6 +611,15 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         }
         dom::toggle_class(&panel, "hidden", true);
     }
+    // On a wide screen the sidebar can be collapsed, per view.
+    if dom::closest(el, "#side-hide, #side-show").is_some() {
+        outline::toggle_closed(app.s.view);
+        outline::apply_closed(app);
+        if app.s.view == View::Canvas {
+            canvas::draw_edges(app);
+        }
+        return;
+    }
     // On a narrow screen the sidebar is a drawer over the view, opened by
     // its button. Picking one of its rows or clicking outside closes it.
     if let Some(body) = dom::document().body() {
@@ -712,6 +742,9 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         if let Some(card) = anchor_el(View::Overview, &anchor) {
             reveal(&card);
         }
+        return;
+    }
+    if outline::on_click(app, el) {
         return;
     }
     if let Some(m) = dom::closest(el, "[data-mod]") {
@@ -1457,6 +1490,7 @@ fn on_mouse_over(app: &mut App, el: &Element) {
             dom::toggle_class(&c, "hover-target", false);
         }
     }
+    outline::on_hover(app, el);
     // No hover previews for taps: the tap opens the item anyway.
     let Some(r) = dom::closest(el, ".ref").filter(|_| !TOUCH.get()) else {
         hide_tooltip();

@@ -29,7 +29,7 @@ impl Snapshot {
     }
 
     /// Whether `c` shows the same layout: the same cards with the same
-    /// tabs in the same places, connectors and scope. What a card shows
+    /// tabs in the same places and widths, connectors and scope. What a card shows
     /// inside (an open source view, unfolded lines) doesn't count.
     fn same_layout(&self, c: &Canvas) -> bool {
         self.links == c.links
@@ -41,6 +41,7 @@ impl Snapshot {
                     && a.active == b.active
                     && a.x == b.x
                     && a.y == b.y
+                    && a.w == b.w
             })
     }
 }
@@ -81,6 +82,9 @@ pub fn undo(app: &mut App) {
     c.links = s.links;
     c.scope = s.scope;
     c.expansions = s.expansions;
+    // The restored places already fit the restored sizes: no card should
+    // move because another one changed size.
+    c.sizes.clear();
     render(app);
     toast("Undone");
 }

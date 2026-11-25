@@ -319,6 +319,11 @@ a.ref:hover { text-decoration: underline; }
   background-image: radial-gradient(var(--border) 1px, transparent 1px);
   background-size: 22px 22px; }
 #viewport.panning { cursor: grabbing; }
+/* Code in a card: a press on its text selects, a press next to it (after
+   the end of a line, on the line numbers) moves the view. */
+#cards pre, #cards .sig, #cards .sbs { cursor: text; }
+#cards .pan-spot, #cards .pan-spot .ln, #cards .pan-spot .no { cursor: grab; }
+#viewport.panning .pan-spot, #viewport.panning .pan-spot * { cursor: grabbing; }
 #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 /* A double click on a card's header glides to it. */
 #world.zooming { transition: transform .25s ease-out; }
@@ -343,6 +348,18 @@ a.ref:hover { text-decoration: underline; }
 .card {
   position: absolute; width: 580px; background: var(--bg); border: 1px solid var(--border);
   border-radius: 8px; box-shadow: var(--shadow); cursor: default;
+}
+/* The right edge resizes the card (the viewer sets its width: as wide as
+   its code by default). A bar shows on hover; on a touch screen a grip
+   shows near the top, and the edge is wider. */
+.card-rs { position: absolute; top: 0; bottom: 0; right: -5px; width: 10px; cursor: ew-resize; z-index: 1; }
+.card-rs::after { content: ""; position: absolute; top: 8px; bottom: 8px; left: 4px; width: 2px; border-radius: 1px; background: var(--link); opacity: 0; transition: opacity .15s; }
+.card-rs:hover::after { opacity: .6; }
+#viewport.resizing, #viewport.resizing * { cursor: ew-resize !important; user-select: none; }
+.cg-focus .card-rs { display: none; }
+@media (hover: none) and (pointer: coarse) {
+  .card-rs { right: -14px; width: 24px; }
+  .card-rs::after { top: 36px; bottom: auto; left: 9px; width: 6px; height: 36px; border-radius: 3px; background: var(--border); opacity: 1; }
 }
 .card.cs-added { border-top: 4px solid var(--added); }
 .card.cs-changed { border-top: 4px solid var(--changed); }
@@ -487,7 +504,6 @@ a.card-badge[data-drill]:hover { border-style: solid; }
 .sbs .ln.add { background: var(--added-bg); }
 .sbs .ln.del { background: var(--removed-bg); }
 .sbs .ln.gap { background: repeating-linear-gradient(135deg, transparent 0 4px, var(--border) 4px 5px); opacity: .5; }
-.card:has(details.src[open] .sbs) { width: 1080px; }
 /* Lines that were only rewrapped count as unchanged; a dotted rule on the
    left still shows where the formatting differs. */
 .ln.rf { background: linear-gradient(var(--muted) 50%, transparent 50%) 1px 0 / 1px 4px repeat-y; }
@@ -552,6 +568,13 @@ a.card-badge[data-drill]:hover { border-style: solid; }
   --comment: light-dark(#4e504d, #c6c6ca); --link: light-dark(#225380, #a1cbf1);
   color: light-dark(color-mix(in srgb, currentColor 50%, var(--text)), color-mix(in srgb, currentColor 55%, var(--text)));
 }
+
+/* Path segments added to or removed from a path that still names the same
+   item, as `std::process::` when a `use std::process::Command` came in: no
+   change, so no color, only a dotted underline or a thin strike in the
+   muted text color. */
+.ln .wc.tq { background: none; color: var(--muted); text-decoration: underline 1px dotted var(--muted); text-underline-offset: 3px; cursor: help; }
+.ln .wc.tq.td { text-decoration: line-through 1px var(--muted); }
 
 /* Word changes in docs: inserted words underlined, removed ones struck out. */
 ins.wd { text-decoration: underline 2px var(--added); text-underline-offset: 3px; background: var(--added-bg); }
@@ -1126,4 +1149,38 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
 @media (max-width: 760px) {
   .cg-facts { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .cg-label { margin-top: 6px; }
+}
+
+/* The call graph outline in the sidebar of the canvas and the call view.
+   Call depth is indented with a guide line per level, as in the overview's
+   graphs. */
+.ol-g-h { display: flex; align-items: baseline; gap: 6px; padding: 6px 14px 2px; font-family: var(--mono); font-size: 12.5px; font-weight: 600; }
+.ol-g-h .cnt, .ol-graph .cnt { margin-left: auto; font: 11px var(--sans); color: var(--muted); }
+.ol-g-nm { overflow: hidden; text-overflow: ellipsis; min-width: 0; white-space: nowrap; }
+.tree.ol { padding-left: 6px; }
+.tree.ol > li { padding-left: calc(var(--depth, 0) * 14px);
+  background: repeating-linear-gradient(to right, transparent 0 7px, color-mix(in srgb, var(--border) 60%, transparent) 7px 8px, transparent 8px 14px) no-repeat 0 0 / calc(var(--depth, 0) * 14px) 100%; }
+.ol-nm { font-family: var(--mono); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ol-nm[data-kind="fn"], .ol-nm[data-kind="method"], .ol-nm[data-kind="trait_method"] { color: var(--fn); }
+.ol-nm[data-kind="struct"], .ol-nm[data-kind="enum"], .ol-nm[data-kind="union"], .ol-nm[data-kind="type_alias"] { color: var(--type); }
+.ol-nm[data-kind="trait"] { color: var(--trait); }
+/* No card yet: gray italics, not a kind color. */
+.ol-row.off .ol-nm { color: var(--muted); font-style: italic; }
+.ol-row .badge { flex: none; }
+.ol-unch { flex: none; font-size: 11px; color: var(--muted); }
+.ol-row .cnt { flex: none; font-size: 12px; }
+.ol-sub { padding: 6px 14px 0 22px; font-size: 11px; color: var(--muted); }
+.ol-chg { color: var(--removed); font-weight: 700; }
+.ol-cmt, .ol-stale { color: var(--changed); font-weight: 700; }
+.ol-graph .ol-g-nm { font-family: var(--mono); font-size: 12.5px; }
+/* Collapsing the sidebar, per view: « at its top right hides it, and a
+   thin strip with » in its place shows it again. On a narrow screen the
+   sidebar is a drawer instead. */
+#side-hide, #side-show { display: none; }
+@media (min-width: 761px) {
+  .side-closed #sidebar { display: none; }
+  #side-hide { position: absolute; top: 6px; left: 226px; z-index: 5; padding: 0 6px; line-height: 22px; font-size: 14px; }
+  body:not(.side-closed) #sidebar:not(.hidden) ~ #side-hide { display: block; }
+  .side-closed #sidebar:not(.hidden) ~ #side-show { display: block; }
+  #side-show { flex: none; width: 22px; padding: 8px 0 0; border: 0; border-right: 1px solid var(--border); border-radius: 0; background: var(--panel); font-size: 14px; line-height: 1; vertical-align: top; text-align: center; align-self: stretch; }
 }
