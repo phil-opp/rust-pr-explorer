@@ -286,7 +286,7 @@ fn ports(conns: &[Conn]) -> Vec<Ends> {
 /// they can.
 fn lanes(conns: &[Conn], ends: &[Ends]) -> Vec<f64> {
     // Per gap (whether horizontal, from, to): (order, connector).
-    type Gaps = BTreeMap<(bool, i64, i64), Vec<((bool, f64), usize)>>;
+    type Gaps = BTreeMap<(bool, i64, i64), Vec<((bool, f64), usize, Crossing)>>;
     let mut gaps: Gaps = BTreeMap::new();
     let mut out = vec![0.0; conns.len()];
     // Connectors between two cards' right sides run beside the cards: per
@@ -326,9 +326,26 @@ fn lanes(conns: &[Conn], ends: &[Ends]) -> Vec<f64> {
         } else {
             far.0.min(near.0 + 40.0)
         };
+        // Where the connector meets the cards, along the gap: its first
+        // call site and any further ones are on `a`'s side.
+        let a_near = p.0 <= q.0;
+        let mut at_a = vec![p.1];
+        at_a.extend(c.more_sites.iter().copied());
+        let (near_vs, far_vs) = if a_near {
+            (at_a, vec![q.1])
+        } else {
+            (vec![q.1], at_a)
+        };
         gaps.entry((horizontal, near.0.round() as i64, far_u.round() as i64))
             .or_default()
-            .push(((!down, order), i));
+            .push((
+                (!down, order),
+                i,
+                Crossing {
+                    near: near_vs,
+                    far: far_vs,
+                },
+            ));
     }
     for (edge, mut list) in beside {
         list.sort_by(|x, y| x.0.total_cmp(&y.0));
@@ -338,11 +355,13 @@ fn lanes(conns: &[Conn], ends: &[Ends]) -> Vec<f64> {
     }
     for ((_, u0, u1), mut list) in gaps {
         list.sort_by(|x, y| x.0.0.cmp(&y.0.0).then(x.0.1.total_cmp(&y.0.1)));
+        let shapes: Vec<Crossing> = list.iter().map(|x| x.2.clone()).collect();
+        let order = lane_order(&shapes);
         let (u0, u1) = (u0 as f64, u1 as f64);
         let n = list.len() as f64;
         let gap = LANE_GAP.min((u1 - u0) / (n + 1.0));
-        for (k, &(_, i)) in list.iter().enumerate() {
-            out[i] = (u0 + u1) / 2.0 + (k as f64 - (n - 1.0) / 2.0) * gap;
+        for (k, &o) in order.iter().enumerate() {
+            out[list[o].1] = (u0 + u1) / 2.0 + (k as f64 - (n - 1.0) / 2.0) * gap;
         }
     }
     out
@@ -357,6 +376,86 @@ struct Paths {
     branches: String,
     /// Where the branches join `main`.
     joins: Vec<(f64, f64)>,
+    /// The corners of `main` and of each branch, for orthogonal connectors.
+    lines: Vec<Vec<(f64, f64)>>,
+}
+
+/// Where a connector through a gap meets the cards on either side, along
+/// the gap (`v` in [`lanes`]): it runs from each of these points across
+/// to its lane, and along the lane between them.
+#[derive(Clone)]
+struct Crossing {
+    near: Vec<f64>,
+    far: Vec<f64>,
+}
+
+impl Crossing {
+    fn span(&self) -> (f64, f64) {
+        let all = self.near.iter().chain(&self.far).copied();
+        let lo = all.clone().fold(f64::MAX, f64::min);
+        (lo, all.fold(f64::MIN, f64::max))
+    }
+}
+
+/// Up to this many connectors through one gap, [`lane_order`] tries every
+/// order of their lanes.
+const MAX_EXACT: usize = 7;
+
+/// The order of the lanes in a gap, from the near side: the one with the
+/// fewest crossings, then the one whose connectors cross others at the
+/// fewest places of their own (a connector that crosses two others in one
+/// run is easier to follow than one that crosses them on two), then the
+/// one closest to the given order. With more than [`MAX_EXACT`]
+/// connectors, the given order.
+fn lane_order(shapes: &[Crossing]) -> Vec<usize> {
+    let n = shapes.len();
+    if n > MAX_EXACT {
+        return (0..n).collect();
+    }
+    let spans: Vec<(f64, f64)> = shapes.iter().map(Crossing::span).collect();
+    let inside = |v: f64, (lo, hi): (f64, f64)| v > lo + 0.5 && v < hi - 0.5;
+    let count = |vs: &[f64], span| vs.iter().filter(|&&v| inside(v, span)).count();
+    let score = |order: &[usize]| {
+        let (mut total, mut places, mut moved) = (0, 0, 0);
+        for (k, &i) in order.iter().enumerate() {
+            // Crossings on the runs to the near side, the runs to the far
+            // side, and the run along the lane.
+            let (mut near, mut far, mut along) = (0, 0, 0);
+            for (l, &j) in order.iter().enumerate() {
+                if l < k {
+                    near += count(&shapes[i].near, spans[j]);
+                    along += count(&shapes[j].far, spans[i]);
+                } else if l > k {
+                    far += count(&shapes[i].far, spans[j]);
+                    along += count(&shapes[j].near, spans[i]);
+                    moved += usize::from(j < i);
+                }
+            }
+            total += near + far;
+            places += [near, far, along].iter().filter(|&&x| x > 0).count();
+        }
+        (total, places, moved)
+    };
+    let mut order: Vec<usize> = (0..n).collect();
+    let mut best = (score(&order), order.clone());
+    // Heap's algorithm: every permutation, one swap at a time.
+    let mut c = vec![0; n];
+    let mut k = 1;
+    while k < n {
+        if c[k] < k {
+            order.swap(if k % 2 == 0 { 0 } else { c[k] }, k);
+            let s = score(&order);
+            if s < best.0 {
+                best = (s, order.clone());
+            }
+            c[k] += 1;
+            k = 1;
+        } else {
+            c[k] = 0;
+            k += 1;
+        }
+    }
+    best.1
 }
 
 fn conn_path(c: &Conn, ends: Ends, lane: f64) -> Paths {
@@ -370,6 +469,7 @@ fn conn_path(c: &Conn, ends: Ends, lane: f64) -> Paths {
                 Side::Top | Side::Bottom => vec![p, (p.0, lane), (q.0, lane), q],
             };
             out.main = route::path_d(&points);
+            out.lines.push(points);
             // Further call sites run into the main connector's lane and
             // join it where its run along the lane is straight (its bends
             // are rounded).
@@ -385,8 +485,9 @@ fn conn_path(c: &Conn, ends: Ends, lane: f64) -> Paths {
                 } else {
                     join
                 };
-                out.branches
-                    .push_str(&route::path_d(&[(p.0, y), (lane, y), (lane, end)]));
+                let points = vec![(p.0, y), (lane, y), (lane, end)];
+                out.branches.push_str(&route::path_d(&points));
+                out.lines.push(points);
                 out.branches.push(' ');
                 out.joins.push((lane, join));
             }
@@ -399,6 +500,55 @@ fn conn_path(c: &Conn, ends: Ends, lane: f64) -> Paths {
             }
         }
         Route::Curve => out.main = edge_path(c.a.1, c.b.1),
+    }
+    out
+}
+
+/// Which connectors cross a longer one: those are drawn over it, a bit
+/// bolder, with a gap cut into the longer one. Only orthogonal connectors
+/// are checked, by their straight runs.
+fn over_longer(lines: &[&[Vec<(f64, f64)>]]) -> Vec<bool> {
+    type Seg = ((f64, f64), (f64, f64));
+    let segs: Vec<Vec<Seg>> = lines
+        .iter()
+        .map(|ls| {
+            ls.iter()
+                .flat_map(|l| l.windows(2).map(|w| (w[0], w[1])))
+                .collect()
+        })
+        .collect();
+    let len = |i: usize| -> f64 {
+        lines[i]
+            .first()
+            .map(|l| {
+                l.windows(2)
+                    .map(|w| (w[1].0 - w[0].0).abs() + (w[1].1 - w[0].1).abs())
+                    .sum()
+            })
+            .unwrap_or(0.0)
+    };
+    let between = |v: f64, a: f64, b: f64| v > a.min(b) + 1.0 && v < a.max(b) - 1.0;
+    let cross = |(a, b): Seg, (c, d): Seg| {
+        let horizontal = |p: (f64, f64), q: (f64, f64)| p.1 == q.1 && p.0 != q.0;
+        let vertical = |p: (f64, f64), q: (f64, f64)| p.0 == q.0 && p.1 != q.1;
+        let hv = |(a, b): Seg, (c, d): Seg| {
+            horizontal(a, b) && vertical(c, d) && between(c.0, a.0, b.0) && between(a.1, c.1, d.1)
+        };
+        hv((a, b), (c, d)) || hv((c, d), (a, b))
+    };
+    let n = lines.len();
+    let mut out = vec![false; n];
+    for i in 0..n {
+        for j in 0..n {
+            if i != j
+                && len(i) < len(j)
+                && segs[i]
+                    .iter()
+                    .any(|&x| segs[j].iter().any(|&y| cross(x, y)))
+            {
+                out[i] = true;
+            }
+        }
     }
     out
 }
@@ -591,10 +741,21 @@ pub fn draw_edges(app: &App) {
     let colors = call_colors(&conns, &ends, &lanes);
     let ids: HashMap<u32, &str> = vis.iter().map(|g| (g.gid, g.active.as_str())).collect();
     mark_callees(&conns, &colors, &ids);
+    let paths: Vec<Paths> = conns
+        .iter()
+        .enumerate()
+        .map(|(i, c)| conn_path(c, ends[i], lanes[i]))
+        .collect();
+    let lines: Vec<&[Vec<(f64, f64)>]> = paths.iter().map(|p| p.lines.as_slice()).collect();
+    let over = over_longer(&lines);
+    // Those drawn over others last.
+    let mut order: Vec<usize> = (0..conns.len()).collect();
+    order.sort_by_key(|&i| over[i]);
     let mut out = String::new();
-    for (i, c) in conns.iter().enumerate() {
+    for i in order {
+        let c = &conns[i];
         let base = c.class.split(' ').next().unwrap_or("");
-        let (class, marker) = match base {
+        let (mut class, marker) = match base {
             "call" => (
                 format!("{} c{}", c.class, colors[i]),
                 format!(r#"marker-end="url(#arrow-call-{})""#, colors[i]),
@@ -602,7 +763,15 @@ pub fn draw_edges(app: &App) {
             "use" => (c.class.clone(), r#"marker-end="url(#arrow-use)""#.into()),
             _ => (c.class.clone(), String::new()),
         };
-        let paths = conn_path(c, ends[i], lanes[i]);
+        let paths = &paths[i];
+        if over[i] {
+            class.push_str(" over");
+            // A gap in the connectors below, along this one.
+            out.push_str(&format!(
+                r#"<path class="edge-gap" d="{} {}"/>"#,
+                paths.branches, paths.main
+            ));
+        }
         let title = esc(&c.title);
         if !paths.branches.is_empty() {
             out.push_str(&format!(
@@ -614,7 +783,7 @@ pub fn draw_edges(app: &App) {
             r#"<path class="edge {class}" d="{}" {marker}><title>{title}</title></path>"#,
             paths.main
         ));
-        for (x, y) in paths.joins {
+        for &(x, y) in &paths.joins {
             out.push_str(&format!(
                 r#"<circle class="join c{}" cx="{x:.1}" cy="{y:.1}" r="3"/>"#,
                 colors[i]
@@ -880,6 +1049,20 @@ mod tests {
         assert_eq!(paths.joins.len(), 1);
         assert_eq!(paths.joins[0].0, lane);
         assert!(paths.joins[0].1 > 120.0 && paths.joins[0].1 < q.1.max(480.0));
+    }
+
+    /// A short connector that crosses a long one is drawn over it.
+    #[test]
+    fn short_connectors_cross_over_long_ones() {
+        let long = vec![vec![(0.0, 0.0), (50.0, 0.0), (50.0, 500.0), (100.0, 500.0)]];
+        let short = vec![vec![
+            (0.0, 200.0),
+            (40.0, 200.0),
+            (40.0, 100.0),
+            (100.0, 100.0),
+        ]];
+        let over = over_longer(&[long.as_slice(), short.as_slice()]);
+        assert_eq!(over, vec![false, true]);
     }
 
     /// Calls into two callees whose connectors run through one gap get

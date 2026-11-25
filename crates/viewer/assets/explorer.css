@@ -366,6 +366,10 @@ a.ref:hover { text-decoration: underline; }
 .edge.member { stroke: var(--border); stroke-width: 1.2; }
 .edge.link { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 1 3; }
 .edge.hot { stroke-width: 3; }
+/* A connector drawn over a longer one: a bit bolder, with a gap in the
+   one below. */
+.edge.over { stroke-width: 2.2; }
+.edge-gap { fill: none; stroke: var(--bg-alt); stroke-width: 7; }
 .card {
   position: absolute; width: 580px; background: var(--bg); border: 1px solid var(--border);
   border-radius: 8px; box-shadow: var(--shadow); cursor: default;
