@@ -1,9 +1,9 @@
 //! Opening and closing cards and tabs, and expanding an item's relatives.
 
 use super::{
-    CARD_W, Canvas, EXPAND_LIMIT, Expansion, Group, apply_pan, card_el,
+    Canvas, EXPAND_LIMIT, Expansion, Group, MIN_W, apply_pan, card_el,
     edges::{Rect, call_site_y, card_rect, draw_edges},
-    height_of, place, render, spot, visible,
+    height_of, place, render, spot, visible, width_of,
 };
 use crate::data::{Data, changed};
 use crate::{App, View, dom, toast};
@@ -31,7 +31,11 @@ pub fn open_for_review(app: &mut App, id: &str, reviewed: Option<&str>) {
     });
     // Next to a caller: placed like a card opened from it.
     let at = (c.group_of(id).is_none() && !vis.is_empty() && caller.is_none()).then(|| {
-        let x = vis.iter().map(|g| g.x).fold(f64::MIN, f64::max) + CARD_W + 120.0;
+        let x = vis
+            .iter()
+            .map(|g| g.x + width_of(g))
+            .fold(f64::MIN, f64::max)
+            + 120.0;
         let y = reviewed
             .and_then(|r| vis.iter().find(|g| g.active == r))
             .map_or_else(|| vis.iter().map(|g| g.y).fold(f64::MAX, f64::min), |g| g.y);
@@ -77,7 +81,7 @@ fn open_at(
                     let width = dom::by_id("viewport")
                         .map_or(1000.0, |v| v.get_bounding_client_rect().width());
                     (
-                        (width / 2.0 - c.pan.x) / c.pan.k - CARD_W / 2.0,
+                        (width / 2.0 - c.pan.x) / c.pan.k - MIN_W / 2.0,
                         (80.0 - c.pan.y) / c.pan.k,
                     )
                 }
@@ -121,7 +125,7 @@ fn spot_next_to(d: &Data, c: &Canvas, gi: usize, fi: usize) -> (f64, f64) {
         card_rect(g).unwrap_or(Rect {
             x: g.x,
             y: g.y,
-            w: CARD_W,
+            w: width_of(g),
             h: height_of(d, g),
         })
     };
@@ -170,7 +174,8 @@ fn spot_next_to(d: &Data, c: &Canvas, gi: usize, fi: usize) -> (f64, f64) {
         .collect();
     let cards: Vec<Rect> = others.iter().map(|&g| rect(g)).collect();
     spot::best_spot(
-        CARD_W,
+        // Not rendered yet: the least width, or the width it was resized to.
+        width_of(&c.groups[gi]),
         height_of(d, &c.groups[gi]),
         rect(&c.groups[fi]),
         &related,
@@ -193,7 +198,7 @@ fn nudge_into_view(gid: u32) {
             let r = vp.get_bounding_client_rect();
             let g = &c.groups[gi];
             let left = g.x * c.pan.k + c.pan.x;
-            let right = left + CARD_W * c.pan.k;
+            let right = left + width_of(g) * c.pan.k;
             let top = g.y * c.pan.k + c.pan.y;
             // Right edge first, but never past the left edge.
             let dx = if right > r.width() - MARGIN {
@@ -266,7 +271,7 @@ fn reveal(gid: u32, force: bool) {
             let sx = g.x * c.pan.k + c.pan.x;
             let sy = g.y * c.pan.k + c.pan.y;
             if force || sx < 0.0 || sy < 0.0 || sx > r.width() - 100.0 || sy > r.height() - 100.0 {
-                c.pan.x = r.width() / 2.0 - (g.x + CARD_W / 2.0) * c.pan.k;
+                c.pan.x = r.width() / 2.0 - (g.x + width_of(g) / 2.0) * c.pan.k;
                 c.pan.y = 60.0 - g.y * c.pan.k;
                 apply_pan(c);
                 draw_edges(app);
@@ -339,6 +344,7 @@ pub(crate) fn expand(app: &mut App, id: &str, kind: Related) {
     let side = if kind == Related::Callees { 1.0 } else { -1.0 };
     let Some(fi) = c.group_of(id) else { return };
     let (fx, fy) = (c.groups[fi].x, c.groups[fi].y);
+    let fw = width_of(&c.groups[fi]);
     let mut offset = 0.0;
     let mut opened = 0;
     let mut skipped = 0;
@@ -365,14 +371,34 @@ pub(crate) fn expand(app: &mut App, id: &str, kind: Related) {
             skipped += 1;
             continue;
         }
-        let gi = c.add_group(t, fx + side * (CARD_W + 90.0), fy + offset);
+        // Right of the card, or left of it with its right edge 90 pixels
+        // away, once its width is known.
+        let x = if side > 0.0 {
+            fx + fw + 90.0
+        } else {
+            fx - MIN_W - 90.0
+        };
+        let gi = c.add_group(t, x, fy + offset);
         place(&d, c, gi);
         c.add_link(from, to);
         let gid = c.groups[gi].gid;
         record.cards.push((gid, t.clone()));
         opened += 1;
-        // Render now, so the next card is placed using this card's real height.
+        // Render now, so the next card is placed using this card's real
+        // size.
         render(app);
+        let c = &mut app.s.canvas;
+        if side < 0.0
+            && let Some(gi) = c.by_gid(gid)
+        {
+            let w = width_of(&c.groups[gi]);
+            if w != MIN_W {
+                c.groups[gi].x = fx - w - 90.0;
+                c.groups[gi].y = fy + offset;
+                place(&d, c, gi);
+                render(app);
+            }
+        }
         let c = &app.s.canvas;
         if let Some(gi) = c.by_gid(gid) {
             offset = c.groups[gi].y - fy + height_of(&d, &c.groups[gi]) + 30.0;
