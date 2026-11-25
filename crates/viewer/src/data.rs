@@ -1246,49 +1246,80 @@ impl Data {
                 },
             );
             // The added tokens of a reformatted line, and inline, the
-            // removed ones where they were.
-            match rf_new.get(&n) {
-                Some(g) if !g.only_reformatted() => {
-                    let added: Vec<(usize, usize)> = if rf_adds(n) {
-                        Vec::new()
-                    } else {
-                        g.added
-                            .iter()
-                            .filter(|t| t.line as usize == n)
-                            .map(|t| (t.start as usize, t.end as usize))
-                            .collect()
-                    };
-                    let removed: Vec<(usize, &str)> = if split {
-                        Vec::new()
-                    } else {
-                        g.removed
-                            .iter()
-                            .filter(|t| t.at.line as usize == n)
-                            .map(|t| (t.at.start as usize, t.text.as_str()))
-                            .collect()
-                    };
-                    crate::code::mark_spans(&html, &added, &removed)
+            // removed ones where they were; the same for the segments of
+            // paths that name the same item, marked as no change.
+            let Some(g) = rf_new.get(&n) else {
+                return html;
+            };
+            let on_line = |spans: &[model::TokenSpan]| -> Vec<(usize, usize)> {
+                spans
+                    .iter()
+                    .filter(|t| t.line as usize == n)
+                    .map(|t| (t.start as usize, t.end as usize))
+                    .collect()
+            };
+            /// Inline, the removed tokens shown on line `n`.
+            fn at_line(
+                removed: &[model::RemovedTokens],
+                n: usize,
+                split: bool,
+            ) -> Vec<(usize, &str)> {
+                if split {
+                    return Vec::new();
                 }
-                _ => html,
+                removed
+                    .iter()
+                    .filter(|t| t.at.line as usize == n)
+                    .map(|t| (t.at.start as usize, t.text.as_str()))
+                    .collect()
             }
+            let changed = !g.only_reformatted();
+            let added = if changed && !rf_adds(n) {
+                on_line(&g.added)
+            } else {
+                Vec::new()
+            };
+            let removed = if changed {
+                at_line(&g.removed, n, split)
+            } else {
+                Vec::new()
+            };
+            let re_added = on_line(&g.requalified_added);
+            let re_removed = at_line(&g.requalified_removed, n, split);
+            if added.is_empty()
+                && removed.is_empty()
+                && re_added.is_empty()
+                && re_removed.is_empty()
+            {
+                return html;
+            }
+            crate::code::mark_spans(&html, &added, &removed, &re_added, &re_removed)
         };
         let old_code = |o: usize| {
             if let Some(html) = marked_old.get(&o) {
                 return html.clone();
             }
             let html = code_html(self, old[o], old_links(o));
-            match rf_old.get(&o) {
-                Some(g) if !g.only_reformatted() && !rf_removes(o) => {
-                    let removed: Vec<(usize, usize)> = g
-                        .removed
-                        .iter()
-                        .filter(|t| t.old.line as usize == o)
-                        .map(|t| (t.old.start as usize, t.old.end as usize))
-                        .collect();
-                    crate::code::mark_removed_spans(&html, &removed)
-                }
-                _ => html,
+            let Some(g) = rf_old.get(&o) else {
+                return html;
+            };
+            let on_line = |removed: &[model::RemovedTokens]| -> Vec<(usize, usize)> {
+                removed
+                    .iter()
+                    .filter(|t| t.old.line as usize == o)
+                    .map(|t| (t.old.start as usize, t.old.end as usize))
+                    .collect()
+            };
+            let removed = if !g.only_reformatted() && !rf_removes(o) {
+                on_line(&g.removed)
+            } else {
+                Vec::new()
+            };
+            let unqualified = on_line(&g.requalified_removed);
+            if removed.is_empty() && unqualified.is_empty() {
+                return html;
             }
+            crate::code::mark_removed_spans(&html, &removed, &unqualified)
         };
         let nonempty = |s: String| if s.is_empty() { " ".to_string() } else { s };
         // Lines inside `unsafe` code that changed get a stripe, and the
