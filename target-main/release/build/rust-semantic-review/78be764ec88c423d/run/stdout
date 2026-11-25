@@ -1,0 +1,5 @@
+cargo:rerun-if-changed=/tmp/claude-0/-home-user/ec2fe666-3f19-5933-88f8-331b5dbd07fe/scratchpad/main/crates/viewer
+cargo:rerun-if-changed=/tmp/claude-0/-home-user/ec2fe666-3f19-5933-88f8-331b5dbd07fe/scratchpad/main/crates/model
+cargo:rerun-if-changed=/tmp/claude-0/-home-user/ec2fe666-3f19-5933-88f8-331b5dbd07fe/scratchpad/main/Cargo.lock
+cargo:rerun-if-env-changed=RUST_SEMANTIC_REVIEW_STUB_VIEWER
+cargo:rerun-if-env-changed=RUST_PR_EXPLORER_STUB_VIEWER

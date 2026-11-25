@@ -316,6 +316,11 @@ a.ref:hover { text-decoration: underline; }
   background-image: radial-gradient(var(--border) 1px, transparent 1px);
   background-size: 22px 22px; }
 #viewport.panning { cursor: grabbing; }
+/* Code in a card: a press on its text selects, a press next to it (after
+   the end of a line, on the line numbers) moves the view. */
+#cards pre, #cards .sig, #cards .sbs { cursor: text; }
+#cards .pan-spot, #cards .pan-spot .ln, #cards .pan-spot .no { cursor: grab; }
+#viewport.panning .pan-spot, #viewport.panning .pan-spot * { cursor: grabbing; }
 #world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 #edges, #frames { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; pointer-events: none; }
 #canvas-empty { position: absolute; inset: 40px; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; pointer-events: none; }
