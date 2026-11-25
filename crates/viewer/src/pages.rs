@@ -456,7 +456,6 @@ pub fn render_overview(app: &App) {
         };
         unsafe_html + &crate::graphs::overview_html(d) + &public
     };
-    let meta = &d.out.meta;
     let html = format!(
         r#"<h1>{}</h1>
         {}
@@ -466,11 +465,7 @@ pub fn render_overview(app: &App) {
         {}
         {}
         {}"#,
-        esc(meta
-            .pr
-            .as_ref()
-            .and_then(|p| p.title.as_deref())
-            .unwrap_or(&meta.title)),
+        d.heading_html(),
         match d.compared_html() {
             c if c.is_empty() => c,
             c => format!(r#"<div class="sub pr-meta">{c}</div>"#),

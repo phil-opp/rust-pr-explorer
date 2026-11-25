@@ -277,6 +277,7 @@ a.ref:hover { text-decoration: underline; }
 /* Pages: overview and modules */
 .page h1 { font: 600 26px/1.2 var(--sans); margin: 0 0 4px; }
 .page h1 .title-name { font-size: 24px; }
+.page h1 .h1-pr { font-weight: 400; white-space: nowrap; }
 .page .sub { color: var(--muted); margin-bottom: 18px; }
 /* What the overview compares: the repository and PR, then a row each for
    the base and the PR's branch. A long branch name breaks anywhere, but
