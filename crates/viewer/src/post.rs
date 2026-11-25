@@ -1100,7 +1100,7 @@ pub fn fallback_html(comments: &[Comment]) -> String {
 fn quick_html(d: &Data, comments: &[Comment]) -> String {
     match &d.out.meta.pr {
         Some(pr) if comments.is_empty() => format!(
-            r#"<div class="rv-quick"><a class="rv-btn" href="https://github.com/{}/pull/{}" target="_blank" rel="noopener">Open the PR on GitHub</a><p class="sub">Without comments, approving or a short comment there is often quicker. Nothing is posted from here then, so your review marks aren't saved with a review, and the pages of later Rust Semantic Review comments can't load them.</p></div>"#,
+            r#"<div class="rv-quick"><a class="rv-btn" href="https://github.com/{}/pull/{}" target="_blank" rel="noopener">Open the PR on GitHub</a> <span class="dim">Nothing is posted.</span></div>"#,
             esc(&pr.repo),
             pr.number
         ),
