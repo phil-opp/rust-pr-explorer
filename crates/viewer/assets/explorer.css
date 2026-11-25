@@ -264,6 +264,10 @@ a.ref:hover { text-decoration: underline; }
 .docs code { background: var(--bg-code); padding: 0 3px; border-radius: 3px; font-size: 13px; }
 .docs ul { margin: 4px 0; padding-left: 20px; }
 .docs.empty { color: var(--muted); font-style: italic; font-size: 13px; }
+/* On wide windows, prose stops at a comfortable line length. Code blocks
+   are at least as wide as the prose, and wider where their lines need it. */
+.docs :is(p, li, dt, dd, blockquote, h1, h2, h3, h4, h5, h6), .md-h { max-width: 48rem; }
+.docs pre { width: fit-content; min-width: min(48rem, 100%); max-width: 100%; }
 .docs-old { margin-top: 4px; font-size: 13px; color: var(--muted); }
 .docs-old summary { cursor: pointer; }
 
