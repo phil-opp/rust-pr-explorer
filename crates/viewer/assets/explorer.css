@@ -376,6 +376,14 @@ a.ref:hover { text-decoration: underline; }
 .edge.call.c4 { stroke: var(--call-4); } .join.c4 { fill: var(--call-4); }
 /* Further call sites of one callee, up to where they join the connector. */
 .edge.call.branch { stroke-dasharray: 5 4; }
+/* A call through an item without a card: dashed from where the caller
+   calls that item (its name outlined), with a "via" label to open it. */
+.edge.call.via { stroke-dasharray: 9 3 2 3; }
+.ref.via-site[data-callc] { color: var(--callc-text); outline: 1px dashed var(--callc); outline-offset: 1px; border-radius: 2px; }
+.via-tag { pointer-events: auto; cursor: pointer; }
+.via-tag rect { fill: var(--bg); stroke: var(--callc); stroke-width: 1.2; }
+.via-tag text { fill: var(--callc-text); font: 11px var(--mono); text-anchor: middle; }
+.via-tag:hover rect { fill: color-mix(in srgb, var(--callc) 14%, var(--bg)); }
 .edge.use { stroke: var(--type); stroke-dasharray: 2 4; }
 .edge.member { stroke: var(--border); stroke-width: 1.2; }
 .edge.link { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 1 3; }

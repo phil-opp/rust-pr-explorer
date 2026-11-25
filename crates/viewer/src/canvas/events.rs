@@ -38,6 +38,14 @@ enum Lift {
 
 /// Handles a click inside the canvas. Returns whether it was consumed.
 pub fn on_click(app: &mut App, el: &Element) -> bool {
+    // The label of a call through an item without a card: opens that
+    // item's card next to the caller's.
+    if let Some(tag) = dom::closest(el, "[data-via]") {
+        let via = dom::data(&tag, "via").unwrap_or_default();
+        let from = dom::data(&tag, "from");
+        super::open(app, &via, from.as_deref(), false);
+        return true;
+    }
     let gid = dom::closest(el, ".card")
         .and_then(|c| dom::data(&c, "gid"))
         .and_then(|g| g.parse::<u32>().ok());
