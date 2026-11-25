@@ -133,6 +133,18 @@ try {
           await page.locator("#cards .card").first().waitFor({ state: "visible", timeout: 5_000 });
           await page.$$eval("#cards details.src:not([open])", (ds) => ds.forEach((d) => (d.open = true)));
           await check_contrast(page, scheme, `canvas card of ${id} with its body diff`);
+          // Cards are as wide as their code (up to a limit), so that it
+          // needs no sideways scrolling.
+          const cut = await page.$$eval("#cards .card", (cards) =>
+            cards.flatMap((c) =>
+              c.offsetWidth >= 1000
+                ? []
+                : [...c.querySelectorAll("pre, .sig, .sbs")]
+                    .filter((b) => b.scrollWidth > b.clientWidth)
+                    .map((b) => `${b.scrollWidth - b.clientWidth}px in a ${c.offsetWidth}px card`),
+            ),
+          );
+          if (cut.length > 0) fail(`[${scheme}] canvas card of ${id} cuts off code: ${cut.join(", ")}`);
         }
       } catch (e) {
         fail(`opening an item shows no card on the canvas: ${e.message.split("\n")[0]}`);
