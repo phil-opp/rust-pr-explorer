@@ -4,6 +4,7 @@ use super::open::Related;
 use super::{Canvas, Group};
 use crate::code::{Links, code_html, docs_html, esc};
 use crate::data::{Data, changed, kind_order};
+use crate::impact::CardImpact;
 use model::{Item, Kind, Status, UseCtx};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -114,12 +115,24 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
     users.sort();
     users.dedup();
 
+    let impact = crate::impact::card_impact(d, it);
     let mut acts = String::new();
     if it.info.kind == Kind::Mod {
         acts.push_str(r#"<button data-act="drill">Drill in</button><button data-act="page">Module page</button>"#);
     } else {
-        // Callers first: they open to the left of the card, callees to the
-        // right.
+        // What opens to the left of the card first, the furthest first:
+        // the chains from the public API, then the callers. Callees open to
+        // the right.
+        if let CardImpact::Chains { count, title } = &impact {
+            acts.push_str(&toggle_button(
+                c,
+                id,
+                Related::PublicApi,
+                "public-api",
+                title,
+                &format!(r#"◂ public API <span class="n">{count}</span>"#),
+            ));
+        }
         if !callers.is_empty() {
             acts.push_str(&toggle_button(
                 c,
@@ -308,7 +321,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
             )
         })
         .unwrap_or_default();
-    let impact = crate::unsafety::lines_html(&it.unsafe_code) + &crate::impact::line_html(d, it);
+    let unsafe_lines = crate::unsafety::lines_html(&it.unsafe_code);
     let context = match (context, folded) {
         (false, _) => "",
         (true, false) => "context",
@@ -319,7 +332,7 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
         {tabs}
         <div class="card-h"><span class="kind">{}</span>{} {}{}<span class="grow"></span>{}{}<span class="x" data-close="{}" title="Close">×</span></div>
         <div class="card-loc">{}</div>
-        <div class="card-b">{impl_header}{impact}{body}{}</div>{members}{}{}<div class="card-rs" title="Drag to resize. Double-click to fit the code again."></div></div>"#,
+        <div class="card-b">{impl_header}{unsafe_lines}{body}{}</div>{members}{}{}<div class="card-rs" title="Drag to resize. Double-click to fit the code again."></div></div>"#,
         it.status.css(),
         g.gid,
         g.x,
@@ -366,7 +379,11 @@ pub(super) fn card_html(d: &Data, c: &Canvas, g: &Group) -> String {
             } else {
                 String::new()
             } + &hidden_badge(d, scope, &callees, "callee")
-                + &hidden_badge(d, scope, &callers, "caller"));
+                + &hidden_badge(d, scope, &callers, "caller")
+                + match &impact {
+                    CardImpact::Unreached(badge) => badge,
+                    _ => "",
+                });
             if badges.is_empty() && acts.is_empty() {
                 String::new()
             } else {

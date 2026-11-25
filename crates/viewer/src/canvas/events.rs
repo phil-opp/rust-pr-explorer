@@ -63,6 +63,7 @@ pub fn on_click(app: &mut App, el: &Element) -> bool {
             Some("callees") => expand(app, &id, Related::Callees),
             Some("callers") => expand(app, &id, Related::Callers),
             Some("uses") => expand(app, &id, Related::UsedBy),
+            Some("public-api") => expand(app, &id, Related::PublicApi),
             Some("tabs") => members_as_tabs(app, &id),
             Some("expand") => {
                 app.s.canvas.groups[gi].expanded.insert(id);
