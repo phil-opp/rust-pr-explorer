@@ -226,6 +226,9 @@ pub(crate) enum Related {
     Callees,
     Callers,
     UsedBy,
+    /// The chains of callers and users from the public API down to the
+    /// item (see [`crate::impact`]).
+    PublicApi,
 }
 
 /// Opens callees, callers or users of an item next to its card.
@@ -239,6 +242,10 @@ pub(crate) fn expand(app: &mut App, id: &str, kind: Related) {
         toast(&format!("Closed {n} {}", kind.noun(n)));
         return;
     }
+    if kind == Related::PublicApi {
+        open_chains(app, id);
+        return;
+    }
     let mut targets: Vec<String> = match kind {
         Related::Callees => it.info.calls.iter().map(|c| c.to.clone()).collect(),
         Related::Callers => d.callers.get(id).map_or(Vec::new(), |v| v.to_vec()),
@@ -246,6 +253,7 @@ pub(crate) fn expand(app: &mut App, id: &str, kind: Related) {
             .used_by
             .get(id)
             .map_or(Vec::new(), |v| v.iter().map(|(f, _)| f.clone()).collect()),
+        Related::PublicApi => Vec::new(),
     };
     targets.sort();
     targets.dedup();
@@ -351,8 +359,140 @@ impl Related {
             (Related::Callers, _) => "callers",
             (Related::UsedBy, 1) => "item that uses it",
             (Related::UsedBy, _) => "items that use it",
+            (Related::PublicApi, 1) => "card on the way from the public API",
+            (Related::PublicApi, _) => "cards on the way from the public API",
         }
     }
+}
+
+/// Opens the chains from the public API down to `id` left of its card,
+/// like "◂ callers" clicked again and again: each item a column further
+/// left the more calls it is away, with connectors along the chains. Cards
+/// already open are connected, not moved. If the chains go through items
+/// that the canvas's scope can't see, the canvas is viewed from a module
+/// that sees them.
+fn open_chains(app: &mut App, id: &str) {
+    let d = app.d.clone();
+    let paths = crate::impact::impact(&d, id).paths;
+    // Each item's distance from `id`. The chains come from one search, so
+    // an item shared by several has the same distance in each.
+    let mut dist: Vec<(String, usize)> = Vec::new();
+    let mut links: Vec<(String, String)> = Vec::new();
+    for path in &paths {
+        let n = path.len();
+        for (i, p) in path.iter().enumerate().take(n - 1) {
+            if !dist.iter().any(|(q, _)| q == p) {
+                dist.push((p.clone(), n - 1 - i));
+            }
+            let l = (p.clone(), path[i + 1].clone());
+            if !links.contains(&l) {
+                links.push(l);
+            }
+        }
+    }
+    if dist.is_empty() {
+        return;
+    }
+    let c = &mut app.s.canvas;
+    let all_visible = |scope: &str, c: &super::Canvas| {
+        dist.iter().all(|(t, _)| d.visible_from(t, scope))
+            && d.visible_from(id, scope)
+            && c.groups
+                .iter()
+                .all(|g| !d.visible_from(&g.active, &c.scope) || d.visible_from(&g.active, scope))
+    };
+    let mut scope_note = String::new();
+    if !all_visible(&c.scope, c) {
+        // The modules of the items, innermost first: one of them sees the
+        // chains and, if possible, the cards that are visible now.
+        let mut scopes: Vec<String> = std::iter::once(id)
+            .chain(dist.iter().map(|(t, _)| t.as_str()))
+            .filter_map(|t| d.item(t))
+            .map(|it| d.mod_of(it).to_string())
+            .collect();
+        scopes.dedup();
+        let new_ids_visible =
+            |s: &str| dist.iter().all(|(t, _)| d.visible_from(t, s)) && d.visible_from(id, s);
+        if let Some(s) = scopes
+            .iter()
+            .find(|s| all_visible(s, c))
+            .or_else(|| scopes.iter().find(|s| new_ids_visible(s)))
+        {
+            scope_note = format!(" · Now viewing from {}, which sees them", d.mod_label(s));
+            c.scope = s.clone();
+        }
+    }
+    let Some(fi) = c.group_of(id) else { return };
+    let (fx, fy) = (c.groups[fi].x, c.groups[fi].y);
+    let mut record = Expansion {
+        item: id.to_string(),
+        kind: Related::PublicApi,
+        cards: Vec::new(),
+        links: Vec::new(),
+    };
+    // The next free height in each column.
+    let mut next_y: Vec<f64> = Vec::new();
+    for (t, k) in &dist {
+        let c = &mut app.s.canvas;
+        if c.group_of(t).is_some() {
+            continue;
+        }
+        if next_y.len() < *k {
+            next_y.resize(*k, fy);
+        }
+        let gi = c.add_group(t, fx - *k as f64 * (CARD_W + 90.0), next_y[k - 1]);
+        place(&d, c, gi);
+        let gid = c.groups[gi].gid;
+        record.cards.push((gid, t.clone()));
+        // Render now, so the next card is placed using this card's real height.
+        render(app);
+        let c = &app.s.canvas;
+        if let Some(gi) = c.by_gid(gid) {
+            next_y[k - 1] = c.groups[gi].y + height_of(&d, &c.groups[gi]) + 30.0;
+        }
+    }
+    let c = &mut app.s.canvas;
+    let opened: Vec<&str> = record.cards.iter().map(|(_, t)| t.as_str()).collect();
+    for (from, to) in &links {
+        let new = opened.contains(&from.as_str()) || opened.contains(&to.as_str());
+        if c.add_link(from, to) && !new {
+            record.links.push((from.clone(), to.clone()));
+        }
+    }
+    let n = record.cards.len();
+    if n > 0 || !record.links.is_empty() {
+        c.expansions.push(record);
+    }
+    render(app);
+    let tops = paths.len();
+    let from = format!(
+        "{tops} public item{} reach{} it",
+        if tops > 1 { "s" } else { "" },
+        if tops > 1 { "" } else { "es" }
+    );
+    let what = if n > 0 {
+        format!(
+            "{from}: opened {n} {} (click again or press Undo to close them)",
+            Related::PublicApi.noun(n)
+        )
+    } else {
+        format!("{from}, all already open")
+    };
+    let c = &app.s.canvas;
+    let hidden = dist
+        .iter()
+        .filter(|(t, _)| !d.visible_from(t, &c.scope))
+        .count();
+    let hidden_note = if hidden > 0 {
+        // Private items of sibling modules: no module sees all of them.
+        format!(
+            " · {hidden} {} private to other modules and hidden at this scope",
+            if hidden > 1 { "are" } else { "is" }
+        )
+    } else {
+        String::new()
+    };
+    toast(&(what + &scope_note + &hidden_note));
 }
 
 /// Opens all members of a type in one tabbed card.

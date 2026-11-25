@@ -1,6 +1,6 @@
 //! Undo for the canvas: every click, key press or drag that changes which
-//! cards are open, their tabs, their places, the connectors or the scope
-//! can be taken back, with the Undo button or Ctrl+Z.
+//! cards are open, their tabs, their places, the connectors, the scope or
+//! the module frames can be taken back, with the Undo button or Ctrl+Z.
 
 use super::{Canvas, Expansion, Group, render};
 use crate::{App, dom, toast};
@@ -13,6 +13,9 @@ pub struct Snapshot {
     groups: Vec<Group>,
     links: Vec<(String, String)>,
     scope: String,
+    /// Whether module frames were drawn: laying the cards out by module
+    /// turns them on, and undoing that turns them off again.
+    frames: bool,
     /// What the "calls", "callers" and "used by" buttons had opened, so
     /// that they show as pressed again after an undo.
     expansions: Vec<Expansion>,
@@ -24,16 +27,18 @@ impl Snapshot {
             groups: c.groups.clone(),
             links: c.links.clone(),
             scope: c.scope.clone(),
+            frames: c.frames,
             expansions: c.expansions.clone(),
         }
     }
 
     /// Whether `c` shows the same layout: the same cards with the same
-    /// tabs in the same places, connectors and scope. What a card shows
+    /// tabs in the same places, connectors, scope and frames. What a card shows
     /// inside (an open source view, unfolded lines) doesn't count.
     fn same_layout(&self, c: &Canvas) -> bool {
         self.links == c.links
             && self.scope == c.scope
+            && self.frames == c.frames
             && self.groups.len() == c.groups.len()
             && self.groups.iter().zip(&c.groups).all(|(a, b)| {
                 a.gid == b.gid
@@ -79,6 +84,7 @@ pub fn undo(app: &mut App) {
     c.groups = s.groups;
     c.links = s.links;
     c.scope = s.scope;
+    c.frames = s.frames;
     c.expansions = s.expansions;
     render(app);
     toast("Undone");

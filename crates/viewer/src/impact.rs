@@ -83,50 +83,13 @@ fn chain_text(d: &Data, path: &[String]) -> String {
 }
 
 /// A link to an item that opens it on the canvas.
-fn link(d: &Data, id: &str, title: &str) -> String {
+fn link(d: &Data, id: &str) -> String {
     let kind = d.item(id).map_or("fn", |it| it.info.kind.css());
     format!(
-        r#"<a class="ref" data-id="{}" data-kind="{kind}" title="{}"><code>{}</code></a>"#,
+        r#"<a class="ref" data-id="{}" data-kind="{kind}"><code>{}</code></a>"#,
         esc(id),
-        esc(title),
         esc(&d.display_name_of(id))
     )
-}
-
-/// The public items that reach `id`, as links: "`evaluate` via `apply`,
-/// `calc`". Hovering one shows its whole chain.
-fn reached_html(d: &Data, imp: &Impact) -> String {
-    let mut parts: Vec<String> = imp
-        .paths
-        .iter()
-        .take(SHOWN)
-        .map(|path| {
-            let title = chain_text(d, path);
-            let mut s = link(d, &path[0], &title);
-            // The items in between, without the changed item itself.
-            let between = &path[1..path.len() - 1];
-            if let Some(first) = between.first() {
-                s.push_str(&format!(
-                    r#" <span class="dim">via</span> {}"#,
-                    link(d, first, &title)
-                ));
-                if between.len() > 1 {
-                    s.push_str(&format!(
-                        r#" <span class="dim">and {} more</span>"#,
-                        between.len() - 1
-                    ));
-                }
-            }
-            s
-        })
-        .collect();
-    if imp.paths.len() > SHOWN {
-        parts.push(format!(
-            r#"<span class="dim">{} more</span>"#,
-            imp.paths.len() - SHOWN
-        ));
-    }
-    parts.join(", ")
 }
 
 /// Why nothing public may reach an item although the call graph has no
@@ -148,9 +111,15 @@ fn no_path_note(d: &Data, it: &Item) -> &'static str {
     }
 }
 
-/// The impact of a changed internal item, as one line for its row or card.
-/// Empty for items it doesn't apply to.
+/// The impact of a changed internal item on its module page row: the
+/// public items that reach it, expandable to every whole chain, and a
+/// button that opens the chains on the canvas. Empty for items it doesn't
+/// apply to.
 pub fn line_html(d: &Data, it: &Item) -> String {
+    page_line(d, it, crate::narrow())
+}
+
+fn page_line(d: &Data, it: &Item, narrow: bool) -> String {
     if !applies(d, it) {
         return String::new();
     }
@@ -158,26 +127,93 @@ pub fn line_html(d: &Data, it: &Item) -> String {
     if imp.paths.is_empty() {
         return format!(r#"<div class="impact none">{}</div>"#, no_path_note(d, it));
     }
+    // Names only: a link in the summary would also open and close it.
+    let mut names: Vec<String> = imp
+        .paths
+        .iter()
+        .take(SHOWN)
+        .map(|p| format!("<code>{}</code>", esc(&d.display_name_of(&p[0]))))
+        .collect();
+    if imp.paths.len() > SHOWN {
+        names.push(format!(
+            r#"<span class="dim">and {} more</span>"#,
+            imp.paths.len() - SHOWN
+        ));
+    }
+    let chains: String = imp
+        .paths
+        .iter()
+        .map(|p| {
+            let links: Vec<String> = p.iter().map(|id| link(d, id)).collect();
+            format!(
+                r#"<li>{}</li>"#,
+                links.join(r#" <span class="dim">→</span> "#)
+            )
+        })
+        .collect();
+    let (title, label) = impact_button(narrow);
     format!(
-        r#"<div class="impact"><span class="impact-h">Affects public API:</span> {} <button data-impact="{}" title="{}">{}</button></div>"#,
-        reached_html(d, &imp),
+        r#"<details class="impact"><summary><span class="impact-h">Reached from the public API:</span> {}</summary><ul class="impact-chains">{chains}</ul><button data-impact="{}" title="{title}">{label}</button></details>"#,
+        names.join(", "),
         esc(&it.info.id),
-        impact_button().0,
-        impact_button().1,
     )
 }
 
-/// The tooltip and label of the button that shows how the public API
-/// reaches an item: every chain on the canvas, or on a phone the item in
-/// the call view (see `crate::open_item`).
-fn impact_button() -> (&'static str, &'static str) {
-    if crate::narrow() {
+/// The tooltip and label of the module page's button that shows how the
+/// public API reaches an item: every chain on the canvas, or on a phone
+/// the item in the call view (see `crate::open_item`).
+fn impact_button(narrow: bool) -> (&'static str, &'static str) {
+    if narrow {
         (
             "Show the item with its callers, which lead up to the public API",
             "Show callers ▸",
         )
     } else {
-        ("Open every chain on the canvas", "Show on canvas ▸")
+        (
+            "Open these chains on the canvas, in place of the cards open there",
+            "Open chains on canvas ▸",
+        )
+    }
+}
+
+/// What a canvas card shows of an item's impact, in its footer: the
+/// tooltip and count for a button that opens the chains from the public
+/// API next to the card, or else a badge saying that none reaches it.
+pub enum CardImpact {
+    None,
+    Chains { count: usize, title: String },
+    Unreached(String),
+}
+
+pub fn card_impact(d: &Data, it: &Item) -> CardImpact {
+    if !applies(d, it) {
+        return CardImpact::None;
+    }
+    let imp = impact(d, &it.info.id);
+    if imp.paths.is_empty() {
+        return CardImpact::Unreached(format!(
+            r#"<span class="card-badge" title="{}">not reached from the public API</span>"#,
+            esc(no_path_note(d, it))
+        ));
+    }
+    let n = imp.paths.len();
+    let mut lines: Vec<String> = imp
+        .paths
+        .iter()
+        .take(SHOWN)
+        .map(|p| chain_text(d, p))
+        .collect();
+    if n > SHOWN {
+        lines.push(format!("and {} more", n - SHOWN));
+    }
+    CardImpact::Chains {
+        count: n,
+        title: format!(
+            "Open the calls from {} public item{} down to this one:\n{}",
+            n,
+            if n > 1 { "s" } else { "" },
+            lines.join("\n")
+        ),
     }
 }
 
@@ -252,7 +288,7 @@ mod tests {
             item("c::helper", false, Changed, &[]),
         ]);
         assert!(impact(&d, "c::helper").paths.is_empty());
-        let html = line_html(&d, d.item("c::helper").unwrap());
+        let html = page_line(&d, d.item("c::helper").unwrap(), false);
         assert!(html.contains("No public item"), "{html}");
     }
 
@@ -268,5 +304,28 @@ mod tests {
             impact(&d, "c::a").paths,
             vec![vec!["c::api", "c::b", "c::a"]]
         );
+    }
+
+    #[test]
+    fn page_line_lists_whole_chains() {
+        use Status::*;
+        let d = data(vec![
+            item("c::evaluate", true, Unchanged, &["c::apply"]),
+            item("c::calc", true, Unchanged, &["c::step"]),
+            item("c::step", false, Unchanged, &["c::apply"]),
+            item("c::apply", false, Changed, &[]),
+        ]);
+        let html = page_line(&d, d.item("c::apply").unwrap(), false);
+        assert!(html.starts_with("<details"), "{html}");
+        // Every item of the longer chain is listed, not counted.
+        for name in ["calc", "step", "apply"] {
+            assert!(html.contains(&format!("<code>{name}</code></a>")), "{html}");
+        }
+        let CardImpact::Chains { count, title } = card_impact(&d, d.item("c::apply").unwrap())
+        else {
+            panic!("expected chains");
+        };
+        assert_eq!(count, 2);
+        assert!(title.contains("calc → step → apply"), "{title}");
     }
 }
