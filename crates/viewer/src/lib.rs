@@ -17,6 +17,7 @@ mod files;
 mod graphs;
 mod icons;
 mod impact;
+mod indirect;
 mod js;
 mod keys;
 mod line_notes;

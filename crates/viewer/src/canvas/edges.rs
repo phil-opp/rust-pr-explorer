@@ -3,6 +3,7 @@
 use super::{Canvas, Group, card_el, visible};
 use crate::code::esc;
 use crate::data::{Data, within};
+use crate::indirect;
 use crate::{App, dom, route};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -25,7 +26,27 @@ pub(super) fn card_rect(g: &Group) -> Option<Rect> {
     })
 }
 
-fn edge_path(a: Rect, b: Rect) -> String {
+/// A cubic Bézier curve: start, two control points, end.
+type Cubic = [(f64, f64); 4];
+
+fn cubic_d(c: Cubic) -> String {
+    let [p1, c1, c2, p2] = c;
+    format!(
+        "M{},{} C{},{} {},{} {},{}",
+        p1.0, p1.1, c1.0, c1.1, c2.0, c2.1, p2.0, p2.1
+    )
+}
+
+/// The point halfway along a curve.
+fn cubic_mid(c: Cubic) -> (f64, f64) {
+    let [p1, c1, c2, p2] = c;
+    (
+        (p1.0 + 3.0 * c1.0 + 3.0 * c2.0 + p2.0) / 8.0,
+        (p1.1 + 3.0 * c1.1 + 3.0 * c2.1 + p2.1) / 8.0,
+    )
+}
+
+fn edge_curve(a: Rect, b: Rect) -> Cubic {
     let (acx, acy) = (a.x + a.w / 2.0, a.y + a.h / 2.0);
     let (bcx, bcy) = (b.x + b.w / 2.0, b.y + b.h / 2.0);
     if (bcx - acx).abs() > (a.w + b.w) / 2.0 - 40.0 {
@@ -39,39 +60,19 @@ fn edge_path(a: Rect, b: Rect) -> String {
             (b.y + 40.0).min(bcy),
         );
         let dx = ((p2.0 - p1.0).abs() / 2.0).max(40.0);
-        format!(
-            "M{},{} C{},{} {},{} {},{}",
-            p1.0,
-            p1.1,
-            p1.0 + dir * dx,
-            p1.1,
-            p2.0 - dir * dx,
-            p2.1,
-            p2.0,
-            p2.1
-        )
+        [p1, (p1.0 + dir * dx, p1.1), (p2.0 - dir * dx, p2.1), p2]
     } else {
         let dir = if bcy > acy { 1.0 } else { -1.0 };
         let p1 = (acx, if dir > 0.0 { a.y + a.h } else { a.y });
         let p2 = (bcx, if dir > 0.0 { b.y } else { b.y + b.h });
         let dy = ((p2.1 - p1.1).abs() / 2.0).max(30.0);
-        format!(
-            "M{},{} C{},{} {},{} {},{}",
-            p1.0,
-            p1.1,
-            p1.0,
-            p1.1 + dir * dy,
-            p2.0,
-            p2.1 - dir * dy,
-            p2.0,
-            p2.1
-        )
+        [p1, (p1.0, p1.1 + dir * dy), (p2.0, p2.1 - dir * dy), p2]
     }
 }
 
 /// A connector from a call site at height `y` in card `a` to card `b`: it
 /// leaves `a` at the side facing `b`, level with the call.
-fn site_path(a: Rect, y: f64, b: Rect) -> String {
+fn site_curve(a: Rect, y: f64, b: Rect) -> Cubic {
     let dir = if b.x + b.w / 2.0 >= a.x + a.w / 2.0 {
         1.0
     } else {
@@ -91,17 +92,7 @@ fn site_path(a: Rect, y: f64, b: Rect) -> String {
         (p2, (p2.0, p2.1 - ((p2.1 - y).abs() / 2.0).max(40.0)))
     };
     let dx = ((p2.0 - p1.0).abs() / 2.0).max(40.0);
-    format!(
-        "M{},{} C{},{} {},{} {},{}",
-        p1.0,
-        p1.1,
-        p1.0 + dir * dx,
-        p1.1,
-        c2.0,
-        c2.1,
-        p2.0,
-        p2.1
-    )
+    [p1, (p1.0 + dir * dx, p1.1), c2, p2]
 }
 
 /// The heights, in canvas coordinates, of the call sites of `to` in the
@@ -187,6 +178,9 @@ struct Conn {
     /// one on the way to `b`.
     more_sites: Vec<f64>,
     route: Route,
+    /// For a call through items without a card: those items, whose call
+    /// sites in `a` the connector starts at.
+    via: Vec<String>,
 }
 
 fn choose_route(a: Rect, b: Rect, site_y: Option<f64>) -> Route {
@@ -463,6 +457,9 @@ struct Paths {
     joins: Vec<(f64, f64)>,
     /// The corners of `main` and of each branch, for orthogonal connectors.
     lines: Vec<Vec<(f64, f64)>>,
+    /// Where a label of the connector goes: halfway along the longest
+    /// straight run of `main`, or halfway along a curve.
+    label: (f64, f64),
 }
 
 /// Where a connector through a gap meets the cards on either side, along
@@ -554,6 +551,13 @@ fn conn_path(c: &Conn, ends: Ends, lane: f64) -> Paths {
                 Side::Top | Side::Bottom => vec![p, (p.0, lane), (q.0, lane), q],
             };
             out.main = route::path_d(&points);
+            out.label = points
+                .windows(2)
+                .max_by(|x, y| {
+                    let len = |w: &[(f64, f64)]| (w[1].0 - w[0].0).abs() + (w[1].1 - w[0].1).abs();
+                    len(x).total_cmp(&len(y))
+                })
+                .map_or(p, |w| ((w[0].0 + w[1].0) / 2.0, (w[0].1 + w[1].1) / 2.0));
             out.lines.push(points);
             // Further call sites run into the main connector's lane and
             // join it where its run along the lane is straight (its bends
@@ -578,13 +582,19 @@ fn conn_path(c: &Conn, ends: Ends, lane: f64) -> Paths {
             }
         }
         Route::Site(y) => {
-            out.main = site_path(c.a.1, y, c.b.1);
+            let curve = site_curve(c.a.1, y, c.b.1);
+            out.main = cubic_d(curve);
+            out.label = cubic_mid(curve);
             for &y in &c.more_sites {
-                out.branches.push_str(&site_path(c.a.1, y, c.b.1));
+                out.branches.push_str(&cubic_d(site_curve(c.a.1, y, c.b.1)));
                 out.branches.push(' ');
             }
         }
-        Route::Curve => out.main = edge_path(c.a.1, c.b.1),
+        Route::Curve => {
+            let curve = edge_curve(c.a.1, c.b.1);
+            out.main = cubic_d(curve);
+            out.label = cubic_mid(curve);
+        }
     }
     out
 }
@@ -717,6 +727,53 @@ fn call_colors(conns: &[Conn], ends: &[Ends], lanes: &[f64]) -> Vec<usize> {
         .collect()
 }
 
+/// Calls from one card to another through items that have no card, such
+/// as a test that calls a changed function through an unchanged helper:
+/// (caller, callee, the paths of items in between, see
+/// [`indirect::reach`]). Only where the canvas shows no path of calls
+/// between the two cards otherwise.
+type CallsVia<'a> = Vec<(&'a Group, &'a Group, Vec<Vec<String>>)>;
+
+fn calls_via<'a>(d: &Data, vis: &[&'a Group]) -> CallsVia<'a> {
+    let mut on: HashMap<&str, usize> = HashMap::new();
+    for (i, g) in vis.iter().enumerate() {
+        on.entry(g.active.as_str()).or_insert(i);
+    }
+    let calls = |id: &str| -> Vec<String> {
+        d.item(id)
+            .map(|it| it.info.calls.iter().map(|c| c.to.clone()).collect())
+            .unwrap_or_default()
+    };
+    let direct: Vec<Vec<usize>> = vis
+        .iter()
+        .map(|g| {
+            calls(&g.active)
+                .iter()
+                .filter_map(|to| on.get(to.as_str()).copied())
+                .collect()
+        })
+        .collect();
+    let mut out = Vec::new();
+    for (i, ga) in vis.iter().enumerate() {
+        let mut reached: BTreeSet<usize> = BTreeSet::from([i]);
+        let mut stack = vec![i];
+        while let Some(x) = stack.pop() {
+            for &y in &direct[x] {
+                if reached.insert(y) {
+                    stack.push(y);
+                }
+            }
+        }
+        for r in indirect::reach(&ga.active, calls, |x| on.contains_key(x)) {
+            let j = on[r.to.as_str()];
+            if !reached.contains(&j) {
+                out.push((*ga, vis[j], r.paths));
+            }
+        }
+    }
+    out
+}
+
 /// Draws call, use, member and link connectors between visible cards.
 pub fn draw_edges(app: &App) {
     let d = &app.d;
@@ -729,7 +786,7 @@ pub fn draw_edges(app: &App) {
     let mut seen: BTreeSet<(u32, u32)> = BTreeSet::new();
     let mut conns: Vec<Conn> = Vec::new();
     let k = c.pan.k;
-    let mut add = |ga: &Group, gb: &Group, class: &str, title: String| {
+    let mut add = |ga: &Group, gb: &Group, class: &str, title: String, via: Vec<String>| {
         let base = class.split(' ').next().unwrap_or("");
         let reverse_seen = base == "link" && seen.contains(&(gb.gid, ga.gid));
         if ga.gid == gb.gid || seen.contains(&(ga.gid, gb.gid)) || reverse_seen {
@@ -740,7 +797,13 @@ pub fn draw_edges(app: &App) {
         };
         seen.insert((ga.gid, gb.gid));
         let mut sites = match base {
-            "call" => call_site_ys(ga, &gb.active, k),
+            "call" if via.is_empty() => call_site_ys(ga, &gb.active, k),
+            "call" => {
+                let mut ys: Vec<f64> = via.iter().flat_map(|v| call_site_ys(ga, v, k)).collect();
+                ys.sort_by(f64::total_cmp);
+                ys.dedup_by(|a, b| (*a - *b).abs() < 1.0);
+                ys
+            }
             _ => Vec::new(),
         };
         let site_y = (!sites.is_empty()).then(|| sites.remove(0));
@@ -752,6 +815,7 @@ pub fn draw_edges(app: &App) {
             site_y,
             more_sites: sites,
             route: choose_route(a, b, site_y),
+            via,
         });
     };
     for ga in &vis {
@@ -759,21 +823,46 @@ pub fn draw_edges(app: &App) {
             continue;
         };
         for gb in &vis {
-            if let Some(call) = a.info.calls.iter().find(|c| c.to == gb.active) {
-                let _ = call;
-                let class = "call";
+            if a.info.calls.iter().any(|c| c.to == gb.active) {
                 add(
                     ga,
                     gb,
-                    class,
+                    "call",
                     format!(
                         "{} calls {}",
                         d.display_name(a),
                         d.display_name_of(&gb.active)
                     ),
+                    Vec::new(),
                 );
             }
         }
+    }
+    let mut via_labels: HashMap<(u32, u32), String> = HashMap::new();
+    for (ga, gb, paths) in calls_via(d, &vis) {
+        let names =
+            |p: &[String]| -> Vec<String> { p.iter().map(|v| d.display_name_of(v)).collect() };
+        let all: Vec<String> = paths
+            .iter()
+            .map(|p| indirect::path_label(&names(p)))
+            .collect();
+        let mut label = format!("via {}", all[0]);
+        if all.len() > 1 {
+            label.push_str(&format!(" +{}", all.len() - 1));
+        }
+        via_labels.insert((ga.gid, gb.gid), label);
+        add(
+            ga,
+            gb,
+            "call via",
+            format!(
+                "{} calls {} via {}, without a card",
+                d.display_name_of(&ga.active),
+                d.display_name_of(&gb.active),
+                all.join(" or via ")
+            ),
+            paths.into_iter().map(|p| p[0].clone()).collect(),
+        );
     }
     for ga in &vis {
         let Some(a) = d.item(&ga.active) else {
@@ -791,6 +880,7 @@ pub fn draw_edges(app: &App) {
                         d.display_name_of(&gb.active),
                         u.ctx
                     ),
+                    Vec::new(),
                 );
             }
         }
@@ -808,6 +898,7 @@ pub fn draw_edges(app: &App) {
                         d.display_name_of(&gb.active),
                         d.display_name_of(&ga.active)
                     ),
+                    Vec::new(),
                 );
             }
         }
@@ -818,7 +909,7 @@ pub fn draw_edges(app: &App) {
         };
         let (ga, gb) = (&c.groups[ia], &c.groups[ib]);
         if visible(d, c, ga) && visible(d, c, gb) {
-            add(ga, gb, "link", "opened from here".into());
+            add(ga, gb, "link", "opened from here".into(), Vec::new());
         }
     }
     let ends = ports(&conns);
@@ -877,6 +968,19 @@ pub fn draw_edges(app: &App) {
             ));
         }
     }
+    // Labels of calls through items without a card, over the connectors.
+    for (i, c) in conns.iter().enumerate() {
+        if let (Some(first), Some(text)) = (c.via.first(), via_labels.get(&(c.a.0, c.b.0))) {
+            out.push_str(&via_label(
+                text,
+                paths[i].label,
+                colors[i],
+                &c.title,
+                first,
+                ids[&c.a.0],
+            ));
+        }
+    }
     let call_markers: String = (0..CALL_COLORS)
         .map(|k| {
             format!(
@@ -895,11 +999,43 @@ pub fn draw_edges(app: &App) {
     draw_frames(app, &rects);
 }
 
+/// Approximate width of a character of the labels' font, in pixels.
+const LABEL_CHAR: f64 = 6.6;
+
+/// The label ("via `a` → `b`") of a call through items without a card,
+/// centered at `at`. A click opens the first item's card (`via`) next to
+/// the caller's.
+fn via_label(
+    text: &str,
+    at: (f64, f64),
+    color: usize,
+    title: &str,
+    via: &str,
+    from: &str,
+) -> String {
+    let w = text.chars().count() as f64 * LABEL_CHAR + 12.0;
+    let h = 18.0;
+    format!(
+        r#"<g class="via-tag" data-callc="{color}" data-via="{}" data-from="{}"><title>{}. Click to open its card.</title><rect x="{:.1}" y="{:.1}" width="{w:.1}" height="{h}" rx="9"/><text x="{:.1}" y="{:.1}">{}</text></g>"#,
+        esc(via),
+        esc(from),
+        esc(title),
+        at.0 - w / 2.0,
+        at.1 - h / 2.0,
+        at.0,
+        at.1 + 4.0,
+        esc(text)
+    )
+}
+
 /// Gives each callee card, and the names that call it in the source of
-/// its callers' cards, the color of the connectors that reach it.
+/// its callers' cards, the color of the connectors that reach it. For a
+/// call through an item without a card, the names of that item are marked
+/// as where the connector starts.
 fn mark_callees(conns: &[Conn], colors: &[usize], ids: &HashMap<u32, &str>) {
     for el in dom::query_all("#cards [data-callc]") {
         let _ = el.remove_attribute("data-callc");
+        dom::toggle_class(&el, "via-site", false);
     }
     for (c, &color) in conns.iter().zip(colors) {
         if c.class.split(' ').next() != Some("call") {
@@ -914,8 +1050,12 @@ fn mark_callees(conns: &[Conn], colors: &[usize], ids: &HashMap<u32, &str>) {
             continue;
         };
         for a in dom::query_all_in(&caller, "a.ref[data-id]") {
-            if dom::data(&a, "id").as_deref() == Some(id) {
+            let to = dom::data(&a, "id").unwrap_or_default();
+            if c.via.is_empty() && to == id {
                 let _ = a.set_attribute("data-callc", &color);
+            } else if c.via.contains(&to) && !a.has_attribute("data-callc") {
+                let _ = a.set_attribute("data-callc", &color);
+                dom::toggle_class(&a, "via-site", true);
             }
         }
     }
@@ -1095,6 +1235,7 @@ mod tests {
             site_y: None,
             more_sites: Vec::new(),
             route: choose_route(a.1, b.1, None),
+            via: Vec::new(),
         }
     }
 
@@ -1288,6 +1429,116 @@ mod tests {
         ]];
         let over = over_longer(&[long.as_slice(), short.as_slice()]);
         assert_eq!(over, vec![false, true]);
+    }
+
+    fn data(calls: &[(&str, &[&str])]) -> Data {
+        use model::{Call, Item, ItemInfo, Kind, Meta, Output};
+        let items = calls
+            .iter()
+            .map(|(id, calls)| {
+                let info = ItemInfo {
+                    id: id.to_string(),
+                    kind: Kind::Fn,
+                    name: id.to_string(),
+                    module: "c".into(),
+                    calls: calls.iter().map(|t| Call { to: t.to_string() }).collect(),
+                    ..Default::default()
+                };
+                (
+                    id.to_string(),
+                    Item {
+                        info,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        Data::new(Output {
+            meta: Meta::default(),
+            crates: vec!["c".into()],
+            items,
+            externals: Default::default(),
+            files: Vec::new(),
+            warnings: Vec::new(),
+            semver_checks: None,
+        })
+    }
+
+    fn group(gid: u32, id: &str) -> Group {
+        Group {
+            gid,
+            tabs: vec![id.into()],
+            active: id.into(),
+            x: 0.0,
+            y: 0.0,
+            open_src: Default::default(),
+            unfolded: Default::default(),
+            expanded: Default::default(),
+            w: None,
+        }
+    }
+
+    /// A test that calls a changed function through unchanged helpers
+    /// without a card is connected to it, via the helpers: through one or
+    /// two, not three. Once the helper has a card, or the canvas shows
+    /// another path, it is not.
+    #[test]
+    fn calls_through_items_without_a_card() {
+        let d = data(&[
+            ("test", &["helper", "other", "deep", "deeper2"]),
+            ("helper", &["changed", "test"]),
+            ("other", &["changed"]),
+            ("changed", &[]),
+            ("deep", &["deeper"]),
+            ("deeper", &["far"]),
+            ("far", &[]),
+            ("deeper2", &["d3"]),
+            ("d3", &["d4"]),
+            ("d4", &["farther"]),
+            ("farther", &[]),
+        ]);
+        let pairs = |gs: &[Group]| -> Vec<(String, String, Vec<Vec<String>>)> {
+            let vis: Vec<&Group> = gs.iter().collect();
+            calls_via(&d, &vis)
+                .into_iter()
+                .map(|(a, b, v)| (a.active.clone(), b.active.clone(), v))
+                .collect()
+        };
+        let v = |p: &[&str]| p.iter().map(|x| x.to_string()).collect::<Vec<_>>();
+        let gs = [
+            group(1, "test"),
+            group(2, "changed"),
+            group(3, "far"),
+            group(4, "farther"),
+        ];
+        assert_eq!(
+            pairs(&gs),
+            vec![
+                (
+                    "test".to_string(),
+                    "changed".to_string(),
+                    vec![v(&["helper"]), v(&["other"])]
+                ),
+                (
+                    "test".to_string(),
+                    "far".to_string(),
+                    vec![v(&["deep", "deeper"])]
+                ),
+            ]
+        );
+        // The helper has a card: its own connectors show the path.
+        let with_helper = [group(1, "test"), group(2, "changed"), group(3, "helper")];
+        assert!(pairs(&with_helper).is_empty());
+        // A path through cards on the canvas: no second one.
+        let d2 = data(&[
+            ("test", &["helper", "mid"]),
+            ("helper", &["changed"]),
+            ("mid", &["changed"]),
+            ("changed", &[]),
+        ]);
+        let gs = [group(1, "test"), group(2, "mid"), group(3, "changed")];
+        let vis: Vec<&Group> = gs.iter().collect();
+        assert!(calls_via(&d2, &vis).is_empty());
     }
 
     /// Calls into two callees whose connectors run through one gap get

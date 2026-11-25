@@ -46,6 +46,7 @@ crates/viewer            the page's front end (wasm, web-sys, pulldown-cmark)
   src/canvas/            canvas of cards: cards, edges, layout, events
   src/map.rs, route.rs   structure view (module map, matrix) and arrow routing
   src/impact.rs          public items that reach a changed internal item
+  src/indirect.rs        calls through items in between (canvas, call view)
   src/unsafety.rs        unsafe tags, the overview's unsafe box, source stripes
   src/graphs.rs          the overview's changed call graphs
   src/files.rs           changed files (Markdown sections, Python, YAML,
