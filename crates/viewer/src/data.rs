@@ -1524,7 +1524,8 @@ impl Data {
                 olds.extend(o.map(|a| old_start + a));
                 news.extend(n.map(|b| new_start + b));
             }
-            // A link to the part's first changed line on GitHub.
+            // A link to the part's first changed line on GitHub, for its
+            // review bar.
             let first_added = rows[part.clone()]
                 .iter()
                 .find(|r| changed_row(r))
@@ -1544,11 +1545,12 @@ impl Data {
             );
             let lines: String = part.map(&row_html).collect();
             match crate::review::hunk_controls(&it.info.id, &olds, &news) {
-                c if c.is_empty() && gh.is_empty() => lines,
-                c if c.is_empty() => format!(r#"<span class="hunk-gh">{gh}</span>{lines}"#),
-                // In review mode the link goes into the hunk's bar.
+                // Outside review mode, a change has no link of its own: the
+                // item's link (in a card's header or an item's row) leads to
+                // its first change.
+                c if c.is_empty() => lines,
                 c => format!(
-                    r#"<span class="hunk"><span class="hunk-rv">{c}{gh}</span><span class="hunk-gh">{gh}</span>{lines}</span>"#
+                    r#"<span class="hunk"><span class="hunk-rv">{c}{gh}</span>{lines}</span>"#
                 ),
             }
         };

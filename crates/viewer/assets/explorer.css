@@ -901,10 +901,6 @@ body:not(.reviewing) .rv-same { display: none; }
 a.gh-link { font: 12px var(--sans); color: var(--link); white-space: nowrap; text-decoration: none; }
 a.gh-link:hover { text-decoration: underline; }
 .iacts a.gh-link { align-self: center; margin-right: 4px; }
-.hunk-gh { display: block; height: 0; text-align: right; position: relative; z-index: 1; }
-.hunk-gh a.gh-link { position: relative; top: 1px; margin-right: 6px; padding: 0 5px; border-radius: 3px; background: var(--bg-code); }
-.sbs .hunk-gh { grid-column: 1 / -1; }
-body.reviewing .hunk-rv + .hunk-gh, .hunk-rv:has(.rvc.done, .rvc.stale) + .hunk-gh { display: none; }
 body:not(.reviewing) .hunk-rv:not(:has(.rvc.done, .rvc.stale)) { display: none; }
 /* Wherever its bar shows, a hunk is a box around its bar and its lines,
    apart from the next one, so that the buttons clearly belong to the lines
