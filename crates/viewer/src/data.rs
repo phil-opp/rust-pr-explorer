@@ -774,7 +774,6 @@ impl Data {
             );
         };
         let repo_url = format!("https://github.com/{}", pr.repo);
-        let pr_url = format!("{repo_url}/pull/{}", pr.number);
         let commit = |rev: &str, title: &str| {
             let short = rev.get(..10).unwrap_or(rev);
             format!(

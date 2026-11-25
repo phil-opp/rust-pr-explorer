@@ -456,7 +456,6 @@ pub fn render_overview(app: &App) {
         };
         unsafe_html + &crate::graphs::overview_html(d) + &public
     };
-    let meta = &d.out.meta;
     let html = format!(
         r#"<h1>{}</h1>
         {}
