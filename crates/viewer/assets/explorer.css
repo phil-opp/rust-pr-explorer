@@ -13,6 +13,13 @@
   --type: light-dark(#ad378a, #e48fd0);
   --trait: light-dark(#6e4fc4, #b79cff);
   --fn: light-dark(#8f6529, #e0b27a);
+  /* Call connectors on the canvas, one color per callee. */
+  --call-0: var(--fn);
+  --call-1: light-dark(#1f63b5, #74b4f5);
+  --call-2: light-dark(#7a46c9, #c0a4ff);
+  --call-3: light-dark(#0b7a85, #52cfdc);
+  /* Last: the closest to --call-0. */
+  --call-4: light-dark(#c25400, #ff9f52);
   --mod: light-dark(#366ea6, #79b0ec);
   --macro: light-dark(#067d00, #6fd36f);
   --kw: light-dark(#8959a8, #c49be6);
@@ -330,6 +337,13 @@ a.ref:hover { text-decoration: underline; }
 .frame text.priv { fill: var(--private); font-size: 11px; font-weight: 400; }
 .edge { fill: none; stroke-width: 1.6; }
 .edge.call { stroke: var(--fn); }
+.edge.call.c0 { stroke: var(--call-0); } .join.c0 { fill: var(--call-0); }
+.edge.call.c1 { stroke: var(--call-1); } .join.c1 { fill: var(--call-1); }
+.edge.call.c2 { stroke: var(--call-2); } .join.c2 { fill: var(--call-2); }
+.edge.call.c3 { stroke: var(--call-3); } .join.c3 { fill: var(--call-3); }
+.edge.call.c4 { stroke: var(--call-4); } .join.c4 { fill: var(--call-4); }
+/* Further call sites of one callee, up to where they join the connector. */
+.edge.call.branch { stroke-dasharray: 5 4; }
 .edge.use { stroke: var(--type); stroke-dasharray: 2 4; }
 .edge.member { stroke: var(--border); stroke-width: 1.2; }
 .edge.link { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 1 3; }
