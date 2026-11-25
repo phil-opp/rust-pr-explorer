@@ -1134,3 +1134,37 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
   .cg-facts { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   .cg-label { margin-top: 6px; }
 }
+
+/* The call graph outline in the sidebar of the canvas and the call view.
+   Call depth is indented with a guide line per level, as in the overview's
+   graphs. */
+.ol-g-h { display: flex; align-items: baseline; gap: 6px; padding: 6px 14px 2px; font-family: var(--mono); font-size: 12.5px; font-weight: 600; }
+.ol-g-h .cnt, .ol-graph .cnt { margin-left: auto; font: 11px var(--sans); color: var(--muted); }
+.ol-g-nm { overflow: hidden; text-overflow: ellipsis; min-width: 0; white-space: nowrap; }
+.tree.ol { padding-left: 6px; }
+.tree.ol > li { padding-left: calc(var(--depth, 0) * 14px);
+  background: repeating-linear-gradient(to right, transparent 0 7px, color-mix(in srgb, var(--border) 60%, transparent) 7px 8px, transparent 8px 14px) no-repeat 0 0 / calc(var(--depth, 0) * 14px) 100%; }
+.ol-nm { font-family: var(--mono); font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.ol-nm[data-kind="fn"], .ol-nm[data-kind="method"], .ol-nm[data-kind="trait_method"] { color: var(--fn); }
+.ol-nm[data-kind="struct"], .ol-nm[data-kind="enum"], .ol-nm[data-kind="union"], .ol-nm[data-kind="type_alias"] { color: var(--type); }
+.ol-nm[data-kind="trait"] { color: var(--trait); }
+/* No card yet: gray italics, not a kind color. */
+.ol-row.off .ol-nm { color: var(--muted); font-style: italic; }
+.ol-row .badge { flex: none; }
+.ol-unch { flex: none; font-size: 11px; color: var(--muted); }
+.ol-row .cnt { flex: none; font-size: 12px; }
+.ol-sub { padding: 6px 14px 0 22px; font-size: 11px; color: var(--muted); }
+.ol-chg { color: var(--removed); font-weight: 700; }
+.ol-cmt, .ol-stale { color: var(--changed); font-weight: 700; }
+.ol-graph .ol-g-nm { font-family: var(--mono); font-size: 12.5px; }
+/* Collapsing the sidebar, per view: « at its top right hides it, and a
+   thin strip with » in its place shows it again. On a narrow screen the
+   sidebar is a drawer instead. */
+#side-hide, #side-show { display: none; }
+@media (min-width: 761px) {
+  .side-closed #sidebar { display: none; }
+  #side-hide { position: absolute; top: 6px; left: 226px; z-index: 5; padding: 0 6px; line-height: 22px; font-size: 14px; }
+  body:not(.side-closed) #sidebar:not(.hidden) ~ #side-hide { display: block; }
+  .side-closed #sidebar:not(.hidden) ~ #side-show { display: block; }
+  #side-show { flex: none; width: 22px; padding: 8px 0 0; border: 0; border-right: 1px solid var(--border); border-radius: 0; background: var(--panel); font-size: 14px; line-height: 1; vertical-align: top; text-align: center; align-self: stretch; }
+}

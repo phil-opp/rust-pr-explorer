@@ -114,6 +114,14 @@ pub fn render_sidebar(app: &App) {
     if !shown {
         return;
     }
+    crate::outline::apply_closed(app);
+    if crate::outline::shown(app) {
+        dom::set_html(
+            "sidebar",
+            &format!("{}{}", crate::outline::html(app), warnings_html(d)),
+        );
+        return;
+    }
     let files = files_html(d);
     if !modules_shown(app) {
         dom::set_html("sidebar", &format!("{files}{}", warnings_html(d)));
