@@ -1,6 +1,6 @@
 //! The embedded analysis plus derived indexes and privacy rules.
 
-use crate::code::{Seg, esc, marked_html};
+use crate::code::{Seg, esc, esc_name, marked_html};
 use model::{ApiLevel, External, Item, ItemInfo, Kind, Output, Status, UseCtx};
 use std::collections::HashMap;
 use std::ops::Range;
@@ -547,7 +547,7 @@ impl Data {
 
     /// A name's target by its path, linked when it is an item of the page.
     pub fn ref_link(&self, r: &model::Ref) -> String {
-        let path = esc(self.short_path(&r.path));
+        let path = esc_name(self.short_path(&r.path));
         match r.id.as_deref().and_then(|id| self.item(id)) {
             Some(o) => format!(
                 r#"<a class="ref" data-id="{}" data-kind="{}" data-path="{}"{}>{path}</a>"#,
@@ -617,9 +617,9 @@ impl Data {
         if let Some(e) = self.external(&it.info.id) {
             return format!(
                 r#"<span class="title-name"><span class="dim">{}::</span><span class="k-{}">{}</span></span>"#,
-                esc(&e.module),
+                esc_name(&e.module),
                 it.info.kind.css(),
-                esc(&e.name)
+                esc_name(&e.name)
             );
         }
         let prefix = if with_module
@@ -628,7 +628,7 @@ impl Data {
         {
             format!(
                 r#"<span class="dim">{}::</span>"#,
-                esc(self.short_path(&it.info.module))
+                esc_name(self.short_path(&it.info.module))
             )
         } else {
             String::new()
@@ -636,7 +636,7 @@ impl Data {
         format!(
             r#"<span class="title-name">{prefix}<span class="k-{}">{}</span></span>"#,
             it.info.kind.css(),
-            esc(&self.display_name(it))
+            esc_name(&self.display_name(it))
         )
     }
 
@@ -680,7 +680,7 @@ impl Data {
                     s.push_str(&format!(
                         r#"<span class="st st-changed" title="{}">moved from {}</span>"#,
                         esc(from),
-                        esc(self.short_path(from_mod))
+                        esc_name(self.short_path(from_mod))
                     ));
                 }
                 s
@@ -1213,7 +1213,7 @@ impl Data {
                     o.info.kind.css(),
                     esc(&o.info.id),
                     crate::nav::item_href(&o.info.id),
-                    esc(&self.display_name(o)),
+                    esc_name(&self.display_name(o)),
                     m.other_line
                 ),
                 _ => format!("line {}", m.other_line),

@@ -14,7 +14,7 @@
 //! Only resolved calls are followed, so a function called only through a
 //! trait or from inside a macro starts a graph of its own.
 
-use crate::code::esc;
+use crate::code::{esc, esc_name};
 use crate::data::{Data, changed};
 use model::{Item, Kind, Status};
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -443,7 +443,7 @@ fn plain_link(d: &Data, id: &str, title: &str) -> String {
         esc(id),
         esc(title),
         crate::nav::item_href(id),
-        esc(&d.display_name_of(id))
+        esc_name(&d.display_name_of(id))
     )
 }
 
@@ -579,7 +579,7 @@ pub fn graph_html(d: &Data, i: usize, g: &Graph, in_section: bool) -> String {
         .roots
         .iter()
         .take(3)
-        .map(|r| format!("<code>{}</code>", esc(&d.display_name_of(r))))
+        .map(|r| format!("<code>{}</code>", esc_name(&d.display_name_of(r))))
         .collect::<Vec<_>>()
         .join(r#"<span class="dim"> · </span>"#);
     let more_roots = match g.roots.len() {

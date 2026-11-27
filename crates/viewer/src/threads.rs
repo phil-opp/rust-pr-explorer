@@ -7,7 +7,7 @@
 //! current line; they, and threads on lines no item shows, are only
 //! listed (in full) on the overview, or on their file's card.
 
-use crate::code::{esc, markdown_file_html};
+use crate::code::{esc, esc_name, markdown_file_html};
 use crate::data::Data;
 use model::{Item, Kind, ReviewThread, Status};
 use std::collections::HashMap;
@@ -304,7 +304,7 @@ pub fn overview_html(d: &Data) -> String {
                     r#"<a data-open="{}" title="Open on the canvas"{}>{}</a>"#,
                     esc(id),
                     crate::nav::item_href(id),
-                    esc(&d.display_name(it))
+                    esc_name(&d.display_name(it))
                 )
             }),
             Some(Where::File(path)) => Some(format!(

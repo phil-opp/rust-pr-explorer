@@ -15,7 +15,7 @@
 //! `Token`. Every review unit (see `review::is_unit_item`) is placed
 //! somewhere, so that nothing is only reachable through other views.
 
-use crate::code::esc;
+use crate::code::{esc, esc_name};
 use crate::data::{Data, changed};
 use crate::graphs::{Graph, Graphs};
 use model::{Item, Kind};
@@ -232,7 +232,7 @@ fn graph_head(d: &Data, i: usize, g: &Graph) -> String {
         .roots
         .iter()
         .take(3)
-        .map(|r| format!("<code>{}</code>", esc(&d.display_name_of(r))))
+        .map(|r| format!("<code>{}</code>", esc_name(&d.display_name_of(r))))
         .collect::<Vec<_>>()
         .join(r#"<span class="dim"> · </span>"#);
     let more = match g.roots.len() {

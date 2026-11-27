@@ -260,7 +260,7 @@ a.ref:hover { text-decoration: underline; }
 .reviewing .ref.chg.rv-ok::after { content: "changed ✓"; color: var(--reviewed); }
 .ref.ext { color: inherit; border-bottom: 1px dotted var(--border); cursor: help; }
 .ref.on-canvas { background: var(--highlight); box-shadow: 0 0 0 1px var(--highlight); }
-.title-name { font-family: var(--mono); font-weight: 600; }
+.title-name { font-family: var(--mono); font-weight: 600; overflow-wrap: anywhere; min-width: 0; }
 .title-name .k-struct, .title-name .k-enum, .title-name .k-union, .title-name .k-type_alias { color: var(--type); }
 .title-name .k-trait { color: var(--trait); }
 .title-name .k-fn, .title-name .k-method, .title-name .k-trait_method { color: var(--fn); }
@@ -847,7 +847,7 @@ body:not(.reviewing) .rv-edit, .card-rv .rv-fold { display: none; }
    `next_steps_html` in lib.rs): on its own line below the buttons. */
 .rvc:has(.rv-next) { flex-wrap: wrap; }
 .rv-next { flex-basis: 100%; display: flex; flex-wrap: wrap; gap: 4px 12px; align-items: center; margin-top: 4px; font-size: 12px; }
-.rv-next .rv-go-btn { text-align: left; overflow-wrap: anywhere; }
+.rv-next .rv-go-btn { text-align: left; overflow-wrap: anywhere; min-width: 0; max-width: 100%; }
 .rv-next .rv-go-btn code { font-size: 12px; }
 .rvc .rv-go-btn { color: var(--link); }
 body:not(.reviewing) .rv-next { display: none; }
@@ -1116,6 +1116,10 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
   .top-row.sub { height: auto; min-height: 39px; flex-wrap: wrap; gap: 6px 10px; padding-top: 4px; padding-bottom: 4px; }
   .top-row.sub > * { flex: none; }
   #commit-menu:empty { display: none; }
+  /* A long commit subject shortens the commit picker instead of pushing
+     it past the right edge. */
+  #commit-menu { flex: 0 1 auto; min-width: 0; }
+  .commit-pick select { min-width: 0; flex: 0 1 auto; }
   #views { flex: 0 1 auto; min-width: 0; overflow-x: auto; scrollbar-width: none; }
   #views::-webkit-scrollbar { display: none; }
   #views a.btn { flex: none; padding: 4px 10px; }
