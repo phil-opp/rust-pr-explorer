@@ -730,6 +730,8 @@ pub struct Summary {
     pub stale_line_comments: usize,
     /// Some hunk needs changes, also of an item without a verdict yet.
     pub hunk_changes: bool,
+    /// Comments that an earlier review from this page posted: left out.
+    pub posted_comments: usize,
 }
 
 impl Summary {
@@ -758,8 +760,14 @@ pub fn summary(d: &Data) -> Summary {
         stale_comments: 0,
         stale_line_comments: 0,
         hunk_changes: false,
+        posted_comments: 0,
     };
-    for (unit, mark, Note { verdict, text }) in review::notes() {
+    for (unit, mark, note) in review::notes() {
+        let Note {
+            verdict,
+            text,
+            posted,
+        } = note;
         let has_text = !text.trim().is_empty();
         if mark == Mark::Stale {
             s.stale_comments += usize::from(has_text);
@@ -776,7 +784,9 @@ pub fn summary(d: &Data) -> Summary {
                 Verdict::Comment => s.commented += 1,
             }
         }
-        if has_text {
+        if has_text && posted {
+            s.posted_comments += 1;
+        } else if has_text {
             let loc = loc(d, &unit);
             s.comments.push(Comment {
                 name: unit_name(d, &unit),
@@ -789,9 +799,10 @@ pub fn summary(d: &Data) -> Summary {
         }
     }
     // Comments on chosen lines need changes like a hunk's.
-    let (lines, stale) = crate::line_notes::comments(d);
+    let (lines, stale, posted) = crate::line_notes::comments(d);
     s.hunk_changes |= lines.iter().any(|c| c.verdict == Verdict::Changes);
     s.stale_line_comments = stale;
+    s.posted_comments += posted;
     s.comments.extend(lines);
     s
 }
@@ -815,6 +826,19 @@ fn body(comments: &[Comment], own: &str, event: Verdict, inline: bool) -> String
         });
     }
     parts.join("\n\n")
+}
+
+/// The longest text GitHub takes for a review, in characters, less some
+/// room to spare.
+const TEXT_LIMIT: usize = 65_000;
+
+/// How many characters the review's text has left for the marks (see
+/// `carry::for_review`), after the summary and the comments that go into
+/// the text: all of them unless `inline`.
+pub fn marks_room(comments: &[Comment], own: &str, event: Verdict, inline: bool) -> usize {
+    let text = body(comments, own, event, inline);
+    // The blank line between the text and the marks.
+    TEXT_LIMIT.saturating_sub(text.chars().count() + 2)
 }
 
 /// The request body for GitHub's "create a review" API. `marks` (see
@@ -1024,13 +1048,15 @@ pub fn command(
     in_text: bool,
 ) -> Option<String> {
     let pr = d.out.meta.pr.as_ref()?;
-    let v = review_value(comments, own, event, &pr.head_commit, !in_text, marks);
+    // Without inline comments, the review needs no commit: GitHub then
+    // takes the PR's latest one, also after a force-push took this page's
+    // commit out of the PR.
+    let commit = if in_text { "" } else { &pr.head_commit };
+    let v = review_value(comments, own, event, commit, !in_text, marks);
     let json = shell_safe(&pretty(&v));
-    let post = format!(
-        "gh api --method POST repos/{}/pulls/{}/reviews --input - --jq .html_url",
-        pr.repo, pr.number
-    );
-    Some(if event == Verdict::Approve {
+    let api = format!("repos/{}/pulls/{}", pr.repo, pr.number);
+    let post = format!("gh api --method POST {api}/reviews --input - --jq .html_url");
+    let try_post = if event == Verdict::Approve {
         let as_comment = if v.get("body").is_some() {
             "nl=$(printf \"\\134\\134n\")
   printf %s \"$review\" | sed \"2s/APPROVE/COMMENT/; s/^  \\\"body\\\": \\\"/&Approved.$nl$nl/\""
@@ -1038,14 +1064,39 @@ pub fn command(
             "printf %s \"$review\" | sed \"2s/APPROVE\\\",/COMMENT\\\", \\\"body\\\": \\\"Approved.\\\",/\""
         };
         format!(
-            "printf '%s' '{json}' | sh -c 'review=$(cat)
-post() {{ {post}; }}
-if link=$(printf %s \"$review\" | post 2>/dev/null); then echo \"$link\"; else
-  {as_comment} | post; fi'"
+            "if link=$(printf %s \"$review\" | post 2>/dev/null); then echo \"$link\"; else
+  {as_comment} | post; fi"
         )
     } else {
-        format!("printf '%s' '{json}' | {post}")
-    })
+        "printf %s \"$review\" | post".to_string()
+    };
+    // Always through a POSIX `sh` script, which bash, zsh and fish run
+    // alike.
+    Some(format!(
+        "printf '%s' '{json}' | sh -c 'review=$(cat)
+post() {{ {post}; }}
+{check}{try_post}'",
+        check = head_check(&api, &pr.head_commit, &pr.head_rev)
+    ))
+}
+
+/// Lines of the command's script that say so when the PR is no longer at
+/// the commit the page shows: the page is a file that can't look that up,
+/// and a reviewer may have opened it hours ago. Only a note, since a review
+/// of an earlier commit is still a review; and none if the PR can't be
+/// read, which the request that follows reports better. Inside the
+/// command's single quotes, so without `'` and `\` (see `shell_safe`).
+fn head_check(api: &str, commit: &str, rev: &str) -> String {
+    let plain = |s: &str| !s.is_empty() && s.bytes().all(|b| b.is_ascii_alphanumeric());
+    if !plain(commit) || !plain(rev) {
+        return String::new();
+    }
+    format!(
+        "head=$(gh api {api} --jq .head.sha 2>/dev/null)
+[ -z \"$head\" ] || [ \"$head\" = {commit} ] ||
+  echo \"Note: the pull request has commits that the page of this review does not show (it shows {rev}, the pull request is at $head). Look at the page of the latest Rust Semantic Review comment for what changed.\" >&2
+"
+    )
 }
 
 /// What the posted review consists of, shown above the copy buttons.
@@ -1091,7 +1142,7 @@ pub fn fallback_html(comments: &[Comment]) -> String {
     if !comments.iter().any(|c| c.loc.is_some()) {
         return String::new();
     }
-    r#"<details class="rv-fallback"><summary>If GitHub refuses a comment's line</summary><p class="sub">This can happen where GitHub's diff differs from this page's. Then nothing is posted, since GitHub takes a review whole or not at all. This command posts the review with every comment in its text instead, linked to its lines.</p><div class="rv-row"><button data-rv-out="cmd-text">Copy command</button></div></details>"#.to_string()
+    r#"<details class="rv-fallback"><summary>If GitHub refuses a comment's line</summary><p class="sub">This can happen where GitHub's diff differs from this page's, or when a force-push took this page's commit out of the PR. Then nothing is posted, since GitHub takes a review whole or not at all. This command posts the review with every comment in its text instead, linked to its lines, on the PR's latest commit.</p><div class="rv-row"><button data-rv-out="cmd-text">Copy command</button></div></details>"#.to_string()
 }
 
 /// For a review without comments, a link to the PR, at the top of the
@@ -1145,6 +1196,17 @@ pub fn finish_html(d: &Data) -> String {
             if s.stale_line_comments == 1 { "it" } else { "them" },
         ));
     }
+    let posted_note = if s.posted_comments > 0 {
+        format!(
+            r#"<p class="note">{} {} left out, since an earlier review from this page posted {}. <button class="mini" data-rv-unpost>Include {} again</button></p>"#,
+            count(s.posted_comments, "comment", "comments"),
+            if s.posted_comments == 1 { "is" } else { "are" },
+            if s.posted_comments == 1 { "it" } else { "them" },
+            if s.posted_comments == 1 { "it" } else { "them" },
+        )
+    } else {
+        String::new()
+    };
     if unplaced > 0 {
         notes.push(format!(
             "{} {} on no line of GitHub's diff (a binary file, for example), so {} into the review's text.",
@@ -1192,10 +1254,13 @@ pub fn finish_html(d: &Data) -> String {
 <p class="sub">This page has no access to GitHub and holds no token. Copy the command and run it in a terminal: it posts the review with the <a href="https://cli.github.com" target="_blank" rel="noopener">GitHub CLI</a>, using your own login. It works in bash, zsh and fish.</p>
 <p id="rv-what">{what}</p>
 <div class="rv-row"><button data-rv-out="cmd" class="primary">Copy command</button><button data-rv-out="json">Copy JSON</button></div>
-<p class="sub">The review ends with your marks, in a collapsed “Review marks” section, so that the page of a later Rust Semantic Review comment can load them. It lists what you reviewed and your verdicts; your comments are in the review already.</p>
-<p class="sub">The comments go on the commit this page shows ({rev}). If the PR got new commits, GitHub shows them where those lines are now, or as outdated.{custom}</p>
+<div id="rv-marks-note">{marks}</div>
+<p class="sub">The comments go on the commit this page shows ({rev}). If the PR got new commits since, the command says so before it posts, and GitHub shows the comments where those lines are now, or as outdated.{custom}</p>
 <div id="rv-fallback">{fallback}</div>"#,
             what = posts_html(&s.comments, "", suggested),
+            marks = crate::carry::review_note_html(
+                crate::carry::for_review(marks_room(&s.comments, "", suggested, true)).left_out
+            ),
             fallback = fallback_html(&s.comments),
             rev = esc(&pr.head_rev),
             custom = if pr.since.is_some() {
@@ -1231,7 +1296,7 @@ pub fn finish_html(d: &Data) -> String {
     };
     format!(
         r#"<div class="rv-finish">
-<p>{facts}.</p>{notes}{quick}
+<p>{facts}.</p>{notes}{posted_note}{quick}
 <h4>Overall verdict</h4>
 {r_comment}{r_approve}{r_changes}
 <h4>Summary</h4>
@@ -1245,7 +1310,16 @@ pub fn finish_html(d: &Data) -> String {
 <textarea id="rv-out" class="hidden" rows="8" readonly></textarea>
 </div>
 </div>
+<div id="rv-posted" class="hidden">
+<h4>After it is posted</h4>
+<p class="sub">This page can't see whether the review reached GitHub. If you go on reviewing here, say so once it has, so that your next review doesn't post {these} again:</p>
+<div class="rv-row"><button data-rv-posted>Mark {these} as posted</button></div>
+</div>
 </div>"#,
+        these = match s.comments.len() {
+            1 => "this comment".to_string(),
+            n => format!("these {n} comments"),
+        },
         quick = quick_html(d, &s.comments),
         outs = if d.out.meta.pr.is_some() {
             r#" class="rv-outs""#
@@ -1825,7 +1899,9 @@ mod tests {
         let post = "gh api --method POST repos/o/r/pulls/7/reviews --input - --jq .html_url";
         let c = command(&d, &comments, "", Verdict::Comment, "", false).unwrap();
         assert!(c.starts_with("printf '%s' '{\n  \"event\": \"COMMENT\",\n"));
-        assert!(c.ends_with(&format!("}}' | {post}")));
+        assert!(c.ends_with(&format!(
+            "}}' | sh -c 'review=$(cat)\npost() {{ {post}; }}\nprintf %s \"$review\" | post'"
+        )));
         // The review is in the command once, also for an approval.
         let c = command(&d, &comments, "Nice", Verdict::Approve, "", false).unwrap();
         assert_eq!(c.matches("it\\u0027s").count(), 1);
@@ -1833,11 +1909,29 @@ mod tests {
         assert!(c.ends_with(&format!(
             "}}' | sh -c 'review=$(cat)\npost() {{ {post}; }}\nif link=$(printf %s \"$review\" | post 2>/dev/null); then echo \"$link\"; else\n  nl=$(printf \"\\134\\134n\")\n  printf %s \"$review\" | sed \"2s/APPROVE/COMMENT/; s/^  \\\"body\\\": \\\"/&Approved.$nl$nl/\" | post; fi'"
         )));
+        // With every comment in the text, the review names no commit.
+        assert!(c.contains("\"commit_id\": \"head1full\""));
+        let c = command(&d, &comments, "", Verdict::Comment, "", true).unwrap();
+        assert!(!c.contains("commit_id"));
         // Without a text, the comment review gets one.
         let c = command(&d, &[], "", Verdict::Approve, "", false).unwrap();
         assert!(c.contains(
             "sed \"2s/APPROVE\\\",/COMMENT\\\", \\\"body\\\": \\\"Approved.\\\",/\" | post; fi'"
         ));
+    }
+
+    #[test]
+    fn command_checks_the_head_first() {
+        let check = head_check("repos/o/r/pulls/7", "abc123", "abc");
+        assert!(check.starts_with(
+            "head=$(gh api repos/o/r/pulls/7 --jq .head.sha 2>/dev/null)\n[ -z \"$head\" ] || [ \"$head\" = abc123 ] ||\n  echo \"Note: "
+        ));
+        // It is inside the command's single quotes.
+        assert!(!check.contains(['\'', '\\']) && check.ends_with(" >&2\n"));
+        // No check without a commit to compare with, or with one that isn't
+        // a plain word.
+        assert_eq!(head_check("repos/o/r/pulls/7", "", ""), "");
+        assert_eq!(head_check("repos/o/r/pulls/7", "a b", "a"), "");
     }
 
     #[test]

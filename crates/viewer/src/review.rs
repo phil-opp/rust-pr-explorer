@@ -92,6 +92,11 @@ pub struct Note {
     pub verdict: Verdict,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub text: String,
+    /// The comment went to GitHub with an earlier review from this page
+    /// (the reviewer said so, see `set_posted`): a later review leaves it
+    /// out. Writing another text takes it back.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub posted: bool,
 }
 
 /// A reviewed change of a unit: from the version a page compared with to
@@ -1109,6 +1114,9 @@ pub fn has_marks() -> bool {
 pub enum Export {
     /// Into a posted review, as readable lines (see [`review_lines`]).
     Review,
+    /// The same without the reviewed changes, when there is no room for
+    /// them: the marks of the page of the whole PR.
+    ReviewMarks,
     /// To copy and paste on another page: everything, as JSON.
     Copy,
 }
@@ -1133,6 +1141,7 @@ pub fn export(to: Export) -> Option<String> {
             })
             .ok(),
             Export::Review => Some(review_lines(&r.marks, &r.edges, &r.notes)),
+            Export::ReviewMarks => Some(review_lines(&r.marks, &BTreeMap::new(), &r.notes)),
         }
     })
 }
@@ -1212,7 +1221,7 @@ fn parse_review_lines(text: &str) -> Payload {
                         id.to_string(),
                         Note {
                             verdict,
-                            text: String::new(),
+                            ..Default::default()
                         },
                     );
                 }
@@ -1401,6 +1410,27 @@ pub fn notes() -> Vec<(String, Mark, Note)> {
             })
         })
         .collect()
+}
+
+/// Says that the comments a review holds now were posted with it, or
+/// (`false`) takes that back for every comment. A review holds the
+/// comments of the units whose mark is current.
+pub fn set_posted(posted: bool) {
+    let current: HashSet<String> = notes()
+        .into_iter()
+        .filter(|(_, m, _)| *m != Mark::Stale)
+        .map(|(id, ..)| id)
+        .collect();
+    REVIEW.with(|r| {
+        for (id, n) in r.borrow_mut().notes.iter_mut() {
+            if !posted {
+                n.posted = false;
+            } else if current.contains(id) && !n.text.trim().is_empty() {
+                n.posted = true;
+            }
+        }
+    });
+    save();
 }
 
 /// Marks a unit as reviewed in its current state with a verdict, or
@@ -2453,6 +2483,7 @@ mod tests {
         let note = |verdict, text: &str| Note {
             verdict,
             text: text.into(),
+            posted: false,
         };
         notes.insert("t::f".to_string(), note(Verdict::Changes, "Rename it."));
         notes.insert("t::g".to_string(), note(Verdict::Approve, ""));

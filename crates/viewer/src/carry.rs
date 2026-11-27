@@ -15,11 +15,6 @@ use crate::code::esc;
 use crate::review;
 use model::{MARKS_MARKER, REVIEW_MARKS_HEADER, marks_in, review_marks_in};
 
-/// The longest marks that go into a posted review. GitHub takes up to
-/// 65536 characters for the review's text, which also holds the summary
-/// and the comments that fit on no line.
-const REVIEW_LIMIT: usize = 40_000;
-
 const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 pub fn base64(bytes: &[u8]) -> String {
@@ -64,16 +59,27 @@ pub fn copy_text() -> Option<String> {
     Some(format!("{MARKS_MARKER}{}", base64(json.as_bytes())))
 }
 
-/// The marks for a posted review, empty without marks or if they are too
-/// long. A stale mark loaded from a review can't show what changed since
-/// then; the page of the changes since the last Rust Semantic Review comment does.
-pub fn for_review() -> String {
-    let Some(lines) = review::export(review::Export::Review) else {
-        return String::new();
-    };
-    if lines.len() > REVIEW_LIMIT {
-        return String::new();
-    }
+/// What of the marks didn't fit into a posted review.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeftOut {
+    Nothing,
+    /// Which changes were reviewed (the `change` lines), which the page of
+    /// the changes since an earlier commit goes by.
+    Changes,
+    /// All of them.
+    All,
+}
+
+/// The marks for a posted review (see [`for_review`]).
+pub struct ReviewMarks {
+    /// The collapsed section for the end of the review's text; empty
+    /// without marks or if they don't fit.
+    pub text: String,
+    pub left_out: LeftOut,
+}
+
+/// The collapsed section that holds `lines` in a review's text.
+fn section(lines: &str) -> String {
     // A fence longer than any run of backticks in the lines.
     let longest = lines.split(|c| c != '`').map(str::len).max().unwrap_or(0);
     let fence = "`".repeat(longest.max(2) + 1);
@@ -82,6 +88,42 @@ pub fn for_review() -> String {
          What this review covered, so that the review page of later commits can show it.\n\n\
          {fence}text\n{REVIEW_MARKS_HEADER}\n{lines}\n{fence}\n\n</details>"
     )
+}
+
+/// The marks for a posted review, in at most `room` characters (see
+/// `post::marks_room`): all of them, else without the reviewed changes,
+/// else none. A stale mark loaded from a review can't show what changed
+/// since then; the page of the changes since the last Rust Semantic Review
+/// comment does.
+pub fn for_review(room: usize) -> ReviewMarks {
+    fit(
+        review::export(review::Export::Review),
+        || review::export(review::Export::ReviewMarks),
+        room,
+    )
+}
+
+fn fit(all: Option<String>, marks: impl FnOnce() -> Option<String>, room: usize) -> ReviewMarks {
+    let fits = |lines: &String| section(lines).chars().count() <= room;
+    let (text, left_out) = match all {
+        None => (String::new(), LeftOut::Nothing),
+        Some(lines) if fits(&lines) => (section(&lines), LeftOut::Nothing),
+        Some(_) => match marks().filter(fits) {
+            Some(lines) => (section(&lines), LeftOut::Changes),
+            None => (String::new(), LeftOut::All),
+        },
+    };
+    ReviewMarks { text, left_out }
+}
+
+/// What the "Finish review" dialog says about the marks in the review.
+pub fn review_note_html(left_out: LeftOut) -> String {
+    match left_out {
+        LeftOut::Nothing => r#"<p class="sub">The review ends with your marks, in a collapsed “Review marks” section, so that the page of a later Rust Semantic Review comment can load them. It lists what you reviewed and your verdicts; your comments are in the review already.</p>"#,
+        LeftOut::Changes => r#"<p class="note rv-warn"><b>Your marks are too long to go into the review whole.</b> GitHub limits a review's text to 65,536 characters. The review ends with the marks of this PR's full page, but not with which changes you reviewed, so the page of the changes since an earlier commit can't use them. To take everything to a later page, use <b>Marks…</b> → <b>Copy marks</b> and paste them there.</p>"#,
+        LeftOut::All => r#"<p class="note rv-warn"><b>Your marks are too long to go into the review, so it is posted without them.</b> GitHub limits a review's text to 65,536 characters. The page of a later Rust Semantic Review comment then can't load them from this review. To take them there, use <b>Marks…</b> → <b>Copy marks</b> and paste them on that page.</p>"#,
+    }
+    .to_string()
 }
 
 /// Loads marks from a text: copied from another page, or a posted
@@ -176,6 +218,24 @@ mod tests {
         assert_eq!(base64(b"Man"), "TWFu");
         assert_eq!(base64(b"Ma"), "TWE=");
         assert_eq!(unbase64("TW!u"), None);
+    }
+
+    #[test]
+    fn marks_that_do_not_fit_are_shortened_then_left_out() {
+        let all = || Some("mark 1 a::f\nchange full 1 2 a::f".to_string());
+        let marks = || Some("mark 1 a::f".to_string());
+        let long = section(&all().unwrap()).chars().count();
+        let short = section(&marks().unwrap()).chars().count();
+        let m = fit(all(), marks, long);
+        assert_eq!(m.left_out, LeftOut::Nothing);
+        assert!(m.text.contains("change full"));
+        let m = fit(all(), marks, long - 1);
+        assert_eq!(m.left_out, LeftOut::Changes);
+        assert!(m.text.contains("mark 1 a::f") && !m.text.contains("change full"));
+        let m = fit(all(), marks, short - 1);
+        assert_eq!((m.text.as_str(), m.left_out), ("", LeftOut::All));
+        // No marks: nothing is left out.
+        assert_eq!(fit(None, || None, 0).left_out, LeftOut::Nothing);
     }
 
     #[test]

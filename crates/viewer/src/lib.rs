@@ -936,6 +936,14 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
         }
         return true;
     }
+    if dom::closest(el, "[data-rv-posted]").is_some() {
+        mark_posted(app, true);
+        return true;
+    }
+    if dom::closest(el, "[data-rv-unpost]").is_some() {
+        mark_posted(app, false);
+        return true;
+    }
     if let Some(b) = dom::closest(el, "[data-rv-out]") {
         finish_output(app, &dom::data(&b, "rv-out").unwrap_or_default());
         return true;
@@ -1051,7 +1059,15 @@ fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String,
     if !guided {
         review::set_stayed(Some((unit.clone(), String::new())));
     }
-    review::set_mark(&app.d, id, Some(review::Note { verdict, text }));
+    // The same text as before is still the comment that was posted.
+    let before = review::note(id);
+    let posted = before.posted && before.text == text;
+    let note = review::Note {
+        verdict,
+        text,
+        posted,
+    };
+    review::set_mark(&app.d, id, Some(note));
     if let Some(item) = review::hunk_item(id) {
         app.s.rv_current = Some(item.clone());
         app.s.rv_hunk = review::next_open_hunk(id);
@@ -1063,10 +1079,10 @@ fn save_verdict(app: &mut App, id: &str, verdict: review::Verdict, text: String,
             return;
         }
         if review::mark(&item) != Some(review::Mark::Done) {
+            // Keeps a comment the item has from an earlier review.
             let note = review::Note {
                 verdict: review::hunks_verdict(&item),
-                // Keeps a comment the item has from an earlier review.
-                text: review::note(&item).text,
+                ..review::note(&item)
             };
             review::set_mark(&app.d, &item, Some(note));
         }
@@ -1278,6 +1294,8 @@ fn update_finish(app: &App) {
     let (event, own) = finish_choice();
     let comments = post::summary(&app.d).comments;
     dom::set_html("rv-what", &post::posts_html(&comments, &own, event));
+    let marks = carry::for_review(post::marks_room(&comments, &own, event, true));
+    dom::set_html("rv-marks-note", &carry::review_note_html(marks.left_out));
 }
 
 /// The buttons of the "Finish review" dialog: copy the review in one form.
@@ -1296,26 +1314,25 @@ fn finish_output(app: &App, what: &str) {
             post::review_markdown(&comments, &own, event),
             "The review as Markdown",
         ),
-        "json" => (
-            post::review_json(&comments, &own, event, commit, &carry::for_review()),
-            "The review's JSON",
-        ),
+        "json" => {
+            let marks = carry::for_review(post::marks_room(&comments, &own, event, true));
+            (
+                post::review_json(&comments, &own, event, commit, &marks.text),
+                "The review's JSON",
+            )
+        }
         _ => {
             let in_text = match what {
                 "cmd" => false,
                 "cmd-text" => true,
                 _ => return,
             };
+            // With every comment in the text, there is less room for the
+            // marks.
+            let marks = carry::for_review(post::marks_room(&comments, &own, event, !in_text));
             (
-                post::command(
-                    &app.d,
-                    &comments,
-                    &own,
-                    event,
-                    &carry::for_review(),
-                    in_text,
-                )
-                .unwrap_or_default(),
+                post::command(&app.d, &comments, &own, event, &marks.text, in_text)
+                    .unwrap_or_default(),
                 "The command",
             )
         }
@@ -1330,6 +1347,30 @@ fn finish_output(app: &App, what: &str) {
         out.select();
     }
     copy(&text, label);
+    // Once it is posted, the reviewer can say so (see `mark_posted`).
+    if !comments.is_empty()
+        && let Some(row) = dom::by_id("rv-posted")
+    {
+        dom::toggle_class(&row, "hidden", false);
+    }
+}
+
+/// "Mark as posted" in the "Finish review" dialog, and "Include them
+/// again": whether a later review from this page leaves out the comments
+/// that this one holds.
+fn mark_posted(app: &App, posted: bool) {
+    review::set_posted(posted);
+    line_notes::set_posted(&app.d, posted);
+    if posted {
+        // The summary went out with the review, so a later one starts empty.
+        drafts::remove(drafts::SUMMARY);
+    }
+    open_modal("Finish your review", &post::finish_html(&app.d));
+    toast(if posted {
+        "Marked as posted: a later review from this page leaves these comments out."
+    } else {
+        "The comments are part of the review again."
+    });
 }
 
 /// Copies a text to the clipboard and says whether that worked.
