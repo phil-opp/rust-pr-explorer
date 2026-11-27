@@ -14,7 +14,8 @@
 # commit), PREVIOUS_ID, PREVIOUS_NODE_ID and PREVIOUS_STATE (see
 # previous-comment.sh), RETENTION_DAYS, RUN_URL and RUN_ID (the run that
 # analyzed HEAD, whose saved analysis the next run can reuse, see
-# previous-analysis.sh).
+# previous-analysis.sh), and UPDATE_COMMENT (`true` to keep one comment and
+# update it on every push, see the `update-comment` input).
 set -euo pipefail
 
 # A link to a page that tells the page its artifact's id (`#~ID`), from
@@ -70,25 +71,53 @@ expiry() {
   printf '%s' "$at"
 }
 expires=$(expiry "$ARTIFACT_ID")
+# How many earlier pushes an updated comment lists (with UPDATE_COMMENT).
+MAX_HISTORY=10
 
 # A new comment for every push that changed the PR, with the changes since
 # the previous comment's commit. A push that only merged the base branch or
 # rebased onto it (and a re-run) updates the previous comment instead, which
-# keeps its "since" link.
+# keeps its "since" link. With UPDATE_COMMENT, a push that changed the PR
+# updates the previous comment too, and what that comment showed moves into
+# its list of earlier pushes.
+#
+# `patch`: the previous comment is updated, not a new one posted. `fresh`:
+# this push changed the PR, so the comment shows the changes since the
+# previous one's commit.
+patch=
+fresh=1
+history='[]'
 if [ -n "$PREVIOUS_ID" ] && { [ "$SINCE" = "none" ] || [ "$PREVIOUS" = "$HEAD" ]; }; then
-  mode=update
+  patch=1
+  fresh=
   since=$(jq -c '.since // empty' <<< "$PREVIOUS_STATE")
+  history=$(jq -c '.history | if type == "array" then . else [] end' <<< "$PREVIOUS_STATE")
 else
-  mode=new
   since=
   if [ "$SINCE" = "changes" ]; then
     since=$(jq -nc --arg from "$PREVIOUS" --arg to "$HEAD" --arg url "$SINCE_PAGE" \
       --arg summary "$SINCE_SUMMARY" --arg expires "$(expiry "$SINCE_ARTIFACT_ID")" \
       '{$from, $to, $url, $summary} + (if $expires != "" then {$expires} else {} end)')
   fi
+  if [ "${UPDATE_COMMENT:-}" = true ] && [ -n "$PREVIOUS_ID" ]; then
+    patch=1
+    # What the previous comment showed, then the pushes before it: the
+    # latest $MAX_HISTORY whose pages are still there. A comment from before
+    # the page was saved in the state has no link to list.
+    history=$(jq -c --arg now "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --argjson max "$MAX_HISTORY" '
+      ([{head, page, since} | with_entries(select(.value != null))
+        | select((.head | type) == "string" and (.page.url? | type) == "string")]
+       + (.history | if type == "array" then . else [] end))
+      | map(select((.page.expires // "9999") > $now)) | .[:$max]' <<< "$PREVIOUS_STATE")
+  fi
 fi
-state=$(jq -nc --arg head "$HEAD" --arg run "${RUN_ID:-}" --argjson since "${since:-null}" \
-  '{$head} + (if $run != "" then {run: ($run | tonumber)} else {} end) + (if $since then {$since} else {} end)')
+page=$(jq -nc --arg url "$PAGE" --arg summary "$SUMMARY" --arg expires "$expires" \
+  '{$url, $summary} + (if $expires != "" then {$expires} else {} end)')
+state=$(jq -nc --arg head "$HEAD" --arg run "${RUN_ID:-}" --argjson page "$page" \
+  --argjson since "${since:-null}" --argjson history "$history" \
+  '{$head} + (if $run != "" then {run: ($run | tonumber)} else {} end) + {$page}
+   + (if $since then {$since} else {} end)
+   + (if ($history | length) > 0 then {$history} else {} end)')
 # Commit hashes are written out in full and not as code, so that GitHub
 # links them (shown shortened).
 body="<!-- rust-semantic-review $state -->
@@ -100,16 +129,19 @@ if [ -n "$since" ]; then
   from=$(jq -r '.from' <<< "$since")
   to=$(jq -r '.to' <<< "$since")
   upto=
+  # An updated comment showed that commit itself, before this push.
+  previous_is="previous comment"
+  if [ "${UPDATE_COMMENT:-}" = true ]; then previous_is="previous push"; fi
   if [ "$to" != "$HEAD" ]; then upto=" up to $to"; fi
   body="$body
-- **[Changes since]($(jq -r '.url' <<< "$since"))** $from (previous comment)$upto: $(jq -r '.summary' <<< "$since")"
+- **[Changes since]($(jq -r '.url' <<< "$since"))** $from ($previous_is)$upto: $(jq -r '.summary' <<< "$since")"
   footer="$footer \"Changes since\" leaves out what the base branch brought in."
   # The links expire with the earlier of the two artifacts.
   since_expires=$(jq -r '.expires // ""' <<< "$since")
   if [ -n "$since_expires" ] && { [ -z "$expires" ] || [[ "$since_expires" < "$expires" ]]; }; then
     expires=$since_expires
   fi
-elif [ "$mode" = new ] && [[ "$SINCE" == unavailable* ]]; then
+elif [ -n "$fresh" ] && [[ "$SINCE" == unavailable* ]]; then
   body="$body
 - The changes since $PREVIOUS, the previous comment's commit, could not be shown ${SINCE#unavailable }."
 fi
@@ -120,10 +152,25 @@ if [ -n "$breaking" ]; then
 
 $breaking"
 fi
-if [ "$mode" = update ] && [ "$PREVIOUS" != "$HEAD" ]; then
+if [ -z "$fresh" ] && [ "$PREVIOUS" != "$HEAD" ]; then
   body="$body
 
 Updated for $HEAD, which only merged the base branch or was rebased onto it."
+fi
+# The pages of the pushes before this one (with UPDATE_COMMENT), folded.
+# Commits are shortened in a link's text, where GitHub doesn't do it.
+earlier=$(jq -r '.[]
+  | "- Up to \(.head): [all changes](\(.page.url))"
+    + (if .page.summary then ": \(.page.summary)" else "." end)
+    + (if .since.url then " [Changes since \(.since.from // "" | .[:7])](\(.since.url))." else "" end)' <<< "$history")
+if [ -n "$earlier" ]; then
+  body="$body
+
+<details><summary>Earlier pushes</summary>
+
+$earlier
+
+</details>"
 fi
 # Anyone can read the comment of a public repository, but GitHub serves
 # artifacts only to people who are signed in.
@@ -136,7 +183,7 @@ body="$body
 
 <sub>$footer</sub>"
 failed=
-if [ "$mode" = update ]; then
+if [ -n "$patch" ]; then
   result=$(gh api -X PATCH "repos/$REPO/issues/comments/$PREVIOUS_ID" -f body="$body" 2>&1) || failed=1
 else
   result=$(gh api -X POST "repos/$REPO/issues/$PR/comments" -f body="$body" 2>&1) || failed=1
@@ -150,7 +197,7 @@ if [ -n "$failed" ]; then
     exit 1
   fi
   echo "::warning::Could not comment on the PR, e.g. because the token is read-only on PRs from forks. The data for the comment is uploaded, so that a workflow_run workflow with the comment-only action can post it (see the README): $result"
-elif [ "$mode" = new ] && [ -n "$PREVIOUS_NODE_ID" ]; then
+elif [ -z "$patch" ] && [ -n "$PREVIOUS_NODE_ID" ]; then
   # Collapse the previous comment: the new one has the current numbers and
   # links. Each new comment hides the one before it, so only the latest
   # stays expanded.
