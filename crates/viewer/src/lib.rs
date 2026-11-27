@@ -1361,6 +1361,10 @@ fn finish_output(app: &App, what: &str) {
 fn mark_posted(app: &App, posted: bool) {
     review::set_posted(posted);
     line_notes::set_posted(&app.d, posted);
+    if posted {
+        // The summary went out with the review, so a later one starts empty.
+        drafts::remove(drafts::SUMMARY);
+    }
     open_modal("Finish your review", &post::finish_html(&app.d));
     toast(if posted {
         "Marked as posted: a later review from this page leaves these comments out."
