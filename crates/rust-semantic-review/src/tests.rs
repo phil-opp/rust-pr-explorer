@@ -338,6 +338,35 @@ fn shadowing_and_name_spaces() {
     assert!(g.calls.is_empty());
 }
 
+/// A `use` inside a function body (common in tests: `use super::f;`) brings
+/// the name into scope; it does not hide it like a local binding would.
+#[test]
+fn imports_inside_a_body_resolve() {
+    let dir = write_crate(&[(
+        "src/lib.rs",
+        "pub fn redact(s: &str) -> &str { s }\n\
+         pub mod util { pub fn trim(s: &str) -> &str { s } pub fn pad() {} }\n\
+         mod tests {\n\
+             fn redact() {}\n\
+             #[test]\n\
+             fn t() {\n\
+                 use super::redact;\n\
+                 use crate::util::{trim as cut, *};\n\
+                 let _ = redact(\"a\");\n\
+                 let _ = cut(\"b\");\n\
+                 pad();\n\
+                 assert_eq!(redact(\"c\"), \"c\");\n\
+             }\n\
+         }\n",
+    )]);
+    let out = analyze_dirs(dir.path(), dir.path());
+    let t = &out.items["t::tests::t"].info;
+    let callees: Vec<_> = t.calls.iter().map(|c| c.to.as_str()).collect();
+    assert_eq!(callees, ["t::redact", "t::util::pad", "t::util::trim"]);
+    // The call inside `assert_eq!` is a call site, left to rust-analyzer.
+    assert_eq!(t.unresolved_calls, 1);
+}
+
 #[test]
 fn a_local_does_not_hide_a_module_path() {
     let dir = write_crate(&[(
@@ -711,6 +740,40 @@ fn semantic_calls() {
             .values()
             .any(|r| r.id.as_deref() == Some("tinycalc::parser::Parser::parse_expr"))
     );
+}
+
+/// A test that imports the function it tests inside its body and calls it
+/// only inside `assert_eq!`: rust-analyzer resolves those call sites.
+#[cfg(feature = "semantic")]
+#[test]
+fn semantic_calls_through_a_body_import_in_macros() {
+    let dir = write_crate(&[(
+        "src/lib.rs",
+        "pub fn redact(s: &str) -> &str { s }\n\
+         \n\
+         #[cfg(test)]\n\
+         mod tests {\n\
+             #[test]\n\
+             fn t() {\n\
+                 use super::redact;\n\
+                 assert_eq!(redact(\"a\"), \"a\");\n\
+             }\n\
+         }\n",
+    )]);
+    let root = dir.path();
+    let mut analysis = Analyzer::run(root, &crate::source::find_crates(root));
+    crate::semantic::refine(
+        root,
+        std::slice::from_ref(&root.to_path_buf()),
+        Trust::Untrusted,
+        None,
+        &mut analysis,
+    )
+    .unwrap();
+    let t = &analysis.items["t::tests::t"].info;
+    let callees: Vec<_> = t.calls.iter().map(|c| c.to.as_str()).collect();
+    assert_eq!(callees, ["t::redact"]);
+    assert_eq!(t.unresolved_calls, 0);
 }
 
 #[test]
