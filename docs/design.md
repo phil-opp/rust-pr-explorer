@@ -98,7 +98,7 @@ This layer needs nothing but the source text. It works on any checkout, broken o
 
 Since this is a review tool, it never guesses. Name resolution follows Rust's rules where it can be sure, and stays silent otherwise:
 - **Name spaces.** `helper()` names the function, even if a module `helper` exists too.
-- **Shadowing.** Names bound by a pattern, generic parameters, and items or imports declared inside a body are never resolved to module-level items of the same name.
+- **Shadowing.** Names bound by a pattern, generic parameters, and items declared inside a body are never resolved to module-level items of the same name. Imports declared inside a body (`use super::f;` in a test) are resolved like module-level ones and take precedence over the module's names.
 - **Glob imports** bring in only what they make visible. A glob import from another crate (or an unresolvable path) could provide any name, so in that module prelude names are not claimed.
 - **External paths** are claimed only for declared dependencies and `std`/`core`/`alloc`, using the prelude of the crate's edition.
 - **Ambiguity.** A name that resolves to different items in two places of one item is not linked at all.

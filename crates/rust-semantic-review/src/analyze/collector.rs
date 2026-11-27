@@ -29,6 +29,8 @@ pub(super) struct Collector<'a> {
     pub(super) targets: BTreeSet<String>,
     /// Names bound locally or as generic parameters.
     shadowed: std::collections::HashSet<String>,
+    /// `use` declarations inside the body, see [`Bindings::imports`].
+    imports: Vec<(Option<String>, Vec<String>)>,
     pub(super) sites: Vec<CallSite>,
     in_macro: bool,
     /// Resolved paths by the source position of their first segment.
@@ -54,6 +56,7 @@ impl<'a> Collector<'a> {
             ambiguous: BTreeSet::new(),
             targets: BTreeSet::new(),
             shadowed: Default::default(),
+            imports: Vec::new(),
             sites: Vec::new(),
             in_macro: false,
             pos_refs: BTreeMap::new(),
@@ -63,6 +66,12 @@ impl<'a> Collector<'a> {
 
     pub(super) fn shadow(&mut self, names: impl IntoIterator<Item = String>) {
         self.shadowed.extend(names);
+    }
+
+    /// Adds the bindings and imports of the body.
+    pub(super) fn bind(&mut self, bindings: Bindings) {
+        self.shadow(bindings.names);
+        self.imports.extend(bindings.imports);
     }
 
     /// Whether a path names a local binding. Only a single name can: in
@@ -79,7 +88,8 @@ impl<'a> Collector<'a> {
         if segs.len() == 1 && matches!(segs[0].as_str(), "self" | "crate" | "super") {
             return None;
         }
-        self.an.resolve(self.module, segs, self.self_ty, ns)
+        self.an
+            .resolve_with_imports(self.module, &self.imports, segs, self.self_ty, ns)
     }
 
     fn handle_path(&mut self, path: &mut syn::Path, ns: Option<Ns>) {
@@ -244,13 +254,18 @@ impl VisitMut for Collector<'_> {
 }
 
 /// Names bound in patterns (parameters, `let`, closures, `match` arms) and
-/// items declared inside a body.
+/// items declared inside a body, and the body's `use` declarations.
 #[derive(Default)]
-pub(super) struct Bindings(pub(super) Vec<String>);
+pub(super) struct Bindings {
+    pub(super) names: Vec<String>,
+    /// Flattened `use` entries: the name each brings into scope (`None`
+    /// for a glob) and its path.
+    pub(super) imports: Vec<(Option<String>, Vec<String>)>,
+}
 
 impl<'ast> syn::visit::Visit<'ast> for Bindings {
     fn visit_pat_ident(&mut self, p: &'ast syn::PatIdent) {
-        self.0.push(p.ident.to_string());
+        self.names.push(p.ident.to_string());
         syn::visit::visit_pat_ident(self, p);
     }
 
@@ -267,12 +282,10 @@ impl<'ast> syn::visit::Visit<'ast> for Bindings {
             Item::Mod(i) => Some(&i.ident),
             _ => None,
         };
-        self.0.extend(ident.map(|i| i.to_string()));
+        self.names.extend(ident.map(|i| i.to_string()));
+        // An import brings a name into scope instead of hiding it.
         if let Item::Use(u) = item {
-            let mut entries = Vec::new();
-            flatten_use(&u.tree, Vec::new(), &mut entries);
-            self.0
-                .extend(entries.into_iter().filter_map(|(alias, _)| alias));
+            flatten_use(&u.tree, Vec::new(), &mut self.imports);
         }
     }
 
