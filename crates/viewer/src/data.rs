@@ -774,7 +774,6 @@ impl Data {
             );
         };
         let repo_url = format!("https://github.com/{}", pr.repo);
-        let pr_url = format!("{repo_url}/pull/{}", pr.number);
         let commit = |rev: &str, title: &str| {
             let short = rev.get(..10).unwrap_or(rev);
             format!(
@@ -817,8 +816,24 @@ impl Data {
             )
         };
         format!(
-            r#"<div class="pm-pr"><a href="{repo_url}" target="_blank" rel="noopener">github.com/{}</a> · <a href="{pr_url}" target="_blank" rel="noopener">PR #{}</a></div><div class="pm-revs">{base}{head}</div>"#,
+            r#"<div class="pm-pr"><a href="{repo_url}" target="_blank" rel="noopener">github.com/{}</a></div><div class="pm-revs">{base}{head}</div>"#,
             esc(&pr.repo),
+        )
+    }
+
+    /// The overview's heading: the PR's title, followed by its number,
+    /// linked to the PR on GitHub, as in the header. Without a PR, the
+    /// page's title.
+    pub fn heading_html(&self) -> String {
+        let meta = &self.out.meta;
+        let Some(pr) = &meta.pr else {
+            return esc(&meta.title);
+        };
+        format!(
+            r#"{} <a class="h1-pr" href="https://github.com/{}/pull/{}" target="_blank" rel="noopener" title="The PR on GitHub">#{}</a>"#,
+            esc(pr.title.as_deref().unwrap_or(&meta.title)),
+            esc(&pr.repo),
+            pr.number,
             pr.number,
         )
     }
@@ -893,6 +908,9 @@ impl Data {
             Status::Added => ("", "", "added"),
             Status::Removed => ("", "", "removed"),
             _ if it.changes.signature => ("m-chg", "", "signature changed"),
+            // Faded when something else about the item changed, to lead
+            // the eye to that.
+            Status::Changed => ("", "m-ref faded", "signature unchanged"),
             _ => ("", "m-ref", "signature unchanged"),
         };
         let shown = format!(
@@ -960,13 +978,19 @@ impl Data {
         } else {
             first_paragraph(docs)
         };
+        // Unchanged docs of a changed item are faded, like its signature.
+        let faded = if it.status == Status::Changed {
+            " faded"
+        } else {
+            ""
+        };
         let html = if !md.trim().is_empty() {
             format!(
-                r#"<div class="docs"><div class="dblk">{}</div></div>"#,
+                r#"<div class="docs{faded}"><div class="dblk">{}</div></div>"#,
                 docs_html(self, md, &it.info.doc_refs)
             )
         } else if full {
-            r#"<div class="docs empty">No documentation.</div>"#.to_string()
+            format!(r#"<div class="docs empty{faded}">No documentation.</div>"#)
         } else {
             String::new()
         };
@@ -1961,6 +1985,29 @@ mod tests {
         assert!(
             html.contains(r#"<code class="pm-ref">fix-parser</code>"#),
             "{html}"
+        );
+    }
+
+    #[test]
+    fn the_heading_links_the_pr_by_its_number() {
+        let d = data(PrMeta {
+            repo: "o/r".to_string(),
+            number: 7,
+            title: Some("Fix <the> parser".to_string()),
+            ..Default::default()
+        });
+        let html = d.heading_html();
+        assert!(html.starts_with("Fix &lt;the&gt; parser "), "{html}");
+        assert!(
+            html.contains(r#"href="https://github.com/o/r/pull/7""#),
+            "{html}"
+        );
+        assert!(html.contains(">#7</a>"), "{html}");
+        // The number is next to the title only, not again below it.
+        assert!(
+            !d.compared_html().contains("/pull/7"),
+            "{}",
+            d.compared_html()
         );
     }
 

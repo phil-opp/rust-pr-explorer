@@ -34,6 +34,7 @@ jobs:
 | Input | Default | |
 |---|---|---|
 | `comment` | `true` | Post a comment that links the page (and a page of the changes since the previous comment) and lists the PR's breaking changes. Where the token can't (PRs from forks), a second workflow can post it, see below. |
+| `update-comment` | `false` | Keep one comment per PR and update it on every push, instead of a new comment per push. Nobody is notified of an update. Earlier pushes' pages are listed in a folded section. |
 | `syntax-only` | `false` | Skip rust-analyzer: faster, but method calls stay unresolved. |
 | `trust-project-code` | `auto` | Run the PR's build scripts and proc macros, so calls into generated code resolve. `auto`: on under `pull_request`, off when another event analyzes a PR. Refused under `pull_request_target`. |
 | `semver-checks` | `false` | Also run cargo-semver-checks. Builds the PR's code; refused under `pull_request_target`. |
@@ -66,6 +67,8 @@ jobs:
     steps:
       - uses: phil-opp/rust-semantic-review/comment@main
 ```
+
+With `update-comment: true`, set it on both actions: the one that posts the comment decides.
 
 With `comment: workflow-run` in `rust-semantic-review.yml`, the action there never comments itself and only needs `pull-requests: read`; `rust-semantic-review-comment.yml` then posts every comment.
 

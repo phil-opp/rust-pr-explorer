@@ -214,6 +214,18 @@ code { font-size: .92em; }
 .export s { text-decoration-color: var(--removed); }
 /* An unchanged signature, shown for reference: muted, no code background. */
 .sigbox.m-ref .sig { background: transparent; box-shadow: inset 0 0 0 1px var(--border); color: var(--muted); }
+/* The unchanged signature and docs of a changed item, faded so that the eye
+   goes to what changed (often a few lines in the body). Not by opacity: the
+   syntax colors are close to the WCAG AA contrast ratio (4.5:1) already, so
+   any transparency takes them below it. Instead, the text takes a lighter
+   gray that still keeps it, and the syntax colors lose most of their
+   saturation, which leaves their lightness, and so their contrast, about
+   the same. Full color again under the pointer or keyboard focus. */
+.sigbox.faded .sig, .docs.faded { transition: color .15s, filter .15s, box-shadow .15s; }
+.sigbox.faded:not(:hover, :focus-within) .sig, .docs.faded:not(:hover, :focus-within) {
+  color: light-dark(#6b6b6b, #959599); filter: saturate(.25);
+}
+.sigbox.faded:not(:hover, :focus-within) .sig { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border) 50%, var(--bg)); }
 .mark.m-del .docs, .mark.m-del .export { opacity: .75; text-decoration: line-through; text-decoration-color: var(--removed); }
 .dblk-old { font-size: 12.5px; color: var(--muted); margin: 0 0 4px; }
 .dblk-old summary { cursor: pointer; }
@@ -277,6 +289,7 @@ a.ref:hover { text-decoration: underline; }
 /* Pages: overview and modules */
 .page h1 { font: 600 26px/1.2 var(--sans); margin: 0 0 4px; }
 .page h1 .title-name { font-size: 24px; }
+.page h1 .h1-pr { font-weight: 400; white-space: nowrap; }
 .page .sub { color: var(--muted); margin-bottom: 18px; }
 /* What the overview compares: the repository and PR, then a row each for
    the base and the PR's branch. A long branch name breaks anywhere, but
@@ -376,6 +389,14 @@ a.ref:hover { text-decoration: underline; }
 .edge.call.c4 { stroke: var(--call-4); } .join.c4 { fill: var(--call-4); }
 /* Further call sites of one callee, up to where they join the connector. */
 .edge.call.branch { stroke-dasharray: 5 4; }
+/* A call through an item without a card: dashed from where the caller
+   calls that item (its name outlined), with a "via" label to open it. */
+.edge.call.via { stroke-dasharray: 9 3 2 3; }
+.ref.via-site[data-callc] { color: var(--callc-text); outline: 1px dashed var(--callc); outline-offset: 1px; border-radius: 2px; }
+.via-tag { pointer-events: auto; cursor: pointer; }
+.via-tag rect { fill: var(--bg); stroke: var(--callc); stroke-width: 1.2; }
+.via-tag text { fill: var(--callc-text); font: 11px var(--mono); text-anchor: middle; }
+.via-tag:hover rect { fill: color-mix(in srgb, var(--callc) 14%, var(--bg)); }
 .edge.use { stroke: var(--type); stroke-dasharray: 2 4; }
 .edge.member { stroke: var(--border); stroke-width: 1.2; }
 .edge.link { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 1 3; }
@@ -752,6 +773,8 @@ details.generated > summary { cursor: pointer; color: var(--muted); margin: 12px
 .manifest tr.m-del .mf-name code { text-decoration: line-through; text-decoration-color: var(--removed); }
 .manifest .mf-old del { color: var(--muted); text-decoration-color: var(--removed); }
 .manifest .mf-old, .manifest .mf-new { padding-left: 24px; }
+.manifest .mf-key { color: var(--muted); }
+.manifest tr.mf-cont td { padding-top: 0; }
 /* Lock files: updates labeled by what changed in the version. */
 .lk-bump { font-size: 12px; color: var(--muted); }
 .lk-bump.lk-major, .lk-bump.lk-down { color: var(--changed); font-weight: 600; }
@@ -1041,7 +1064,10 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
 .cg-row.context .cg-name { color: var(--muted); }
 .cg-name { font-family: var(--mono); overflow-wrap: anywhere; flex: 1; min-width: 0; }
 .cg-name .kind { font: 12px var(--sans); color: var(--muted); }
+.cg-name .st { margin-left: 4px; }
 .cg-mod { display: block; font: 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The unchanged items between a row's item and the focused one. */
+.cg-via { display: block; font: italic 12px var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .cg-n { font: 12px var(--mono); color: var(--muted); flex: none; }
 .cg-done { color: var(--added); flex: none; }
 .cg-more { width: 100%; min-height: 44px; border: none; border-radius: 0; background: var(--panel); color: var(--link); font-size: 14px; }
@@ -1175,10 +1201,27 @@ kbd { display: inline-block; min-width: 1.4em; padding: 1px 5px; border: 1px sol
   .irow > .iacts .rv-scope, .cg-focus .card-rv .rv-scope { display: none; }
 }
 
+/* Changed items (overview): a section per call graph, its heading kept
+   in view while its items scroll past (at the top of the page's padding,
+   which sticky positioning leaves out). */
+.cgi { margin: 0 0 24px; }
+/* A row body that is rendered once it comes near the view. */
+.irow > .lazy-body { grid-column: 1 / -1; min-height: 48px; }
+.cgi-h { position: sticky; top: -22px; z-index: 3; display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px;
+  margin: 0 -34px; padding: 8px 34px; background: var(--bg); border-bottom: 1px solid var(--border); }
+.cgi-title { font: 600 15px var(--sans); display: inline-flex; flex-wrap: wrap; align-items: baseline; gap: 0 6px; }
+.cgi-title code { font: 600 15px var(--mono); }
+.cgi-acts { display: flex; gap: 4px; }
+.cgi .irow, .cgi .impl-line, .cgraph { scroll-margin-top: 52px; }
+@media (max-width: 760px) {
+  .cgi-h { top: -14px; margin: 0 -12px; padding: 8px 12px; }
+}
+
 /* Changed call graphs (overview): one card per graph, its parts
    labeled on the left (stacked on a phone). */
 .irow.cgraph { padding: 12px 14px; border: 1px solid color-mix(in srgb, var(--border) 55%, transparent); border-radius: 8px; }
 .irow.cgraph + .irow.cgraph { margin-top: 12px; }
+.irow.cgraph.cg-again { margin: 12px 0; }
 .cgraph .cg-roots { display: inline-flex; flex-wrap: wrap; gap: 0 4px; }
 .cgraph .cg-roots code { font: 600 15px var(--mono); }
 .cgraph .cg-title { font: 600 15px var(--sans); }

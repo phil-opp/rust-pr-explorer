@@ -15,6 +15,12 @@ inputs:
       and for writing the comment. Needs `actions: read` and
       `pull-requests: write`.
     default: ${{ github.token }}
+  update-comment:
+    description: >-
+      Keep one comment per pull request and update it on every push,
+      instead of posting a new comment for every push that changes the PR
+      (see the same input of `phil-opp/rust-semantic-review`).
+    default: "false"
 
 runs:
   using: composite
@@ -32,4 +38,5 @@ runs:
         HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
         SERVER: ${{ github.server_url }}
+        UPDATE_COMMENT: ${{ inputs.update-comment }}
       run: '"$GITHUB_ACTION_PATH/comment.sh"'

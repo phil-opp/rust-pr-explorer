@@ -1006,6 +1006,22 @@ pub struct ManifestChange {
     pub old: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub new: Option<String>,
+    /// For an entry that is a table on both sides, such as
+    /// `{ path = "core", version = "1.0" }`: the keys whose values
+    /// changed, in key order. Empty otherwise.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keys: Vec<ManifestKeyChange>,
+}
+
+/// One key of a table entry in a `Cargo.toml` whose value changed.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ManifestKeyChange {
+    pub key: String,
+    /// The value as written before and after, `None` if absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub old: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new: Option<String>,
 }
 
 /// A package of a lock file whose locked versions, source or checksum

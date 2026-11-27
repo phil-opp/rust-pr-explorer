@@ -192,9 +192,9 @@ pub fn module_href(m: &str) -> String {
     href(&Route::Module(m.to_string(), None))
 }
 
-/// The `href` of a link to an item's row on its module page.
+/// The `href` of a link to an item's row on the overview (or, if the
+/// overview doesn't list it, on its module page; see `show`).
 pub fn row_href(id: &str) -> String {
-    // The overview's anchors of items lead to their module page (see `show`).
     href(&Route::Overview(Some(Anchor::Item(id.to_string()))))
 }
 
@@ -476,9 +476,13 @@ fn show(app: &mut App, wanted: Route, first: bool) {
             Route::Module(m, a)
         }
         Route::Module(..) => Route::Overview(None),
-        // The overview listed public items in full before it listed them
-        // as links: links to them (in PR comments) open the module page.
+        // The overview lists every changed item; links to others (an
+        // unchanged item that cargo-semver-checks labeled) open the module
+        // page.
         Route::Overview(Some(Anchor::Item(id))) => match app.d.item(&id) {
+            Some(_) if crate::listing::lists(&app.d, &id) => {
+                Route::Overview(Some(Anchor::Item(id)))
+            }
             Some(it) => Route::Module(app.d.mod_of(it).to_string(), Some(Anchor::Item(id))),
             None => Route::Overview(None),
         },

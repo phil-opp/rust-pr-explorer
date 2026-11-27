@@ -12,6 +12,10 @@
 # artifacts of the analysis run.
 set -euo pipefail
 
+case "${UPDATE_COMMENT:-false}" in
+  true | false) ;;
+  *) echo "::error::update-comment must be true or false, not '$UPDATE_COMMENT'"; exit 1 ;;
+esac
 if [ "$EVENT" != "workflow_run" ]; then
   echo "::error::The comment-only action runs in a workflow triggered by workflow_run, not $EVENT."
   exit 1

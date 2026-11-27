@@ -365,7 +365,7 @@ impl Analyzer {
         generics.extend(node_generics(&p.node));
         sig_col.shadow(generics.iter().cloned());
         body_col.shadow(generics);
-        body_col.shadow(node_bindings(&p.node));
+        body_col.bind(node_bindings(&p.node));
         let Rendered {
             attrs,
             vis,

@@ -103,7 +103,7 @@ pub(super) fn node_generics(node: &Node) -> Vec<String> {
 }
 
 /// Names bound inside an item's signature and body.
-pub(super) fn node_bindings(node: &Node) -> Vec<String> {
+pub(super) fn node_bindings(node: &Node) -> Bindings {
     use syn::visit::Visit;
     let mut b = Bindings::default();
     match node {
@@ -126,7 +126,7 @@ pub(super) fn node_bindings(node: &Node) -> Vec<String> {
         Node::ImplConst(c) => b.visit_expr(&c.expr),
         _ => {}
     }
-    b.0
+    b
 }
 
 /// Type and const parameter names of some generics.

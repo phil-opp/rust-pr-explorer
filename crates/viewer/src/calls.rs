@@ -11,6 +11,7 @@
 
 use crate::code::esc;
 use crate::data::{Data, changed};
+use crate::indirect;
 use crate::review::{self, Mark};
 use crate::{App, View, dom};
 use model::{Item, Kind};
@@ -119,14 +120,39 @@ fn users(d: &Data, id: &str) -> Vec<String> {
     v
 }
 
-/// Changed items first; the rest is context.
+/// Changed items first; the rest is context. Tests and test-only code go
+/// after everything else, since they rarely matter when judging who uses
+/// an item, again with the changed ones first.
 fn changed_first(d: &Data, list: &mut [String]) {
-    list.sort_by_key(|t| !d.item(t).is_some_and(|it| changed(it) || d.touched(it)));
+    sort_rows(list, |t| {
+        d.item(t).map_or((false, false), |it| {
+            (
+                changed(it) || d.touched(it),
+                it.info.test || it.info.test_only,
+            )
+        })
+    });
+}
+
+/// Sorts `list` by what `class` says of each entry, `(changed, test)`:
+/// non-test before test, changed before unchanged within each. The sort
+/// is stable, so entries keep their order otherwise.
+fn sort_rows(list: &mut [String], class: impl Fn(&str) -> (bool, bool)) {
+    list.sort_by_key(|t| {
+        let (changed, test) = class(t);
+        (test, !changed)
+    });
 }
 
 /// One related item: a row to tap, with how many callers and callees it
 /// has in turn, so that one can tell where the graph goes on.
 fn row_html(d: &Data, id: &str) -> String {
+    via_row_html(d, id, "")
+}
+
+/// A row like [`row_html`], with a note under the name (for an item
+/// reached through others: "via `a` → `b`").
+fn via_row_html(d: &Data, id: &str, via: &str) -> String {
     let Some(it) = d.item(id) else {
         return String::new();
     };
@@ -150,13 +176,19 @@ fn row_html(d: &Data, id: &str) -> String {
         it.status.css()
     };
     let context = !changed(it) && !d.touched(it);
+    let via = if via.is_empty() {
+        String::new()
+    } else {
+        format!(r#"<span class="cg-via">{}</span>"#, esc(via))
+    };
     format!(
-        r#"<button class="cg-row{}" data-cfocus="{}" title="{}"><span class="dot {dot}"></span><span class="cg-name"><span class="kind">{}</span> {}{}<span class="cg-mod">{}</span></span>{done}{counts}</button>"#,
+        r#"<button class="cg-row{}" data-cfocus="{}" title="{}"><span class="dot {dot}"></span><span class="cg-name"><span class="kind">{}</span> {}{}{}<span class="cg-mod">{}</span>{via}</span>{done}{counts}</button>"#,
         if context { " context" } else { "" },
         esc(id),
         esc(&format!("Focus {}", d.short_path(id))),
         it.info.kind.label(),
         esc(&d.display_name(it)),
+        crate::data::test_tag_of(it),
         crate::unsafety::tag(it),
         esc(&d.mod_label(d.mod_of(it))),
     )
@@ -209,6 +241,60 @@ fn section_html(
         } else {
             format!(r#"<div class="cg-list">{rows}</div>"#)
         }
+    )
+}
+
+/// The changed items that `id` calls (`down`), or that call it, through
+/// unchanged items in between (see [`indirect::reach`]), as a section.
+/// Empty when there are none.
+fn indirect_html(d: &Data, id: &str, down: bool) -> String {
+    let is_changed = |x: &str| d.item(x).is_some_and(|it| changed(it) || d.touched(it));
+    let found = if down {
+        indirect::reach(
+            id,
+            |x| d.item(x).map(|it| callees(d, it)).unwrap_or_default(),
+            is_changed,
+        )
+    } else {
+        indirect::reach(id, |x| callers(d, x), is_changed)
+    };
+    if found.is_empty() {
+        return String::new();
+    }
+    let rows: String = found
+        .iter()
+        .map(|r| {
+            let paths: Vec<String> = r
+                .paths
+                .iter()
+                .map(|p| {
+                    let mut names: Vec<String> = p.iter().map(|x| d.display_name_of(x)).collect();
+                    // In call order: from the caller.
+                    if !down {
+                        names.reverse();
+                    }
+                    format!("via {}", indirect::path_label(&names))
+                })
+                .collect();
+            via_row_html(d, &r.to, &paths.join(", "))
+        })
+        .collect();
+    let (class, title, help) = if down {
+        (
+            "cg-calls-via",
+            "Calls through unchanged items",
+            "Changed items this one calls through one or two unchanged items in between.",
+        )
+    } else {
+        (
+            "cg-callers-via",
+            "Called through unchanged items",
+            "Changed items that call this one through one or two unchanged items in between.",
+        )
+    };
+    format!(
+        r#"<section class="cg-sec {class}"><h2 title="{help}">{title} <span class="cg-count">{}</span></h2><div class="cg-list">{rows}</div></section>"#,
+        found.len()
     )
 }
 
@@ -357,6 +443,7 @@ pub fn render(app: &App) {
             "Nothing in the analyzed code calls this.",
             &up,
         ));
+        above.push_str(&indirect_html(d, id, false));
     }
     if !used.is_empty() || !is_fn && it.info.kind != Kind::Mod {
         above.push_str(&section_html(
@@ -384,6 +471,7 @@ pub fn render(app: &App) {
             "Calls nothing in the analyzed code.",
             &down,
         ) + &unresolved
+            + &indirect_html(d, id, true)
     } else {
         String::new()
     };
@@ -448,4 +536,21 @@ pub fn on_click(app: &mut App, el: &Element) -> bool {
         _ => return false,
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Tests go last, changed entries go first within tests and non-tests,
+    /// and the order is kept otherwise.
+    #[test]
+    fn tests_sort_after_other_rows() {
+        let class = |t: &str| (t.starts_with('c'), t.ends_with("_test"));
+        let mut list: Vec<String> = ["a_test", "c_test", "u1", "c1", "u2", "c2"]
+            .map(String::from)
+            .to_vec();
+        sort_rows(&mut list, class);
+        assert_eq!(list, ["c1", "c2", "u1", "u2", "c_test", "a_test"]);
+    }
 }

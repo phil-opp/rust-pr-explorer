@@ -267,6 +267,12 @@ pub fn render_sidebar(app: &App) {
     );
 }
 
+/// An item's row in the overview's list of changed items, with its
+/// module, since the list isn't by module.
+pub fn overview_row(d: &Data, it: &Item, member: bool) -> String {
+    item_row_in(d, it, &it.info.module, false, member, true, true)
+}
+
 /// One item in a listing: kind, name, status, signature and first docs paragraph.
 fn item_row(
     d: &Data,
@@ -278,25 +284,29 @@ fn item_row(
     // already does.
     badge: bool,
 ) -> String {
-    let title = d.title_html(it, false);
-    // What changed in the body, expandable to the diff; the whole source
-    // of new and removed items, and of items with review threads.
-    let src = if it.changes.body
-        || it.changes.cosmetic
-        || matches!(it.status, Status::Added | Status::Removed)
-        || !d.item_threads(&it.info.id).is_empty()
-    {
-        d.source_seg(it, None, false, &Default::default())
+    item_row_in(d, it, scope, context, member, badge, false)
+}
+
+fn item_row_in(
+    d: &Data,
+    it: &Item,
+    scope: &str,
+    context: bool,
+    member: bool,
+    badge: bool,
+    // On the overview: with the item's module, and the body rendered once
+    // it comes near the view (see `listing::observe`).
+    overview: bool,
+) -> String {
+    let title = d.title_html(it, overview);
+    let body = if overview && !crate::listing::was_filled(&it.info.id) {
+        format!(
+            r#"<div class="lazy-body" data-lazy="{}"></div>"#,
+            esc(&it.info.id)
+        )
     } else {
-        None
+        row_body(d, it, scope)
     };
-    let body = format!(
-        "{}{}{}{}",
-        crate::unsafety::lines_html(&it.unsafe_code),
-        d.api_reasons_html(it),
-        crate::impact::line_html(d, it),
-        d.item_body_html(it, scope, false, src)
-    );
     format!(
         r#"<div class="irow {} {} {} {}" data-id="{}">
         <div class="ihead"><span class="kind">{}</span>{} {} {} {}{}</div>
@@ -397,8 +407,31 @@ fn item_with_members(
     format!(r#"<div class="ientry {class}">{html}{inner}{rest}</div>"#)
 }
 
+/// Everything below an item row's heading: unsafe code, SemVer reasons,
+/// impact, signature, docs and the diff of its source.
+pub fn row_body(d: &Data, it: &Item, scope: &str) -> String {
+    // What changed in the body, expandable to the diff; the whole source
+    // of new and removed items, and of items with review threads.
+    let src = if it.changes.body
+        || it.changes.cosmetic
+        || matches!(it.status, Status::Added | Status::Removed)
+        || !d.item_threads(&it.info.id).is_empty()
+    {
+        d.source_seg(it, None, false, &Default::default())
+    } else {
+        None
+    };
+    format!(
+        "{}{}{}{}",
+        crate::unsafety::lines_html(&it.unsafe_code),
+        d.api_reasons_html(it),
+        crate::impact::line_html(d, it),
+        d.item_body_html(it, scope, false, src)
+    )
+}
+
 /// A trait impl of a listed type, as one line.
-fn impl_line(d: &Data, m: &Item, badge: bool) -> String {
+pub fn impl_line(d: &Data, m: &Item, badge: bool) -> String {
     use crate::code::{Links, code_html};
     let header = code_html(
         d,
@@ -450,13 +483,16 @@ pub fn render_overview(app: &App) {
             format!(
                 r#"<h2>Public API changes {}</h2>{semver}"#,
                 help_html(
-                    "Changes to what other crates can use, by their public path, with their SemVer label and its first reason. A click shows the item on its module page, with its signature, docs and all reasons. Changes to a public function's body or docs only are no API change: they are in the call graphs above."
+                    "Changes to what other crates can use, by their public path, with their SemVer label and its first reason. A click shows its full entry in the changed items below, with its signature, docs and all reasons. Changes to a public function's body or docs only are no API change: they are in the call graphs above."
                 )
             )
         };
-        unsafe_html + &crate::graphs::overview_html(d) + &public
+        let gs = crate::graphs::graphs(d);
+        unsafe_html
+            + &crate::graphs::overview_html(d, &gs)
+            + &public
+            + &crate::listing::overview_html(d, &gs)
     };
-    let meta = &d.out.meta;
     let html = format!(
         r#"<h1>{}</h1>
         {}
@@ -466,11 +502,7 @@ pub fn render_overview(app: &App) {
         {}
         {}
         {}"#,
-        esc(meta
-            .pr
-            .as_ref()
-            .and_then(|p| p.title.as_deref())
-            .unwrap_or(&meta.title)),
+        d.heading_html(),
         match d.compared_html() {
             c if c.is_empty() => c,
             c => format!(r#"<div class="sub pr-meta">{c}</div>"#),
@@ -483,6 +515,7 @@ pub fn render_overview(app: &App) {
         crate::files::other_files_html(d),
     );
     dom::set_html("view-overview", &html);
+    crate::listing::observe(&app.d);
     sync_header_title();
 }
 

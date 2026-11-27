@@ -108,6 +108,79 @@ impl Analyzer {
         self.resolve_depth(module, segs, self_ty, ns, 0)
     }
 
+    /// Like [`Self::resolve`], for a path inside a body with its own `use`
+    /// declarations (`imports`, flattened). These come first: an import
+    /// names its target; a glob import is searched before the module's
+    /// scope, and one we can't see into makes the name uncertain.
+    pub(super) fn resolve_with_imports(
+        &self,
+        module: &str,
+        imports: &[(Option<String>, Vec<String>)],
+        segs: &[String],
+        self_ty: Option<&str>,
+        ns: Option<Ns>,
+    ) -> Option<Res> {
+        let first = segs.first()?;
+        if matches!(first.as_str(), "crate" | "self" | "super" | "Self") {
+            return self.resolve(module, segs, self_ty, ns);
+        }
+        let first_ns = if segs.len() == 1 { ns } else { Some(Ns::Type) };
+        // Through `prefix`, the path is `prefix ++ segs[1..]`; shown as
+        // written.
+        let via = |prefix: &[String]| {
+            let full: Vec<String> = prefix.iter().chain(&segs[1..]).cloned().collect();
+            let r = self.resolve(module, &full, self_ty, ns)?;
+            let display_start = r.display_start.saturating_sub(prefix.len() - 1);
+            Some(Res { display_start, ..r })
+        };
+        // A later import of the same name shadows an earlier one.
+        if let Some((_, path)) = imports
+            .iter()
+            .rev()
+            .find(|(alias, _)| alias.as_deref() == Some(first.as_str()))
+        {
+            return via(path);
+        }
+        let mut found: Option<Res> = None;
+        for (_, glob) in imports.iter().filter(|(alias, _)| alias.is_none()) {
+            let target = match self.resolve(module, glob, None, Some(Ns::Type)) {
+                Some(Res {
+                    id: Some(target), ..
+                }) => target,
+                // Outside the analyzed crates: could bring any name.
+                _ => return None,
+            };
+            let provides = match self.kinds.get(&target) {
+                Some(Kind::Mod) => {
+                    if self.lookup_name(&target, first, first_ns, 0).is_some() {
+                        true
+                    } else if self.has_opaque_glob(&target, 0) {
+                        return None;
+                    } else {
+                        false
+                    }
+                }
+                // `use Enum::*` imports the variants.
+                Some(Kind::Enum) => self
+                    .enum_variants
+                    .get(&target)
+                    .is_some_and(|v| v.contains(first)),
+                _ => return None,
+            };
+            if provides {
+                let mut prefix = glob.clone();
+                prefix.push(first.clone());
+                let r = via(&prefix)?;
+                match &found {
+                    // Two globs bring the name: ambiguous.
+                    Some(f) if f.path != r.path => return None,
+                    _ => found = Some(r),
+                }
+            }
+        }
+        found.or_else(|| self.resolve(module, segs, self_ty, ns))
+    }
+
     fn resolve_depth(
         &self,
         module: &str,

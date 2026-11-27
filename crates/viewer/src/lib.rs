@@ -13,13 +13,16 @@ mod commit_filter;
 mod css;
 mod data;
 mod dom;
+mod drafts;
 mod files;
 mod graphs;
 mod icons;
 mod impact;
+mod indirect;
 mod js;
 mod keys;
 mod line_notes;
+mod listing;
 mod map;
 mod nav;
 mod outline;
@@ -502,7 +505,12 @@ fn install_listeners() {
         });
     });
     dom::listen(&doc, "input", |ev| {
-        if dom::target_element(&ev).is_some_and(|el| el.id() == "rv-body") {
+        let Some(el) = dom::target_element(&ev) else {
+            return;
+        };
+        // A dialog can close before its text is saved (see `drafts`).
+        drafts::on_input(&el);
+        if el.id() == "rv-body" {
             with_app(|app| update_finish(app));
         }
     });
@@ -715,16 +723,7 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
             // On a page: jump to the item if the page shows it, else open
             // it on the canvas.
             None => match row_on_page(&a, &id) {
-                Some(row) => {
-                    // A history entry, so that Back returns to the link.
-                    app.s.anchor = Some(nav::PageAnchor {
-                        view: app.s.view,
-                        module: app.s.module.clone(),
-                        to: nav::Anchor::Item(id),
-                    });
-                    reveal(&row);
-                    nav::record(app);
-                }
+                Some(row) => jump_to_row(app, id, &row),
                 None => open_item(app, &id),
             },
         }
@@ -749,6 +748,22 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         open_item(app, &dom::data(&b, "open").unwrap_or_default());
         return;
     }
+    // The overview's call graphs: from a graph's summary to its items and
+    // back.
+    for (attr, target) in [("cgitems", "cgitems"), ("cgraph-summary", "cgraph")] {
+        if let Some(b) = dom::closest(el, &format!("[data-{attr}]")) {
+            let i = dom::data(&b, attr).unwrap_or_default();
+            if let Some(t) = dom::by_id(&format!("{target}-{i}")) {
+                reveal(&t);
+            }
+            return;
+        }
+    }
+    if let Some(b) = dom::closest(el, "[data-calls-focus]") {
+        let id = dom::data(&b, "calls-focus").unwrap_or_default();
+        calls::focus(app, &id);
+        return;
+    }
     if let Some(b) = dom::closest(el, "[data-cgraph]") {
         let i = dom::data(&b, "cgraph")
             .and_then(|i| i.parse().ok())
@@ -763,10 +778,13 @@ fn on_click(app: &mut App, el: &Element, ev: &Event) {
         return;
     }
     if let Some(f) = dom::closest(el, "[data-goto-item]") {
-        // An item on its module page, e.g. from the overview's list of
-        // public API changes.
+        // An item further down the page if it lists the item (the
+        // overview's list of public API changes), else on its module page.
         let id = dom::data(&f, "goto-item").unwrap_or_default();
-        show_on_module_page(app, &id);
+        match row_on_page(&f, &id) {
+            Some(row) => jump_to_row(app, id, &row),
+            None => show_on_module_page(app, &id),
+        }
         return;
     }
     if let Some(f) = dom::closest(el, "[data-goto-file]") {
@@ -907,6 +925,10 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
         }
         return true;
     }
+    if dom::closest(el, "[data-rv-draft-discard]").is_some() {
+        drafts::discard_editor();
+        return true;
+    }
     if let Some(b) = dom::closest(el, "[data-rv-save]") {
         let verdict = dom::data(&b, "rv-save").and_then(|v| review::Verdict::from_name(&v));
         if let Some(v) = verdict {
@@ -928,6 +950,8 @@ fn on_review_click(app: &mut App, el: &Element) -> bool {
     }
     if dom::closest(el, "#rv-finish").is_some() {
         open_modal("Finish your review", &post::finish_html(&app.d));
+        drafts::restore_summary();
+        update_finish(app);
         return true;
     }
     if dom::closest(el, "#rv-mode, #rv-exit").is_some() {
@@ -1125,7 +1149,11 @@ fn next_steps_html(app: &App, unit: &str) -> String {
             CanvasNext::Done => String::new(),
         }
     } else {
-        review::next_open(Some(unit)).map_or(String::new(), |next| {
+        let next = match overview_order(app) {
+            Some(order) => next_on_page(&order, Some(unit)),
+            None => review::next_open(Some(unit)),
+        };
+        next.map_or(String::new(), |next| {
             format!(
                 r#"<button class="rv-go-btn" data-rv-go-next title="The next item that needs a review, in review order (j)">Next unreviewed: <code>{}</code> ▸</button>"#,
                 name(&next)
@@ -1214,6 +1242,7 @@ fn open_editor(app: &App, id: &str, verdict: review::Verdict) {
         ),
         &post::editor_html(&app.d, id, verdict),
     );
+    drafts::restore_editor();
     if let Some(t) = dom::by_id("rv-text").and_then(|t| t.dyn_into::<web_sys::HtmlElement>().ok()) {
         let _ = t.focus();
     }
@@ -1235,6 +1264,9 @@ fn save_from_editor(app: &mut App, verdict: review::Verdict) {
     if verdict != review::Verdict::Approve && text.trim().is_empty() {
         toast("Write a comment first.");
         return;
+    }
+    if let Some(field) = drafts::editor_field() {
+        drafts::remove(&field);
     }
     close_modal();
     if let Some(id) = line_notes::editor_id(&id) {
@@ -1436,19 +1468,27 @@ fn go_next(app: &mut App, from: Option<String>, stay: bool) {
             .find(|c| dom::data(c, "rv").as_deref() == Some(unit))
             .cloned()
     };
-    if stay && app.s.view == View::Overview {
-        match review::next_open_where(from.as_deref(), |u| control(u).is_some()) {
+    // The overview lists every unit: Next ▸ goes down the page, like a
+    // review of the files on GitHub.
+    if app.s.view == View::Overview {
+        let order: Vec<String> = here.iter().filter_map(|c| dom::data(c, "rv")).collect();
+        match next_on_page(&order, from.as_deref()) {
             Some(next) => {
                 if let Some(c) = control(&next) {
-                    app.s.rv_current = Some(next);
-                    app.s.rv_hunk = None;
-                    reveal(&c);
+                    nav::step(|| {
+                        app.s.rv_current = Some(next);
+                        app.s.rv_hunk = None;
+                        reveal(&c);
+                    });
                 }
             }
-            None if review::next_open(from.as_deref()).is_some() => {
+            None if stay && review::next_open(from.as_deref()).is_some() => {
                 toast("Everything on the overview is reviewed. Next ▸ goes on with the rest.");
             }
-            None => toast(&all_reviewed()),
+            None => match review::next_open(from.as_deref()) {
+                Some(next) => show_unit(app, &next, from.as_deref()),
+                None => toast(&all_reviewed()),
+            },
         }
         return;
     }
@@ -1466,6 +1506,36 @@ fn go_next(app: &mut App, from: Option<String>, stay: bool) {
         return;
     };
     show_unit(app, &next, from.as_deref());
+}
+
+/// The first unit of `order` (the units a page lists, top to bottom)
+/// after `from` that still needs a review, wrapping around.
+fn next_on_page(order: &[String], from: Option<&str>) -> Option<String> {
+    let start = from
+        .and_then(|f| order.iter().position(|u| u == f))
+        .map_or(0, |i| i + 1);
+    let n = order.len();
+    (0..n)
+        .map(|k| &order[(start + k) % n])
+        .find(|u| review::mark(u) != Some(review::Mark::Done))
+        .cloned()
+}
+
+/// The units the overview lists, top to bottom, if it is the open view:
+/// the order of the review steps there.
+pub fn overview_order(app: &App) -> Option<Vec<String>> {
+    if app.s.view != View::Overview {
+        return None;
+    }
+    let sec = dom::by_id("view-overview")?;
+    let mut seen = HashSet::new();
+    Some(
+        dom::query_all_in(&sec, ".rvc")
+            .iter()
+            .filter_map(|c| dom::data(c, "rv"))
+            .filter(|id| !id.contains('#') && seen.insert(id.clone()))
+            .collect(),
+    )
 }
 
 /// Makes `unit` the current unit and shows it: on the overview or module
@@ -1534,6 +1604,18 @@ fn reveal_unit(section: &str, unit: &str) -> bool {
     }
 }
 
+/// Scrolls to item `id`'s row on the page that is shown, with a history
+/// entry, so that Back returns to the link that led there.
+fn jump_to_row(app: &mut App, id: String, row: &Element) {
+    app.s.anchor = Some(nav::PageAnchor {
+        view: app.s.view,
+        module: app.s.module.clone(),
+        to: nav::Anchor::Item(id),
+    });
+    reveal(row);
+    nav::record(app);
+}
+
 /// The row of item `id` in the view that `link` is in, if that view shows
 /// the item.
 fn row_on_page(link: &Element, id: &str) -> Option<Element> {
@@ -1574,8 +1656,26 @@ fn reveal(control: &Element) {
     let row = keys::row_of(control);
     let opts = web_sys::ScrollIntoViewOptions::new();
     opts.set_block(web_sys::ScrollLogicalPosition::Start);
-    opts.set_behavior(web_sys::ScrollBehavior::Smooth);
-    row.scroll_into_view_with_scroll_into_view_options(&opts);
+    if dom::closest(&row, "#view-overview").is_some() {
+        // The overview renders the bodies of its rows once they come near
+        // the view (see `listing::observe`), so the rows above the target
+        // grow after a jump. A smooth scroll would render those it passes
+        // and end short of the target, so the jump is instant, and is
+        // made again once the rows around the target have their height.
+        listing::fill_in(&row);
+        row.scroll_into_view_with_scroll_into_view_options(&opts);
+        let again = row.clone();
+        dom::raf(move || {
+            dom::raf(move || {
+                let opts = web_sys::ScrollIntoViewOptions::new();
+                opts.set_block(web_sys::ScrollLogicalPosition::Start);
+                again.scroll_into_view_with_scroll_into_view_options(&opts);
+            })
+        });
+    } else {
+        opts.set_behavior(web_sys::ScrollBehavior::Smooth);
+        row.scroll_into_view_with_scroll_into_view_options(&opts);
+    }
     dom::toggle_class(&row, "rv-flash", false);
     dom::raf(move || {
         dom::toggle_class(&row, "rv-flash", true);
