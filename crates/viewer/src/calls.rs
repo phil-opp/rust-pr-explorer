@@ -163,12 +163,13 @@ fn via_row_html(d: &Data, id: &str, via: &str) -> String {
         format!(r#"<span class="cg-via">{}</span>"#, esc(via))
     };
     format!(
-        r#"<button class="cg-row{}" data-cfocus="{}" title="{}"><span class="dot {dot}"></span><span class="cg-name"><span class="kind">{}</span> {}{}<span class="cg-mod">{}</span>{via}</span>{done}{counts}</button>"#,
+        r#"<button class="cg-row{}" data-cfocus="{}" title="{}"><span class="dot {dot}"></span><span class="cg-name"><span class="kind">{}</span> {}{}{}<span class="cg-mod">{}</span>{via}</span>{done}{counts}</button>"#,
         if context { " context" } else { "" },
         esc(id),
         esc(&format!("Focus {}", d.short_path(id))),
         it.info.kind.label(),
         esc(&d.display_name(it)),
+        crate::data::test_tag_of(it),
         crate::unsafety::tag(it),
         esc(&d.mod_label(d.mod_of(it))),
     )
