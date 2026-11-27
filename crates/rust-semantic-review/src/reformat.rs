@@ -41,8 +41,8 @@ pub fn find(
     if ot.len() > MAX_TOKENS || nt.len() > MAX_TOKENS {
         return Vec::new();
     }
-    let ok: Vec<&str> = ot.iter().map(|t| t.text.as_str()).collect();
-    let nk: Vec<&str> = nt.iter().map(|t| t.text.as_str()).collect();
+    let ok: Vec<String> = ot.iter().map(Token::key).collect();
+    let nk: Vec<String> = nt.iter().map(Token::key).collect();
     let deadline = Instant::now() + Duration::from_millis(200);
     let ops = capture_diff_slices_deadline(Algorithm::Patience, &ok, &nk, Some(deadline));
 
@@ -137,7 +137,7 @@ pub fn find(
                 .zip(&requalified)
                 .filter(|(_, re)| !**re)
                 .flat_map(|((ro, rn), _)| ot[ro.clone()].iter().chain(&nt[rn.clone()]))
-                .filter(|t| t.text != ",")
+                .filter(|t| t.literal || t.text != ",")
                 .map(|t| t.text.chars().count())
                 .sum();
             if changed > g.same {
@@ -321,9 +321,11 @@ fn same_without(old: &str, removed: &[RemovedTokens], new: &str, added: &[TokenS
 /// (`std::process::` of `std::process::Command::new`): the index of the
 /// path's first segment. An empty run must be right before a segment.
 fn path_start(toks: &[Token], run: &Range<usize>) -> Option<usize> {
-    let segment = |i: usize| is_segment(&toks[i].text);
-    let colon = |i: usize| toks[i].text == ":";
-    if !toks.get(run.start).is_some_and(|t| is_segment(&t.text))
+    let segment = |i: usize| !toks[i].literal && is_segment(&toks[i].text);
+    let colon = |i: usize| !toks[i].literal && toks[i].text == ":";
+    if !toks
+        .get(run.start)
+        .is_some_and(|t| !t.literal && is_segment(&t.text))
         || !run.clone().all(|i| segment(i) || colon(i))
     {
         return None;
@@ -353,10 +355,12 @@ struct Group {
 
 /// The spans that `toks` (a run of consecutive tokens) cover, one per
 /// line, from the first token's start to the last one's end on that line.
-/// Spans of only commas are left out: rustfmt adds and removes those, and
-/// an added argument brings one along.
+/// Spans of only commas are left out, unless they are in a string literal:
+/// rustfmt adds and removes those, and an added argument brings one along.
 fn spans(text: &Text, toks: &[Token]) -> Vec<TokenSpan> {
     let mut out: Vec<TokenSpan> = Vec::new();
+    // Whether each span of `out` has a token of a string literal.
+    let mut literal: Vec<bool> = Vec::new();
     for t in toks {
         let (mut line, mut col) = text.pos(t.start);
         let (end_line, end_col) = text.pos(t.end);
@@ -367,23 +371,34 @@ fn spans(text: &Text, toks: &[Token]) -> Vec<TokenSpan> {
                 text.line_len(line)
             };
             match out.last_mut() {
-                Some(s) if s.line as usize == line => s.end = end as u32,
-                _ => out.push(TokenSpan {
-                    line: line as u32,
-                    start: col as u32,
-                    end: end as u32,
-                }),
+                Some(s) if s.line as usize == line => {
+                    s.end = end as u32;
+                    *literal.last_mut().unwrap() |= t.literal;
+                }
+                _ => {
+                    out.push(TokenSpan {
+                        line: line as u32,
+                        start: col as u32,
+                        end: end as u32,
+                    });
+                    literal.push(t.literal);
+                }
             }
             line += 1;
             col = 0;
         }
     }
-    out.retain(|s| {
-        text.slice(*s)
-            .chars()
-            .any(|c| !c.is_whitespace() && c != ',')
-    });
-    out
+    out.into_iter()
+        .zip(literal)
+        .filter(|(s, literal)| {
+            *literal
+                || text
+                    .slice(*s)
+                    .chars()
+                    .any(|c| !c.is_whitespace() && c != ',')
+        })
+        .map(|(s, _)| s)
+        .collect()
 }
 
 /// The lines of a version joined, with a way to turn character offsets
@@ -444,11 +459,30 @@ struct Token {
     last: usize,
     start: usize,
     end: usize,
+    /// Whether the token is part of a string literal.
+    literal: bool,
+}
+
+impl Token {
+    /// What the token diff compares: a word of a string never matches a
+    /// token of code.
+    fn key(&self) -> String {
+        if self.literal {
+            format!("\"{}", self.text)
+        } else {
+            self.text.clone()
+        }
+    }
 }
 
 /// The tokens of `lines`, without whitespace, and without trailing commas
 /// (a `,` right before a closing bracket), which rustfmt adds and removes
 /// when it rewraps.
+///
+/// String literals are split into words, so that a string that changed
+/// one word and was then moved to its own line by rustfmt is that word.
+/// The whitespace inside a string is part of its value: it stays in the
+/// word after it.
 fn tokens(lines: &[&str]) -> Vec<Token> {
     let text = lines.join("\n");
     let chars: Vec<char> = text.chars().collect();
@@ -466,6 +500,23 @@ fn tokens(lines: &[&str]) -> Vec<Token> {
         }
         let start = i;
         let next = chars.get(i + 1).copied();
+        if let Some(end) = string_end(&chars, i) {
+            for (start, end) in string_words(&chars, i, end) {
+                let s: String = chars[start..end].iter().collect();
+                let lines_in = s.matches('\n').count();
+                out.push(Token {
+                    text: s,
+                    first: line,
+                    last: line + lines_in,
+                    start,
+                    end,
+                    literal: true,
+                });
+                line += lines_in;
+            }
+            i = end;
+            continue;
+        }
         i = if c == '/' && next == Some('/') {
             chars[i..]
                 .iter()
@@ -473,8 +524,6 @@ fn tokens(lines: &[&str]) -> Vec<Token> {
                 .map_or(chars.len(), |p| i + p)
         } else if c == '/' && next == Some('*') {
             block_comment_end(&chars, i)
-        } else if let Some(end) = string_end(&chars, i) {
-            end
         } else if c == '\'' {
             char_end(&chars, i)
         } else if c.is_alphanumeric() || c == '_' {
@@ -494,7 +543,9 @@ fn tokens(lines: &[&str]) -> Vec<Token> {
         } else {
             s
         };
-        if matches!(s.as_str(), ")" | "]" | "}") && out.last().is_some_and(|t| t.text == ",") {
+        if matches!(s.as_str(), ")" | "]" | "}")
+            && out.last().is_some_and(|t| !t.literal && t.text == ",")
+        {
             out.pop();
         }
         out.push(Token {
@@ -503,8 +554,56 @@ fn tokens(lines: &[&str]) -> Vec<Token> {
             last: line + lines_in,
             start,
             end: i,
+            literal: false,
         });
         line += lines_in;
+    }
+    out
+}
+
+/// The words of the string literal at `start..end`, as offsets: its
+/// opening quote (with any prefix and `#`s), then each run of letters and
+/// digits, escape or other character with the whitespace before it, and
+/// its closing quote.
+fn string_words(chars: &[char], start: usize, end: usize) -> Vec<(usize, usize)> {
+    let quote = start
+        + chars[start..end]
+            .iter()
+            .position(|&c| c == '"')
+            .unwrap_or(0);
+    let raw = chars[start..quote].contains(&'r');
+    let hashes = chars[start..quote].iter().filter(|&&c| c == '#').count();
+    // Where the closing quote is: the string may be unterminated.
+    let close = end
+        .checked_sub(hashes + 1)
+        .filter(|&c| c > quote && chars[c] == '"')
+        .unwrap_or(end);
+    let mut out = vec![(start, quote + 1)];
+    let mut i = quote + 1;
+    while i < close {
+        let word = i;
+        while i < close && chars[i].is_whitespace() {
+            i += 1;
+        }
+        if i == close {
+            out.push((word, end));
+            return out;
+        }
+        i += if chars[i] == '\\' && !raw {
+            2
+        } else if chars[i].is_alphanumeric() || chars[i] == '_' {
+            chars[i..close]
+                .iter()
+                .take_while(|c| c.is_alphanumeric() || **c == '_')
+                .count()
+        } else {
+            1
+        };
+        out.push((word, i.min(close)));
+        i = i.min(close);
+    }
+    if close < end {
+        out.push((close, end));
     }
     out
 }
@@ -753,6 +852,43 @@ mod tests {
     }
 
     #[test]
+    fn a_rewrapped_call_with_a_changed_word_in_a_string() {
+        // As in dora#4287: rustfmt split the call because the string grew.
+        let old = lines(
+            r#"    eyre::bail!("SHA-256 mismatch for `{url}`: expected {expected}, got {actual}");"#,
+        );
+        let new = lines(concat!(
+            "    eyre::bail!(\n",
+            r#"        "SHA-256 mismatch for `{shown_url}`: expected {expected}, got {actual}""#,
+            "\n    );",
+        ));
+        let mut g = group(0, 1, 0, 3);
+        g.added = vec![span(1, 32, 41)];
+        g.removed = vec![RemovedTokens {
+            old: span(0, 40, 43),
+            at: span(1, 32, 32),
+            text: "url".into(),
+        }];
+        assert_eq!(find(&old, &new), [g]);
+        // Whitespace inside the string still counts, and so do commas and
+        // brackets.
+        for changed in [
+            r#""SHA-256  mismatch for `{url}`: expected {expected}, got {actual}""#,
+            r#""SHA-256 mismatch for `{url}`: expected {expected} got {actual}""#,
+            r#""SHA-256 mismatch for `{url}`: expected ({expected}), got {actual}""#,
+        ] {
+            let new = format!("    eyre::bail!(\n        {changed}\n    );");
+            let found = find(&old, &lines(&new));
+            assert_eq!(found.len(), 1, "{changed}");
+            assert!(!found[0].only_reformatted(), "{changed}");
+        }
+        // A word of a string is no path.
+        let old = lines(r#"f("a::b::c", x);"#);
+        let new = lines("f(\n    \"c\",\n    x,\n);");
+        assert!(!super::find(&old, &new, |_, _| true)[0].only_reformatted());
+    }
+
+    #[test]
     fn strings_and_comments_keep_their_text() {
         // Whitespace inside a string is part of its value.
         let old = lines(r#"let s = "a  b";"#);
@@ -770,6 +906,7 @@ mod tests {
 
     #[test]
     fn tokens_of_literals_and_lifetimes() {
+        // Strings are split into words, with the whitespace before each.
         let t: Vec<String> = tokens(&[r##"f::<'a>('x', '\n', r#"a "b"#, b"c\"d", x_1)"##])
             .into_iter()
             .map(|t| t.text)
@@ -777,23 +914,8 @@ mod tests {
         assert_eq!(
             t,
             [
-                "f",
-                ":",
-                ":",
-                "<",
-                "'a",
-                ">",
-                "(",
-                "'x'",
-                ",",
-                "'\\n'",
-                ",",
-                "r#\"a \"b\"#",
-                ",",
-                "b\"c\\\"d\"",
-                ",",
-                "x_1",
-                ")"
+                "f", ":", ":", "<", "'a", ">", "(", "'x'", ",", "'\\n'", ",", "r#\"", "a", " \"",
+                "b", "\"#", ",", "b\"", "c", "\\\"", "d", "\"", ",", "x_1", ")"
             ]
         );
     }
