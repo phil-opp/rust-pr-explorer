@@ -38,7 +38,7 @@ mod threads;
 mod unsafety;
 mod yaml;
 
-use code::esc;
+use code::{esc, esc_name};
 use data::{Data, changed};
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -1109,7 +1109,7 @@ fn stay(app: &mut App, unit: &str) {
 /// review order adds a card or opens its call graph on a new canvas.
 fn next_steps_html(app: &App, unit: &str) -> String {
     let d = &app.d;
-    let name = |id: &str| esc(&d.display_name_of(id));
+    let name = |id: &str| esc_name(&d.display_name_of(id));
     // The way back first, so that its ◂ points away from the way on.
     let back = graphs::graph_of(d, unit).map_or(String::new(), |i| {
         format!(
@@ -1375,7 +1375,7 @@ fn show_since_review(app: &App, id: &str) {
         None => app
             .d
             .item(id)
-            .map(|it| format!("<code>{}</code>", esc(&app.d.display_name(it))))
+            .map(|it| format!("<code>{}</code>", esc_name(&app.d.display_name(it))))
             .unwrap_or_default(),
     };
     open_modal(
@@ -1799,7 +1799,7 @@ fn render_search(app: &mut App) {
                 if i == app.s.search_sel { "sel" } else { "" },
                 it.status.css(),
                 it.info.kind.label(),
-                esc(d.short_path(&it.info.id)),
+                esc_name(d.short_path(&it.info.id)),
                 data::test_tag_of(it),
                 unsafety::tag(it),
             )

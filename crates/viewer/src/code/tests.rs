@@ -1278,3 +1278,23 @@ fn inline_diffs_number_old_and_new_lines() {
         assert!(html.contains(want), "{want}\n{html}");
     }
 }
+
+#[test]
+fn long_names_get_line_break_opportunities() {
+    assert_eq!(
+        esc_name("dora_message::version_tests::release_candidate"),
+        "dora_<wbr>message::<wbr>version_<wbr>tests::<wbr>release_<wbr>candidate"
+    );
+    assert_eq!(
+        esc_name("DaemonCoordinatorEvent::new"),
+        "Daemon<wbr>Coordinator<wbr>Event::<wbr>new"
+    );
+    // Not inside an acronym, nor at a leading, trailing or doubled `_`.
+    assert_eq!(esc_name("__private_x_"), "__private_<wbr>x_");
+    assert_eq!(esc_name("HTTPServer"), "HTTPServer");
+    assert_eq!(esc_name("a__b"), "a__b");
+    assert_eq!(
+        esc_name("<Arc<T> as Log>::log"),
+        "&lt;Arc&lt;T&gt; as Log&gt;::<wbr>log"
+    );
+}

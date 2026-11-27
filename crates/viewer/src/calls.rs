@@ -9,7 +9,7 @@
 //! "Open ▸", "Internal call graph ▸", a name on a page) open this view
 //! instead; see [`crate::open_item`].
 
-use crate::code::esc;
+use crate::code::{esc, esc_name};
 use crate::data::{Data, changed};
 use crate::indirect;
 use crate::review::{self, Mark};
@@ -187,7 +187,7 @@ fn via_row_html(d: &Data, id: &str, via: &str) -> String {
         esc(id),
         esc(&format!("Focus {}", d.short_path(id))),
         it.info.kind.label(),
-        esc(&d.display_name(it)),
+        esc_name(&d.display_name(it)),
         crate::data::test_tag_of(it),
         crate::unsafety::tag(it),
         esc(&d.mod_label(d.mod_of(it))),
@@ -308,14 +308,14 @@ fn trail_html(d: &Data, s: &Calls) -> String {
             format!(
                 r#"<a data-cfocus="{}">{}</a>"#,
                 esc(&it.info.id),
-                esc(&d.display_name(it))
+                esc_name(&d.display_name(it))
             )
         })
         .collect();
     if let Some(it) = s.focus.as_deref().and_then(|f| d.item(f)) {
         parts.push(format!(
             r#"<span class="cg-here">{}</span>"#,
-            esc(&d.display_name(it))
+            esc_name(&d.display_name(it))
         ));
     }
     format!(

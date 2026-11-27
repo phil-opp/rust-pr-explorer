@@ -1,7 +1,7 @@
 //! Impact of internal changes: which public items reach a changed internal
 //! item, through which chain of calls and uses.
 
-use crate::code::esc;
+use crate::code::{esc, esc_name};
 use crate::data::Data;
 use model::{Item, Kind, Status};
 use std::collections::{HashMap, VecDeque};
@@ -88,7 +88,7 @@ fn link(d: &Data, id: &str) -> String {
     format!(
         r#"<a class="ref" data-id="{}" data-kind="{kind}"><code>{}</code></a>"#,
         esc(id),
-        esc(&d.display_name_of(id))
+        esc_name(&d.display_name_of(id))
     )
 }
 
@@ -132,7 +132,7 @@ fn page_line(d: &Data, it: &Item, narrow: bool) -> String {
         .paths
         .iter()
         .take(SHOWN)
-        .map(|p| format!("<code>{}</code>", esc(&d.display_name_of(&p[0]))))
+        .map(|p| format!("<code>{}</code>", esc_name(&d.display_name_of(&p[0]))))
         .collect();
     if imp.paths.len() > SHOWN {
         names.push(format!(

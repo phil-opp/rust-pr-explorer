@@ -1,7 +1,7 @@
 //! The sidebar, the overview and the module pages.
 
 use crate::App;
-use crate::code::esc;
+use crate::code::{esc, esc_name};
 use crate::data::{Data, changed, kind_order};
 use crate::dom;
 use model::{ChangedFile, Item, Kind, Status};
@@ -973,7 +973,7 @@ pub fn render_module_page(app: &App) {
                 r#"<a data-mod="{}"{}>{}</a>"#,
                 esc(c),
                 crate::nav::module_href(c),
-                esc(&d.item(c).map_or(String::new(), |i| d.display_name(i)))
+                esc_name(&d.item(c).map_or(String::new(), |i| d.display_name(i)))
             )
         })
         .collect::<Vec<_>>()

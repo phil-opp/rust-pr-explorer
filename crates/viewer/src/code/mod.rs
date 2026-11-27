@@ -61,3 +61,28 @@ pub fn esc(s: &str) -> String {
     }
     out
 }
+
+/// Escapes an item name or path, with line break opportunities (`<wbr>`)
+/// where a long name reads best when it wraps on a narrow screen: after
+/// `::`, after an `_` between words, and between the words of a CamelCase
+/// name. Copying the name still gives it without breaks.
+pub fn esc_name(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + s.len() / 4);
+    let mut prev = None;
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        let next = chars.peek().copied();
+        if prev.is_some_and(|p: char| p.is_lowercase() || p.is_ascii_digit()) && c.is_uppercase() {
+            out.push_str("<wbr>");
+        }
+        out.push_str(&esc(c.encode_utf8(&mut [0; 4])));
+        let word = |x: Option<char>| x.is_some_and(|x| x.is_alphanumeric());
+        if (c == ':' && prev == Some(':') && next.is_some_and(|n| n != ':'))
+            || (c == '_' && word(prev) && word(next))
+        {
+            out.push_str("<wbr>");
+        }
+        prev = Some(c);
+    }
+    out
+}
