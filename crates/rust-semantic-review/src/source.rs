@@ -467,15 +467,10 @@ fn since_checkout(
                 .next()
                 .unwrap_or_default()
                 .to_string(),
-            // Conflicts. Whether the PR changed is then judged by its
-            // commits: any that is no merge and not on the base branch.
+            // Conflicts: each conflicted file is taken from the PR's merge
+            // that resolved it. The merge's other edits still show, also
+            // when the PR has no commit of its own since `prev`.
             Some(1) => {
-                let range = format!("{prev}..{head}");
-                let not_base = format!("^{branch}");
-                let own = git_output(git_dir, &["rev-list", "--no-merges", &range, &not_base])?;
-                if own.is_empty() {
-                    return Ok(None);
-                }
                 // The tree, then the conflicted files.
                 let text = String::from_utf8_lossy(&out.stdout);
                 let mut lines = text.lines();
@@ -1401,6 +1396,16 @@ mod tests {
         );
         write("a.txt", "a, changed by both\n");
         commit("merge main");
+        assert_eq!(since(&before), None);
+        // The merge also changes a file without a conflict: that edit is
+        // the PR's own, so it shows, although the PR has no other commit.
+        write("b.txt", "b, changed in the merge\n");
+        git(&["add", "."]);
+        git(&["commit", "-q", "--amend", "--no-edit"]);
+        let (paths, _) = since(&before).unwrap();
+        assert_eq!(paths, ["b.txt"]);
+        git(&["checkout", "-q", "HEAD~", "--", "b.txt"]);
+        git(&["commit", "-q", "--amend", "--no-edit"]);
         assert_eq!(since(&before), None);
         // With a commit of its own after that, the conflicted file is
         // compared from the merge, so only the new commit's file differs.
