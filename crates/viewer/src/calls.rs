@@ -120,9 +120,28 @@ fn users(d: &Data, id: &str) -> Vec<String> {
     v
 }
 
-/// Changed items first; the rest is context.
+/// Changed items first; the rest is context. Tests and test-only code go
+/// after everything else, since they rarely matter when judging who uses
+/// an item, again with the changed ones first.
 fn changed_first(d: &Data, list: &mut [String]) {
-    list.sort_by_key(|t| !d.item(t).is_some_and(|it| changed(it) || d.touched(it)));
+    sort_rows(list, |t| {
+        d.item(t).map_or((false, false), |it| {
+            (
+                changed(it) || d.touched(it),
+                it.info.test || it.info.test_only,
+            )
+        })
+    });
+}
+
+/// Sorts `list` by what `class` says of each entry, `(changed, test)`:
+/// non-test before test, changed before unchanged within each. The sort
+/// is stable, so entries keep their order otherwise.
+fn sort_rows(list: &mut [String], class: impl Fn(&str) -> (bool, bool)) {
+    list.sort_by_key(|t| {
+        let (changed, test) = class(t);
+        (test, !changed)
+    });
 }
 
 /// One related item: a row to tap, with how many callers and callees it
@@ -517,4 +536,21 @@ pub fn on_click(app: &mut App, el: &Element) -> bool {
         _ => return false,
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Tests go last, changed entries go first within tests and non-tests,
+    /// and the order is kept otherwise.
+    #[test]
+    fn tests_sort_after_other_rows() {
+        let class = |t: &str| (t.starts_with('c'), t.ends_with("_test"));
+        let mut list: Vec<String> = ["a_test", "c_test", "u1", "c1", "u2", "c2"]
+            .map(String::from)
+            .to_vec();
+        sort_rows(&mut list, class);
+        assert_eq!(list, ["c1", "c2", "u1", "u2", "c_test", "a_test"]);
+    }
 }
